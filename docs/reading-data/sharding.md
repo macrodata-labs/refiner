@@ -48,6 +48,12 @@ pipeline = mdr.read_lerobot(
 )
 ```
 
+Automatic planning produces at most 1,000 shards. When the normal target size
+would create more, Refiner combines adjacent work while keeping every input
+file, byte range, or row range in the resulting plan. Across readers, explicit
+`num_shards` values may request up to 50,000 shards; larger requests fail with
+a validation error.
+
 Do not overfit shard count before measuring. Too few shards leave workers idle;
 too many shards add scheduling and output overhead.
 
@@ -62,4 +68,3 @@ chunks and then reduces metadata; see [Writing LeRobot](../writing-data/lerobot.
 - [Reader Model](reader-model.md)
 - [Local Launcher](../running-pipelines/local-launcher.md)
 - [Cloud Launcher](../running-pipelines/cloud-launcher.md)
-

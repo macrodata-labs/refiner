@@ -17,11 +17,105 @@ from refiner.pipeline.data.tabular import repeat_scalar, set_or_append_column
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
 from refiner.pipeline.sources.readers.utils import (
     BoundedBinaryReader,
+    DEFAULT_MAX_AUTOMATIC_SHARDS,
     DEFAULT_TARGET_SHARD_BYTES,
     align_byte_range_to_newlines,
     is_splittable_by_bytes,
+    validate_explicit_num_shards,
 )
 from refiner.worker.context import logger
+
+
+def _iter_file_part_groups(
+    resolved_files: Sequence[tuple[int, DataFile, int]],
+    *,
+    target_bytes: int,
+    split_by_bytes: bool,
+    shard_sizes: Sequence[int] | None = None,
+) -> Iterator[list[FilePart]]:
+    planned_shards = 0
+    current_parts: list[FilePart] = []
+    current_size = 0
+
+    def can_flush_more() -> bool:
+        return shard_sizes is None or planned_shards < len(shard_sizes) - 1
+
+    def next_target_bytes() -> int:
+        if shard_sizes is None:
+            return target_bytes
+        return max(1, shard_sizes[planned_shards])
+
+    for source_index, file, size in resolved_files:
+        current_target_bytes = next_target_bytes()
+        if not split_by_bytes or not is_splittable_by_bytes(file):
+            if (
+                current_parts
+                and current_size + size > current_target_bytes
+                and can_flush_more()
+            ):
+                yield current_parts
+                planned_shards += 1
+                current_parts = []
+                current_size = 0
+            current_parts.append(
+                FilePart(
+                    path=file.abs_path(),
+                    start=0,
+                    end=-1,
+                    source_index=source_index,
+                )
+            )
+            current_size += size
+            continue
+
+        offset = 0
+        while offset < size:
+            current_target_bytes = next_target_bytes()
+            if current_size >= current_target_bytes and can_flush_more():
+                yield current_parts
+                planned_shards += 1
+                current_parts = []
+                current_size = 0
+                current_target_bytes = next_target_bytes()
+            remaining_capacity = current_target_bytes - current_size
+            span_size = (
+                size - offset
+                if remaining_capacity <= 0
+                else min(size - offset, remaining_capacity)
+            )
+            current_parts.append(
+                FilePart(
+                    path=file.abs_path(),
+                    start=offset,
+                    end=offset + span_size,
+                    source_index=source_index,
+                )
+            )
+            current_size += span_size
+            offset += span_size
+
+    if current_parts:
+        yield current_parts
+
+
+def _automatic_plan_within_limit(
+    resolved_files: Sequence[tuple[int, DataFile, int]],
+    *,
+    target_bytes: int,
+    split_by_bytes: bool,
+    limit: int,
+) -> list[list[FilePart]] | None:
+    groups = _iter_file_part_groups(
+        resolved_files,
+        target_bytes=target_bytes,
+        split_by_bytes=split_by_bytes,
+    )
+    planned: list[list[FilePart]] = []
+    for group in groups:
+        planned.append(group)
+        if len(planned) > limit:
+            return None
+    return planned
 
 
 class BaseReader(BaseSource):
@@ -75,6 +169,7 @@ class BaseReader(BaseSource):
             extensions=extensions,
             include_file=include_file,
         )
+        validate_explicit_num_shards(num_shards)
         self.target_shard_bytes = max(1, target_shard_bytes)
         self.num_shards = num_shards
         self.file_path_column = file_path_column
@@ -208,18 +303,35 @@ class BaseReader(BaseSource):
             - `num_shards` produces exactly that many planned byte buckets when possible;
               otherwise `target_shard_bytes` controls shard size heuristically.
         """
+        resolved_files = [
+            (source_index, file, self.fileset.size(source_index, file.abs_path()))
+            for source_index, files in enumerate(self.fileset.expand_sources())
+            for file in files
+        ]
         num_shards = self.num_shards
         shard_sizes: list[int] | None = None
+        planned_groups: list[list[FilePart]] | None = None
+        total_size = sum(size for _, _, size in resolved_files)
         if num_shards is None or num_shards <= 0:
             target_bytes = self.target_shard_bytes
-        else:
+            planned_groups = _automatic_plan_within_limit(
+                resolved_files,
+                target_bytes=target_bytes,
+                split_by_bytes=self.split_by_bytes,
+                limit=DEFAULT_MAX_AUTOMATIC_SHARDS,
+            )
+            if planned_groups is None:
+                logger.warning(
+                    "{} automatic shard plan exceeds the {}-shard limit; "
+                    "increasing shard sizes without dropping input data.",
+                    self.name,
+                    DEFAULT_MAX_AUTOMATIC_SHARDS,
+                )
+                num_shards = DEFAULT_MAX_AUTOMATIC_SHARDS
+
+        if num_shards is not None and num_shards > 0:
             # `num_shards` defines exact global byte buckets; the last bucket absorbs any
             # remainder instead of creating an extra shard.
-            total_size = sum(
-                self.fileset.size(source_index, file.abs_path())
-                for source_index, files in enumerate(self.fileset.expand_sources())
-                for file in files
-            )
             if total_size <= 0:
                 target_bytes = 1
             else:
@@ -228,85 +340,32 @@ class BaseReader(BaseSource):
                 # one oversized remainder shard at the end.
                 shard_sizes = [base + (i < remainder) for i in range(num_shards)]
                 target_bytes = max(1, shard_sizes[0])
-        shards: list[Shard] = []
-        current_parts: list[FilePart] = []
-        current_size = 0
-        file_count = 0
-
-        def can_flush_more() -> bool:
-            return shard_sizes is None or len(shards) < len(shard_sizes) - 1
-
-        def flush() -> None:
-            nonlocal current_parts, current_size, target_bytes
-            if not current_parts:
-                return
-            shards.append(
-                Shard.from_file_parts(current_parts, global_ordinal=len(shards))
+        groups = (
+            planned_groups
+            if planned_groups is not None
+            else _iter_file_part_groups(
+                resolved_files,
+                target_bytes=target_bytes,
+                split_by_bytes=self.split_by_bytes,
+                shard_sizes=shard_sizes,
             )
-            current_parts = []
-            current_size = 0
-            if shard_sizes is not None and len(shards) < len(shard_sizes):
-                target_bytes = max(1, shard_sizes[len(shards)])
-
-        for source_index, files in enumerate(self.fileset.expand_sources()):
-            for file in files:
-                file_count += 1
-                path = file.abs_path()
-                size = self.fileset.size(source_index, path)
-                # Atomic files stay whole: `end=-1` means "reader decides how to read the full file".
-                if not self.split_by_bytes or not is_splittable_by_bytes(file):
-                    if (
-                        current_parts
-                        and current_size + size > target_bytes
-                        and can_flush_more()
-                    ):
-                        flush()
-                    current_parts.append(
-                        FilePart(
-                            path=path,
-                            start=0,
-                            end=-1,
-                            source_index=source_index,
-                        )
-                    )
-                    current_size += size
-                    continue
-
-                offset = 0
-                while offset < size:
-                    # Splittable files are planned as raw byte spans; readers snap these to real boundaries later.
-                    if current_size >= target_bytes and can_flush_more():
-                        flush()
-                    remaining_capacity = target_bytes - current_size
-                    span_size = (
-                        size - offset
-                        if remaining_capacity <= 0
-                        else min(size - offset, remaining_capacity)
-                    )
-                    current_parts.append(
-                        FilePart(
-                            path=path,
-                            start=offset,
-                            end=offset + span_size,
-                            source_index=source_index,
-                        )
-                    )
-                    current_size += span_size
-                    offset += span_size
-
-        flush()
+        )
+        shards = [
+            Shard.from_file_parts(parts, global_ordinal=ordinal)
+            for ordinal, parts in enumerate(groups)
+        ]
         if (
             num_shards is not None
             and num_shards > 0
             and not self.split_by_bytes
-            and file_count < num_shards
+            and len(resolved_files) < num_shards
         ):
             logger.warning(
                 "{} requested {} shards, but this reader keeps files atomic and "
                 "only found {} input files; planned {} shards.",
                 self.name,
                 num_shards,
-                file_count,
+                len(resolved_files),
                 len(shards),
             )
         return shards

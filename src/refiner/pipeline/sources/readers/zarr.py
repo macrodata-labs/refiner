@@ -21,10 +21,13 @@ from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.shard import RowRangeDescriptor, Shard
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
 from refiner.pipeline.sources.readers.utils import (
+    DEFAULT_MAX_AUTOMATIC_SHARDS,
     DEFAULT_TARGET_SHARD_BYTES,
+    MAX_EXPLICIT_SHARDS,
     PathSelection,
     decode_value,
     path_selection_map,
+    validate_explicit_num_shards,
 )
 from refiner.utils import check_required_dependencies
 
@@ -89,6 +92,7 @@ class ZarrReader(BaseSource):
             raise ValueError("target_shard_bytes must be greater than zero")
         if num_shards is not None and num_shards <= 0:
             raise ValueError("num_shards must be greater than zero")
+        validate_explicit_num_shards(num_shards)
         if row_batch_size is not None and row_batch_size <= 0:
             raise ValueError("row_batch_size must be greater than zero")
         self.arrays = (
@@ -180,11 +184,35 @@ class ZarrReader(BaseSource):
         return self.fileset.required_refiner_extras()
 
     def list_shards(self) -> list[Shard]:
-        shards: list[Shard] = []
+        planned_ranges: list[tuple[int, list[tuple[int, int]]]] = []
+        total_ranges = 0
+        automatic_limit = (
+            max(1, DEFAULT_MAX_AUTOMATIC_SHARDS // len(self.inputs))
+            if self.num_shards is None
+            else None
+        )
         for source_index, (input, _source_path) in enumerate(self.inputs):
             with self._open_group(input) as group:
                 arrays = self._selected_arrays(group)
-                split_ranges = self._shard_ranges(group, arrays)
+                split_ranges = self._shard_ranges(
+                    group,
+                    arrays,
+                    automatic_limit=automatic_limit,
+                )
+            planned_ranges.append((source_index, split_ranges))
+            total_ranges += len(split_ranges)
+            if self.num_shards is not None and total_ranges > MAX_EXPLICIT_SHARDS:
+                raise ValueError(
+                    f"Zarr shard plan exceeds the {MAX_EXPLICIT_SHARDS:,}-shard limit"
+                )
+            if self.num_shards is None and total_ranges > DEFAULT_MAX_AUTOMATIC_SHARDS:
+                raise ValueError(
+                    "Zarr automatic planning cannot combine more than "
+                    f"{DEFAULT_MAX_AUTOMATIC_SHARDS:,} non-empty inputs"
+                )
+
+        shards: list[Shard] = []
+        for source_index, split_ranges in planned_ranges:
             source_key = str(source_index)
             for start, end in split_ranges:
                 shards.append(
@@ -379,6 +407,8 @@ class ZarrReader(BaseSource):
         self,
         group: Any,
         arrays: Mapping[str, Any],
+        *,
+        automatic_limit: int | None = None,
     ) -> list[tuple[int, int]]:
         if self.row_ends is None and not self.split_leading_axis:
             return [(0, 1)]
@@ -431,6 +461,22 @@ class ZarrReader(BaseSource):
                     ),
                 )
                 step = max(chunk_rows, (target_rows // chunk_rows) * chunk_rows)
+                if automatic_limit is not None:
+                    range_count = ceil(row_count / step)
+                    if range_count > automatic_limit:
+                        return [
+                            (
+                                ordinal * range_count // automatic_limit * step,
+                                min(
+                                    (ordinal + 1)
+                                    * range_count
+                                    // automatic_limit
+                                    * step,
+                                    row_count,
+                                ),
+                            )
+                            for ordinal in range(automatic_limit)
+                        ]
             return [
                 (start, min(start + step, row_count))
                 for start in range(0, row_count, step)
@@ -457,12 +503,15 @@ class ZarrReader(BaseSource):
         shard_start = 0
         current_bytes = 0
         previous_end = 0
+        minimum_rows = (
+            ceil(row_count / automatic_limit) if automatic_limit is not None else 1
+        )
         for row_index, end in _iter_row_ends(row_ends_array):
             if end < previous_end:
                 raise ValueError("Zarr row_ends must be monotonic increasing")
             row_bytes = max(1, end - previous_end) * bytes_per_step
             if (
-                row_index > shard_start
+                row_index - shard_start >= minimum_rows
                 and current_bytes + row_bytes > self.target_shard_bytes
             ):
                 ranges.append((shard_start, row_index))

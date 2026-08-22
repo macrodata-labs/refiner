@@ -11,7 +11,16 @@ import pyarrow as pa
 from refiner.io import DataFile
 
 DEFAULT_TARGET_SHARD_BYTES = 128 * 1024 * 1024
+DEFAULT_MAX_AUTOMATIC_SHARDS = 1_000
+MAX_EXPLICIT_SHARDS = 50_000
 PathSelection = Mapping[str, str] | Sequence[str] | str
+
+
+def validate_explicit_num_shards(num_shards: int | None) -> None:
+    if num_shards is not None and num_shards > MAX_EXPLICIT_SHARDS:
+        raise ValueError(
+            f"num_shards must be <= {MAX_EXPLICIT_SHARDS:,}; got {num_shards:,}"
+        )
 
 
 # Extensions that generally imply whole-file/container compression (not safely splittable by byte offsets).
@@ -226,7 +235,9 @@ class BoundedBinaryReader(io.RawIOBase):
 
 
 __all__ = [
+    "DEFAULT_MAX_AUTOMATIC_SHARDS",
     "DEFAULT_TARGET_SHARD_BYTES",
+    "MAX_EXPLICIT_SHARDS",
     "NON_SPLITTABLE_WHOLEFILE_EXTS",
     "PathSelection",
     "decode_value",
@@ -235,4 +246,5 @@ __all__ = [
     "is_splittable_by_bytes",
     "align_byte_range_to_newlines",
     "BoundedBinaryReader",
+    "validate_explicit_num_shards",
 ]

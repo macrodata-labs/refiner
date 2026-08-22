@@ -1,4 +1,7 @@
+import pytest
+
 from refiner.pipeline.data import datatype
+from refiner.pipeline.data.shard import FilePartsDescriptor
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers import CsvReader
 
@@ -34,6 +37,55 @@ def test_csv_bytes_lazy_reads_all_rows_exactly_once(tmp_path):
 
     assert count == n
     assert ids == set(range(n))
+
+
+def test_csv_automatic_shard_planning_caps_without_dropping_bytes(tmp_path):
+    path = tmp_path / "data.csv"
+    path.write_bytes(b"x" * 1001)
+
+    shards = CsvReader(str(path), target_shard_bytes=1).list_shards()
+
+    assert len(shards) == 1000
+    descriptors = [shard.descriptor for shard in shards]
+    assert all(
+        isinstance(descriptor, FilePartsDescriptor) for descriptor in descriptors
+    )
+    assert (
+        sum(
+            part.end - part.start
+            for descriptor in descriptors
+            if isinstance(descriptor, FilePartsDescriptor)
+            for part in descriptor.parts
+        )
+        == path.stat().st_size
+    )
+
+
+def test_csv_rejects_explicit_shard_count_above_limit(tmp_path):
+    path = tmp_path / "data.csv"
+    path.write_text("id\n1\n")
+
+    with pytest.raises(ValueError, match=r"num_shards must be <= 50,000"):
+        CsvReader(str(path), num_shards=50001)
+
+
+def test_csv_automatic_shard_planning_caps_atomic_files(tmp_path):
+    for index in range(1001):
+        (tmp_path / f"{index}.csv").write_bytes(b"xx")
+
+    shards = CsvReader(
+        str(tmp_path), target_shard_bytes=3, multiline_rows=True
+    ).list_shards()
+
+    assert len(shards) == 1000
+    assert (
+        sum(
+            len(descriptor.parts)
+            for shard in shards
+            if isinstance((descriptor := shard.descriptor), FilePartsDescriptor)
+        )
+        == 1001
+    )
 
 
 def test_csv_multiline_reads_embedded_newline(tmp_path):

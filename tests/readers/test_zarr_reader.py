@@ -444,6 +444,82 @@ def test_read_zarr_plans_row_ends_with_num_shards(tmp_path: Path) -> None:
     np.testing.assert_allclose(rows[0]["action"], [[1.0], [1.1], [1.2]])
 
 
+def test_read_zarr_caps_automatic_leading_axis_shards(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "large.zarr"
+    root = _open_test_zarr(path, mode="w")
+    _create_array(root, "values", np.arange(1001, dtype=np.uint16), chunks=(1,))
+
+    reader = cast(
+        ZarrReader,
+        mdr.read_zarr(
+            path,
+            arrays={"values": "values"},
+            split_leading_axis=True,
+            target_shard_bytes=1,
+            file_path_column=None,
+        ).source,
+    )
+    planned_counts: list[int] = []
+    original_shard_ranges = reader._shard_ranges
+
+    def record_planned_count(*args, **kwargs):
+        ranges = original_shard_ranges(*args, **kwargs)
+        planned_counts.append(len(ranges))
+        return ranges
+
+    monkeypatch.setattr(reader, "_shard_ranges", record_planned_count)
+    shards = reader.list_shards()
+
+    assert len(shards) == 1000
+    assert planned_counts == [1000]
+    ranges = [cast(RowRangeDescriptor, shard.descriptor) for shard in shards]
+    assert ranges[0].start == 0
+    assert ranges[-1].end == 1001
+
+
+def test_read_zarr_bounds_intermediate_row_end_plan(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "large-episodes.zarr"
+    root = _open_test_zarr(path, mode="w")
+    _create_array(root, "values", np.arange(1001, dtype=np.uint8), chunks=(1,))
+    _create_array(
+        root,
+        "episode_ends",
+        np.arange(1, 1002, dtype=np.int64),
+        chunks=(1,),
+    )
+
+    reader = cast(
+        ZarrReader,
+        mdr.read_zarr(
+            path,
+            arrays={"values": "values"},
+            row_ends="episode_ends",
+            target_shard_bytes=1,
+            file_path_column=None,
+        ).source,
+    )
+    planned_counts: list[int] = []
+    original_shard_ranges = reader._shard_ranges
+
+    def record_planned_count(*args, **kwargs):
+        ranges = original_shard_ranges(*args, **kwargs)
+        planned_counts.append(len(ranges))
+        return ranges
+
+    monkeypatch.setattr(reader, "_shard_ranges", record_planned_count)
+    shards = reader.list_shards()
+
+    assert len(shards) <= 1000
+    assert planned_counts == [len(shards)]
+    ranges = [cast(RowRangeDescriptor, shard.descriptor) for shard in shards]
+    assert ranges[0].start == 0
+    assert ranges[-1].end == 1001
+
+
 def test_read_zarr_allows_attrs_only_reads(tmp_path: Path) -> None:
     path = tmp_path / "policy.zarr"
     _write_policy_zarr(path)
