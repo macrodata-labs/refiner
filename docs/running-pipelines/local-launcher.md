@@ -70,5 +70,6 @@ Spark and Beam/Dataflow schedule partitions through distributed executors;
 Daft and Ray/Ray Data schedule partition tasks through their own runtimes; and
 Hugging Face Datasets exposes explicit process counts for local transforms.
 Refiner instead uses ledger-backed shard claims as its scheduling unit, so
-`"auto"` maps each shard to one local claimant. Use a fixed worker count when
-process or machine capacity should bound concurrency independently of shards.
+`num_workers` sets fixed local process concurrency while each worker repeatedly
+claims available shards. Shard count controls work granularity, not the number
+of local worker processes.
