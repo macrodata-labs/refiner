@@ -23,6 +23,10 @@ def test_parser_has_debug_commands() -> None:
     assert args.debug_command == "exec"
     assert args.job_id == "job-1"
 
+    sync_args = parser.parse_args(["debug", "sync", "job-1", "project"])
+    assert sync_args.debug_command == "sync"
+    assert sync_args.path == "project"
+
 
 def test_parser_has_run_command() -> None:
     parser = build_parser()

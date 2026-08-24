@@ -442,5 +442,22 @@ class CloudLauncher(BaseLauncher):
             warnings=response_warnings,
         )
 
+    def sync_debug_pipeline(
+        self,
+        *,
+        job_id: str,
+        stage_index: int = 0,
+    ) -> dict[str, object]:
+        stages = self._resolved_stages()
+        stage = next((stage for stage in stages if stage.index == stage_index), None)
+        if stage is None:
+            raise ValueError(f"pipeline has no stage {stage_index}")
+        serialized = PreparedPipelinePayload.from_pipeline(stage.pipeline)
+        return MacrodataClient().cloud_debug_sync_pipeline(
+            job_id=job_id,
+            payload=serialized.payload_bytes,
+            sha256=serialized.sha256,
+        )
+
 
 __all__ = ["CloudLauncher", "CloudLaunchResult"]

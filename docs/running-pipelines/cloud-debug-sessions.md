@@ -33,6 +33,42 @@ shard ledger, and the same inputs are available on the next run. Omit
 `--max-shards` to exercise all registered shards assigned to the retained
 worker.
 
+Synchronize the current project before another attempt:
+
+```bash
+macrodata debug sync JOB_ID .
+macrodata debug run JOB_ID --max-shards 1
+```
+
+Sync excludes version-control data, virtual environments, caches,
+`node_modules`, and dotenv files. The worker verifies the archive digest and
+atomically replaces the prior source tree, so a failed upload cannot leave a
+partial tree. Both the project root and its `src/` directory take precedence on
+`PYTHONPATH` for subsequent attempts.
+
+Source sync updates imported Python modules. When you change the pipeline
+graph, reader, writer, or a callable captured into the serialized pipeline,
+also replace the session's pipeline payload before running again:
+
+```python
+pipeline.sync_cloud_debug("JOB_ID")
+```
+
+This serializes the selected stage locally and atomically replaces the payload
+used by the next attempt. Pass `stage_index=` when selecting a nonzero planned
+stage.
+
+Inspect the exact retained environment when imports or dependencies behave
+differently from the submitting machine:
+
+```bash
+macrodata debug doctor JOB_ID
+```
+
+Doctor reports the worker Python executable/version, installed Refiner,
+Cloudpickle, py-spy and Torch versions, GPU visibility, source digest, and the
+pipeline payload path. It does not return mounted secret values.
+
 Run an arbitrary non-interactive command with argv preserved exactly:
 
 ```bash

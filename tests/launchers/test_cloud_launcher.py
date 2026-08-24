@@ -296,6 +296,29 @@ def test_pipeline_launch_cloud_debug_rejects_continue() -> None:
         )
 
 
+def test_pipeline_can_replace_retained_debug_payload(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeMacrodataClient:
+        def cloud_debug_sync_pipeline(self, **kwargs):
+            captured.update(kwargs)
+            return {"sha256": kwargs["sha256"]}
+
+    monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", FakeMacrodataClient)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.PreparedPipelinePayload.from_pipeline",
+        lambda _pipeline: _prepared_payload(b"updated-pipeline"),
+    )
+    pipeline = read_jsonl("input.jsonl")
+
+    result = pipeline.sync_cloud_debug("job-123")
+
+    assert captured["job_id"] == "job-123"
+    assert captured["payload"] == b"updated-pipeline"
+    assert captured["sha256"] == _prepared_payload(b"updated-pipeline").sha256
+    assert result == {"sha256": captured["sha256"]}
+
+
 def test_pipeline_launch_cloud_preserves_auto_workers_without_listing_shards(
     monkeypatch,
 ) -> None:

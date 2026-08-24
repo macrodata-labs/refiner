@@ -6,6 +6,7 @@ import sys
 from typing import Any
 
 from refiner.platform.client import MacrodataClient
+from refiner.cli.debug_sync import build_source_archive
 
 
 def _print_json(payload: dict[str, Any]) -> None:
@@ -68,4 +69,27 @@ def cmd_debug_stop(args: argparse.Namespace) -> int:
         _print_json(payload)
     else:
         print(f"Debug session closed: {args.job_id}")
+    return 0
+
+
+def cmd_debug_sync(args: argparse.Namespace) -> int:
+    archive = build_source_archive(args.path)
+    payload = MacrodataClient().cloud_debug_sync(
+        job_id=args.job_id,
+        archive=archive.payload,
+        sha256=archive.sha256,
+    )
+    if args.json:
+        _print_json(payload)
+    else:
+        print(
+            f"Synced {payload.get('files', archive.file_count)} files "
+            f"({archive.sha256[:12]}) to {args.job_id}"
+        )
+    return 0
+
+
+def cmd_debug_doctor(args: argparse.Namespace) -> int:
+    payload = MacrodataClient().cloud_debug_doctor(job_id=args.job_id)
+    _print_json(payload)
     return 0

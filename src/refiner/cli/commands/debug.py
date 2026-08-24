@@ -33,3 +33,16 @@ def register_debug_command(
     stop.add_argument("job_id")
     stop.add_argument("--json", action="store_true")
     stop.set_defaults(handler_module="refiner.cli.debug", handler="cmd_debug_stop")
+
+    sync = debug_subparsers.add_parser("sync", help="Synchronize local source")
+    sync.add_argument("job_id")
+    sync.add_argument("path", nargs="?", default=".")
+    sync.add_argument("--json", action="store_true")
+    sync.set_defaults(handler_module="refiner.cli.debug", handler="cmd_debug_sync")
+
+    doctor = debug_subparsers.add_parser(
+        "doctor", help="Inspect the exact worker environment"
+    )
+    doctor.add_argument("job_id")
+    doctor.add_argument("--json", action="store_true")
+    doctor.set_defaults(handler_module="refiner.cli.debug", handler="cmd_debug_doctor")

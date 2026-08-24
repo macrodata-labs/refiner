@@ -865,6 +865,30 @@ class RefinerPipeline:
         )
         return launcher.launch()
 
+    def sync_cloud_debug(
+        self,
+        job_id: str,
+        *,
+        stage_index: int = 0,
+    ) -> dict[str, object]:
+        """Replace the pipeline payload used by a retained cloud debug session.
+
+        Source synchronization updates imported modules; call this method as
+        well when the pipeline graph, reader, writer, or captured callable has
+        changed.
+        """
+        from refiner.launchers.cloud import CloudLauncher
+
+        launcher = CloudLauncher(
+            pipeline=self,
+            name="debug-sync",
+            debug=True,
+        )
+        return launcher.sync_debug_pipeline(
+            job_id=job_id,
+            stage_index=stage_index,
+        )
+
     def write_lerobot(
         self,
         output: DataFolderLike,
