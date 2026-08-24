@@ -260,6 +260,42 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert captured["events"] == ["upload-urls", "upload", "complete", "submit"]
 
 
+def test_pipeline_launch_cloud_debug_submits_and_does_not_attach(
+    monkeypatch, capsys
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr("refiner.launchers.cloud.stdout_is_interactive", lambda: True)
+    monkeypatch.setattr(
+        "refiner.cli.run.cloud.attach_to_cloud_job",
+        lambda **_: pytest.fail("debug launch must not attach to normal job logs"),
+    )
+
+    result = read_jsonl("input.jsonl").launch_cloud(
+        name="debug cloud",
+        num_workers=16,
+        debug=True,
+    )
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.debug is True
+    assert request.stage_payloads[0].runtime.num_workers == 16
+    assert result.job_id == "job-123"
+    output = capsys.readouterr().out
+    assert "macrodata debug status job-123" in output
+    assert "macrodata debug run job-123" in output
+    assert "macrodata debug stop job-123" in output
+
+
+def test_pipeline_launch_cloud_debug_rejects_continue() -> None:
+    with pytest.raises(ValueError, match="debug cannot be combined"):
+        CloudLauncher(
+            pipeline=read_jsonl("input.jsonl"),
+            name="debug cloud",
+            debug=True,
+            continue_from_job="00000000-0000-1000-8000-000000000123",
+        )
+
+
 def test_pipeline_launch_cloud_preserves_auto_workers_without_listing_shards(
     monkeypatch,
 ) -> None:

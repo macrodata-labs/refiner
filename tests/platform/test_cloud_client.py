@@ -134,6 +134,52 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
     assert json_payload["env"] == {"MODEL_NAME": "gpt-5"}
 
 
+def test_cloud_run_request_includes_debug_only_when_enabled() -> None:
+    regular = _request().to_dict()
+    debug = CloudRunCreateRequest(
+        name=_request().name,
+        plan=_request().plan,
+        stage_payloads=_request().stage_payloads,
+        debug=True,
+    ).to_dict()
+
+    assert "debug" not in regular
+    assert debug["debug"] is True
+
+
+def test_cloud_debug_client_uses_retained_session_routes(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    monkeypatch.setattr(
+        client,
+        "_request_raw",
+        lambda **kwargs: calls.append(kwargs) or {"status": "ready"},
+    )
+
+    client.cloud_debug_status(job_id="job/1")
+    client.cloud_debug_exec(
+        job_id="job/1",
+        command=["python", "-V"],
+        workdir="/tmp/refiner-debug",
+        timeout_secs=12,
+    )
+    client.cloud_debug_run(job_id="job/1", max_shards=1, timeout_secs=30)
+    client.cloud_debug_stop(job_id="job/1")
+
+    assert [call["path"] for call in calls] == [
+        "/api/cloud/debug/job%2F1/status",
+        "/api/cloud/debug/job%2F1/exec",
+        "/api/cloud/debug/job%2F1/run",
+        "/api/cloud/debug/job%2F1/stop",
+    ]
+    assert calls[1]["json_payload"] == {
+        "command": ["python", "-V"],
+        "timeout_secs": 12,
+        "workdir": "/tmp/refiner-debug",
+    }
+    assert calls[2]["json_payload"] == {"timeout_secs": 30, "max_shards": 1}
+
+
 def test_cloud_client_cloud_submit_job_requires_job_and_stage_ids(monkeypatch) -> None:
     monkeypatch.setattr(
         "refiner.platform.client.api.request_json",

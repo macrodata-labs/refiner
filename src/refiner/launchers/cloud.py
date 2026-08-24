@@ -170,6 +170,7 @@ class CloudLauncher(BaseLauncher):
         env: dict[str, object | None] | None = None,
         continue_from_job: str | None = None,
         unsafe_continue: bool = False,
+        debug: bool = False,
     ):
         super().__init__(
             pipeline=pipeline,
@@ -181,6 +182,8 @@ class CloudLauncher(BaseLauncher):
         normalized_continue_from_job = _parse_continue_from_job(continue_from_job)
         if unsafe_continue and normalized_continue_from_job is None:
             raise ValueError("unsafe_continue requires continue_from_job")
+        if debug and normalized_continue_from_job is not None:
+            raise ValueError("debug cannot be combined with continue_from_job")
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
         self.cpus_per_worker = cpus_per_worker
@@ -194,6 +197,7 @@ class CloudLauncher(BaseLauncher):
         self.env = env
         self.continue_from_job = normalized_continue_from_job
         self.unsafe_continue = unsafe_continue
+        self.debug = debug
 
     @staticmethod
     def _fallback_to_latest_pypi_enabled() -> bool:
@@ -369,6 +373,7 @@ class CloudLauncher(BaseLauncher):
                 env=resolved_env,
                 continue_from_job=self.continue_from_job,
                 unsafe_continue=self.unsafe_continue,
+                debug=self.debug,
             )
             resp = client.cloud_submit_job(request=request)
         except MacrodataCredentialsError as err:
@@ -395,6 +400,20 @@ class CloudLauncher(BaseLauncher):
             stage_index=resp.stage_index,
         )
         print(f"Cloud job launched. View job:\n  {tracking_url}")
+        if self.debug:
+            print(
+                "Debug worker is allocating. Continue with:\n"
+                f"  macrodata debug status {resp.job_id}\n"
+                f"  macrodata debug run {resp.job_id}\n"
+                f"  macrodata debug exec {resp.job_id} -- python -V\n"
+                f"  macrodata debug stop {resp.job_id}"
+            )
+            return CloudLaunchResult(
+                job_id=resp.job_id,
+                stage_index=resp.stage_index,
+                status=resp.status,
+                warnings=response_warnings,
+            )
         attach_mode = resolve_launcher_attach_mode(interactive=stdout_is_interactive())
         if attach_mode == "detach":
             emit_cloud_followup_commands(context=context)

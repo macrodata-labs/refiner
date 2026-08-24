@@ -407,6 +407,58 @@ class MacrodataClient:
             timeout_s=30.0,
         )
 
+    def cloud_debug_status(self, *, job_id: str) -> dict[str, Any]:
+        return self._request_raw(
+            method="GET",
+            path=f"/api/cloud/debug/{quote(job_id, safe='')}/status",
+        )
+
+    def cloud_debug_exec(
+        self,
+        *,
+        job_id: str,
+        command: list[str],
+        workdir: str | None = None,
+        timeout_secs: int = 300,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "command": command,
+            "timeout_secs": timeout_secs,
+        }
+        if workdir is not None:
+            payload["workdir"] = workdir
+        return self._request_raw(
+            method="POST",
+            path=f"/api/cloud/debug/{quote(job_id, safe='')}/exec",
+            json_payload=payload,
+            timeout_s=float(timeout_secs + 30),
+        )
+
+    def cloud_debug_run(
+        self,
+        *,
+        job_id: str,
+        max_shards: int | None = None,
+        timeout_secs: int = 3600,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"timeout_secs": timeout_secs}
+        if max_shards is not None:
+            payload["max_shards"] = max_shards
+        return self._request_raw(
+            method="POST",
+            path=f"/api/cloud/debug/{quote(job_id, safe='')}/run",
+            json_payload=payload,
+            timeout_s=float(timeout_secs + 30),
+        )
+
+    def cloud_debug_stop(self, *, job_id: str) -> dict[str, Any]:
+        return self._request_raw(
+            method="POST",
+            path=f"/api/cloud/debug/{quote(job_id, safe='')}/stop",
+            json_payload={},
+            timeout_s=60.0,
+        )
+
     def cli_list_jobs(
         self,
         *,

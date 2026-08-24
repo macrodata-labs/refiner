@@ -15,6 +15,15 @@ def test_parser_has_auth_commands() -> None:
     assert args.command == "whoami"
 
 
+def test_parser_has_debug_commands() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["debug", "exec", "job-1", "--", "python", "-V"])
+    assert args.command == "debug"
+    assert args.exec_command == ["python", "-V"]
+    assert args.debug_command == "exec"
+    assert args.job_id == "job-1"
+
+
 def test_parser_has_run_command() -> None:
     parser = build_parser()
     args = parser.parse_args(
