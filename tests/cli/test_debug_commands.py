@@ -21,6 +21,10 @@ class _FakeClient:
         self.calls.append(("run", kwargs))
         return {"exit_code": 2, "stdout": "", "stderr": "failed\n"}
 
+    def cloud_debug_profile(self, **kwargs):
+        self.calls.append(("profile", kwargs))
+        return {"profile": "<svg>profile</svg>"}
+
     def cloud_debug_stop(self, **kwargs):
         self.calls.append(("stop", kwargs))
         return {"status": "canceled"}
@@ -50,7 +54,18 @@ def test_debug_commands_forward_to_cloud_api(monkeypatch, capsys) -> None:
         )
         == 0
     )
-    assert debug.cmd_debug_run(Namespace(job_id="job-1", max_shards=1, timeout=30)) == 2
+    assert (
+        debug.cmd_debug_run(
+            Namespace(
+                job_id="job-1",
+                max_shards=1,
+                timeout=30,
+                profile=False,
+                profile_output="unused.svg",
+            )
+        )
+        == 2
+    )
     assert debug.cmd_debug_stop(Namespace(job_id="job-1", json=False)) == 0
 
     assert client.calls == [
@@ -66,7 +81,12 @@ def test_debug_commands_forward_to_cloud_api(monkeypatch, capsys) -> None:
         ),
         (
             "run",
-            {"job_id": "job-1", "max_shards": 1, "timeout_secs": 30},
+            {
+                "job_id": "job-1",
+                "max_shards": 1,
+                "timeout_secs": 30,
+                "profile": False,
+            },
         ),
         ("stop", {"job_id": "job-1"}),
     ]
@@ -75,6 +95,42 @@ def test_debug_commands_forward_to_cloud_api(monkeypatch, capsys) -> None:
     assert "Python 3.10" in captured.out
     assert "Debug session closed: job-1" in captured.out
     assert "failed" in captured.err
+
+
+def test_debug_run_profiles_and_downloads_flamegraph(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    client = _FakeClient()
+    monkeypatch.setattr(debug, "MacrodataClient", lambda: client)
+    output = tmp_path / "attempt.svg"
+
+    assert (
+        debug.cmd_debug_run(
+            Namespace(
+                job_id="job-1",
+                max_shards=1,
+                timeout=30,
+                profile=True,
+                profile_output=str(output),
+            )
+        )
+        == 2
+    )
+
+    assert output.read_text() == "<svg>profile</svg>"
+    assert client.calls == [
+        (
+            "run",
+            {
+                "job_id": "job-1",
+                "max_shards": 1,
+                "timeout_secs": 30,
+                "profile": True,
+            },
+        ),
+        ("profile", {"job_id": "job-1"}),
+    ]
+    assert f"Profile saved to {output}" in capsys.readouterr().out
 
 
 def test_debug_sync_and_doctor(monkeypatch, tmp_path, capsys) -> None:

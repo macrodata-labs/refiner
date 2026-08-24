@@ -69,6 +69,19 @@ Doctor reports the worker Python executable/version, installed Refiner,
 Cloudpickle, py-spy and Torch versions, GPU visibility, source digest, and the
 pipeline payload path. It does not return mounted secret values.
 
+Profile the exact next attempt and download a py-spy flamegraph:
+
+```bash
+refiner debug run JOB_ID --max-shards 1 --profile
+```
+
+The SVG is written to `refiner-debug-profile.svg` by default. Use
+`--profile-output PATH` to choose another location, or retrieve the most recent
+profile again with `refiner debug profile JOB_ID --output PATH`. (`macrodata`
+remains an equivalent CLI alias.) Profiling
+wraps the normal worker entrypoint; it does not use a reduced or synthetic
+execution path.
+
 Run an arbitrary non-interactive command with argv preserved exactly:
 
 ```bash

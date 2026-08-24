@@ -27,6 +27,13 @@ def test_parser_has_debug_commands() -> None:
     assert sync_args.debug_command == "sync"
     assert sync_args.path == "project"
 
+    profile_args = parser.parse_args(
+        ["debug", "run", "job-1", "--profile", "--profile-output", "attempt.svg"]
+    )
+    assert profile_args.debug_command == "run"
+    assert profile_args.profile is True
+    assert profile_args.profile_output == "attempt.svg"
+
 
 def test_parser_has_run_command() -> None:
     parser = build_parser()

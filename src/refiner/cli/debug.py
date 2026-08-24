@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 import sys
 from typing import Any
 
@@ -28,6 +29,18 @@ def _emit_exec_result(payload: dict[str, Any]) -> int:
     return return_code if isinstance(return_code, int) else 1
 
 
+def _save_profile(payload: dict[str, Any], output: str) -> Path:
+    profile = payload.get("profile")
+    if not isinstance(profile, str) or not profile.strip():
+        raise RuntimeError("cloud debug profile response did not contain an SVG")
+    output_path = Path(output).expanduser().resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = output_path.with_name(f".{output_path.name}.tmp")
+    temporary_path.write_text(profile, encoding="utf-8")
+    temporary_path.replace(output_path)
+    return output_path
+
+
 def cmd_debug_status(args: argparse.Namespace) -> int:
     payload = MacrodataClient().cloud_debug_status(job_id=args.job_id)
     if args.json:
@@ -40,12 +53,27 @@ def cmd_debug_status(args: argparse.Namespace) -> int:
 def cmd_debug_run(args: argparse.Namespace) -> int:
     if args.max_shards is not None and args.max_shards <= 0:
         raise SystemExit("--max-shards must be greater than zero")
-    payload = MacrodataClient().cloud_debug_run(
+    client = MacrodataClient()
+    profile = bool(getattr(args, "profile", False))
+    payload = client.cloud_debug_run(
         job_id=args.job_id,
         max_shards=args.max_shards,
         timeout_secs=args.timeout,
+        profile=profile,
     )
-    return _emit_exec_result(payload)
+    return_code = _emit_exec_result(payload)
+    if profile:
+        profile_payload = client.cloud_debug_profile(job_id=args.job_id)
+        output_path = _save_profile(profile_payload, args.profile_output)
+        print(f"Profile saved to {output_path}")
+    return return_code
+
+
+def cmd_debug_profile(args: argparse.Namespace) -> int:
+    payload = MacrodataClient().cloud_debug_profile(job_id=args.job_id)
+    output_path = _save_profile(payload, args.output)
+    print(f"Profile saved to {output_path}")
+    return 0
 
 
 def cmd_debug_exec(args: argparse.Namespace) -> int:

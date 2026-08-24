@@ -440,15 +440,25 @@ class MacrodataClient:
         job_id: str,
         max_shards: int | None = None,
         timeout_secs: int = 3600,
+        profile: bool = False,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"timeout_secs": timeout_secs}
         if max_shards is not None:
             payload["max_shards"] = max_shards
+        if profile:
+            payload["profile"] = True
         return self._request_raw(
             method="POST",
             path=f"/api/cloud/debug/{quote(job_id, safe='')}/run",
             json_payload=payload,
             timeout_s=float(timeout_secs + 30),
+        )
+
+    def cloud_debug_profile(self, *, job_id: str) -> dict[str, Any]:
+        return self._request_raw(
+            method="GET",
+            path=f"/api/cloud/debug/{quote(job_id, safe='')}/profile",
+            timeout_s=60.0,
         )
 
     def cloud_debug_stop(self, *, job_id: str) -> dict[str, Any]:

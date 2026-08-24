@@ -18,7 +18,26 @@ def register_debug_command(
     run.add_argument("job_id")
     run.add_argument("--max-shards", type=int)
     run.add_argument("--timeout", type=int, default=3600)
+    run.add_argument(
+        "--profile",
+        action="store_true",
+        help="Record this attempt with py-spy and download its flamegraph",
+    )
+    run.add_argument(
+        "--profile-output",
+        default="refiner-debug-profile.svg",
+        help="Path for the downloaded flamegraph",
+    )
     run.set_defaults(handler_module="refiner.cli.debug", handler="cmd_debug_run")
+
+    profile = debug_subparsers.add_parser(
+        "profile", help="Download the latest recorded flamegraph"
+    )
+    profile.add_argument("job_id")
+    profile.add_argument("--output", default="refiner-debug-profile.svg")
+    profile.set_defaults(
+        handler_module="refiner.cli.debug", handler="cmd_debug_profile"
+    )
 
     execute = debug_subparsers.add_parser(
         "exec", help="Execute argv in the debug worker"
