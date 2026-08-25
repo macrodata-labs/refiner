@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from contextlib import nullcontext
 import json
 from pathlib import Path
 
@@ -178,6 +179,34 @@ def test_debug_create_rejects_invalid_timeout_before_allocating(monkeypatch) -> 
                 pipeline="pipeline.py",
                 script_args=[],
                 startup_timeout=0,
+            )
+        )
+
+
+def test_debug_create_validates_sync_bundle_before_allocating(
+    monkeypatch, tmp_path
+) -> None:
+    class Launcher:
+        def launch_debug(self):
+            pytest.fail("worker must not launch when sync validation fails")
+
+    monkeypatch.setattr(debug, "MacrodataClient", object)
+    monkeypatch.setattr(debug, "session_creation_lock", lambda **_kwargs: nullcontext())
+    monkeypatch.setattr(debug, "find_session", lambda **_kwargs: None)
+    monkeypatch.setattr(debug, "_capture_launcher", lambda *_args: Launcher())
+    monkeypatch.setattr(debug, "find_project_root", lambda _script: tmp_path)
+    monkeypatch.setattr(
+        debug,
+        "_build_sync_bundle",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("source archive too large")),
+    )
+
+    with pytest.raises(ValueError, match="source archive too large"):
+        debug._cmd_create(
+            Namespace(
+                pipeline=str(tmp_path / "pipeline.py"),
+                script_args=[],
+                startup_timeout=1200,
             )
         )
 

@@ -18,12 +18,13 @@ from refiner.cli.debug_sessions import (
     session_creation_lock,
 )
 from refiner.cli.debug_sync import (
+    DebugSyncBundle,
     build_debug_sync_bundle,
     find_project_root,
     pickle_project_modules_by_value,
 )
 from refiner.cli.run.command import cmd_run
-from refiner.launchers.cloud import CloudLauncher
+from refiner.launchers.cloud import CloudLauncher, PreparedDebugSync
 from refiner.launchers.cloud_debug_capture import capture_cloud_launches
 from refiner.platform.auth import MacrodataCredentialsError
 from refiner.platform.client import MacrodataApiError, MacrodataClient
@@ -197,6 +198,23 @@ def _job_for_target(
     return record.job_id, record
 
 
+def _build_sync_bundle(
+    *,
+    launcher: CloudLauncher,
+    project_root: str | Path,
+    client: MacrodataClient,
+) -> tuple[PreparedDebugSync, DebugSyncBundle]:
+    with pickle_project_modules_by_value(project_root):
+        prepared = launcher.prepare_debug_sync(client=client)
+    bundle = build_debug_sync_bundle(
+        source_root=project_root,
+        pipeline_payload=prepared.pipeline_payload,
+        pipeline_sha256=prepared.pipeline_sha256,
+        allocation_fingerprint=prepared.allocation_fingerprint,
+    )
+    return prepared, bundle
+
+
 def _sync_launcher(
     *,
     launcher: CloudLauncher,
@@ -205,13 +223,10 @@ def _sync_launcher(
     project_root: str | Path,
     client: MacrodataClient,
 ) -> dict[str, Any]:
-    with pickle_project_modules_by_value(project_root):
-        prepared = launcher.prepare_debug_sync(client=client)
-    bundle = build_debug_sync_bundle(
-        source_root=project_root,
-        pipeline_payload=prepared.pipeline_payload,
-        pipeline_sha256=prepared.pipeline_sha256,
-        allocation_fingerprint=prepared.allocation_fingerprint,
+    prepared, bundle = _build_sync_bundle(
+        launcher=launcher,
+        project_root=project_root,
+        client=client,
     )
     payload = client.cloud_debug_sync(
         job_id=job_id,
@@ -271,6 +286,14 @@ def _cmd_create(args: argparse.Namespace) -> int:
         script_args = _normalized_script_args(list(args.script_args))
         launcher = _capture_launcher(str(script), script_args)
         project_root = find_project_root(script)
+        # Validate local serialization and source-size limits before creating a
+        # retained worker. Sync rebuilds the bundle after allocation so its
+        # fingerprint reflects the exact allocation settings submitted.
+        _build_sync_bundle(
+            launcher=launcher,
+            project_root=project_root,
+            client=client,
+        )
         with pickle_project_modules_by_value(project_root):
             result = launcher.launch_debug()
         record = new_session_record(
