@@ -100,6 +100,16 @@ def test_lance_writer_normalizes_worker_schema_metadata() -> None:
     assert normalized.to_pydict() == {"x": [1, 2]}
 
 
+def test_lance_writer_allows_row_map_dropped_planned_fields() -> None:
+    planned = pa.schema([pa.field("x", pa.int64()), pa.field("dropped", pa.string())])
+    table = pa.table({"x": [1, 2]})
+
+    normalized = _cast_to_planned_schema(table, planned)
+
+    assert normalized.schema.names == ["x"]
+    assert normalized.schema.field("x").type == pa.int64()
+
+
 def test_launch_local_writes_jsonl_per_shard(tmp_path) -> None:
     output_dir = tmp_path / "jsonl-output"
     pipeline = (
