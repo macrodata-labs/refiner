@@ -309,6 +309,7 @@ class CloudRunCreateRequest:
     env: dict[str, str] | None = None
     continue_from_job: str | None = None
     unsafe_continue: bool = False
+    debug: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -327,6 +328,8 @@ class CloudRunCreateRequest:
             payload["continue_from_job"] = self.continue_from_job
         if self.unsafe_continue:
             payload["unsafe_continue"] = True
+        if self.debug:
+            payload["debug"] = True
         return payload
 
 

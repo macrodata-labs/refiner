@@ -407,6 +407,108 @@ class MacrodataClient:
             timeout_s=30.0,
         )
 
+    def cloud_debug_status(self, *, job_id: str) -> dict[str, Any]:
+        return self._request_raw(
+            method="GET",
+            path=f"/api/cloud/debug/{quote(job_id, safe='')}/status",
+        )
+
+    def cloud_debug_exec(
+        self,
+        *,
+        job_id: str,
+        command: list[str],
+        workdir: str | None = None,
+        timeout_secs: int = 300,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "command": command,
+            "timeout_secs": timeout_secs,
+        }
+        if workdir is not None:
+            payload["workdir"] = workdir
+        return self._request_raw(
+            method="POST",
+            path=f"/api/cloud/debug/{quote(job_id, safe='')}/exec",
+            json_payload=payload,
+            timeout_s=float(timeout_secs + 30),
+            retry_attempts=1,
+        )
+
+    def cloud_debug_run(
+        self,
+        *,
+        job_id: str,
+        max_shards: int | None = None,
+        timeout_secs: int = 3600,
+        profile: bool = False,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"timeout_secs": timeout_secs}
+        if max_shards is not None:
+            payload["max_shards"] = max_shards
+        if profile:
+            payload["profile"] = True
+        return self._request_raw(
+            method="POST",
+            path=f"/api/cloud/debug/{quote(job_id, safe='')}/run",
+            json_payload=payload,
+            timeout_s=float(timeout_secs + 30),
+            retry_attempts=1,
+        )
+
+    def cloud_debug_profile(self, *, job_id: str) -> dict[str, Any]:
+        return self._request_raw(
+            method="GET",
+            path=f"/api/cloud/debug/{quote(job_id, safe='')}/profile",
+            timeout_s=60.0,
+        )
+
+    def cloud_debug_stop(self, *, job_id: str) -> dict[str, Any]:
+        return self._request_raw(
+            method="POST",
+            path=f"/api/cloud/debug/{quote(job_id, safe='')}/stop",
+            json_payload={},
+            timeout_s=60.0,
+        )
+
+    def cloud_debug_doctor(self, *, job_id: str) -> dict[str, Any]:
+        return self._request_raw(
+            method="GET",
+            path=f"/api/cloud/debug/{quote(job_id, safe='')}/doctor",
+            timeout_s=60.0,
+        )
+
+    def cloud_debug_sync(
+        self,
+        *,
+        job_id: str,
+        bundle: bytes,
+        sha256: str,
+        allocation_fingerprint: str,
+    ) -> dict[str, Any]:
+        path = f"/api/cloud/debug/{quote(job_id, safe='')}/sync"
+        url = f"{self.base_url}{path}"
+        try:
+            response = self._http_client.post(
+                url,
+                params={
+                    "sha256": sha256,
+                    "allocation_fingerprint": allocation_fingerprint,
+                },
+                headers={"content-type": "application/x-tar"},
+                content=bundle,
+                timeout=300.0,
+            )
+        except httpx.RequestError as err:
+            raise MacrodataApiError(status=0, message=str(err), url=url) from err
+        if response.is_error:
+            raise MacrodataApiError(
+                status=response.status_code,
+                message=_http_error_message(response),
+                url=url,
+            )
+        return _decode_json_object(response, context=path, url=url)
+
     def cli_list_jobs(
         self,
         *,

@@ -24,6 +24,9 @@ pipeline.launch_cloud(
 )
 ```
 
+To validate one retained worker before scaling out, see
+[Cloud debug sessions](cloud-debug-sessions.md).
+
 Set `num_workers="auto"` to request one worker for every shard in each stage.
 The cloud registration runtime discovers shards after secrets and environment
 variables are mounted, then Macrodata Cloud applies its normal worker and GPU
