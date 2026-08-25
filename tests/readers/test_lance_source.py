@@ -12,21 +12,24 @@ from refiner.pipeline.data.tabular import Tabular
 
 
 def test_load_lance_rejects_explicit_shard_count_above_limit() -> None:
-    with pytest.raises(ValueError, match=r"10,000-shard limit"):
+    with pytest.raises(ValueError, match=r"num_shards must be <= 10,000"):
         LanceSource("unused.lance", num_shards=10_001)
 
 
-def test_load_lance_rejects_oversized_automatic_plan() -> None:
+def test_load_lance_caps_automatic_shards_without_dropping_fragments() -> None:
     source = object.__new__(LanceSource)
     source.num_shards = None
     source._dataset_cache = type(
         "Dataset",
         (),
-        {"get_fragments": lambda self: [None] * 10_001},
+        {"get_fragments": lambda self: [None] * 1_001},
     )()
 
-    with pytest.raises(ValueError, match=r"10,000-shard limit"):
-        source.list_shards()
+    shards = source.list_shards()
+
+    assert len(shards) == 1_000
+    assert shards[0].descriptor.start == 0
+    assert shards[-1].descriptor.end == 1_001
 
 
 def test_load_lance_pins_version_and_shards_by_fragment(tmp_path) -> None:

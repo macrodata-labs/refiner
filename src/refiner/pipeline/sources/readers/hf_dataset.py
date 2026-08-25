@@ -20,12 +20,12 @@ from refiner.pipeline.data.shard import (
 from refiner.pipeline.data.tabular import Tabular, filter_table, set_or_append_column
 from refiner.pipeline.expressions import Expr
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
-from refiner.pipeline.sources.shard_limit import (
-    validate_num_shards,
-    validate_shard_count,
-)
 from refiner.pipeline.sources.readers.parquet import ParquetReader
-from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
+from refiner.pipeline.sources.readers.utils import (
+    DEFAULT_MAX_AUTOMATIC_SHARDS,
+    DEFAULT_TARGET_SHARD_BYTES,
+    validate_explicit_num_shards,
+)
 from refiner.utils import check_required_dependencies
 
 _HF_HUB = "https://huggingface.co"
@@ -59,13 +59,13 @@ class HFDatasetReader(BaseSource):
         split_row_groups: bool = False,
         file_path_column: str | None = "file_path",
     ):
+        validate_explicit_num_shards(num_shards)
         self.repo = repo
         self.config = config or "default"
         self._config_arg = config
         self.split = split
         self.timeout = float(timeout)
         self.target_shard_bytes = target_shard_bytes
-        validate_num_shards(num_shards)
         self.num_shards = num_shards
         self.arrow_batch_size = arrow_batch_size
         self.columns_to_read = (
@@ -247,8 +247,11 @@ class HFDatasetReader(BaseSource):
         dataset = self._load_fallback_dataset()
         available = int(getattr(dataset, "num_shards", 1) or 1)
         requested = int(num_shards) if num_shards is not None else None
-        wanted = available if requested is None or requested <= 0 else requested
-        validate_shard_count(wanted, source="Hugging Face fallback")
+        wanted = (
+            min(available, DEFAULT_MAX_AUTOMATIC_SHARDS)
+            if requested is None or requested <= 0
+            else requested
+        )
         if wanted > available:
             raise ValueError(
                 f"Hugging Face fallback for {self.repo!r} has only {available} "

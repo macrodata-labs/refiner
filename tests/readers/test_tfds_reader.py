@@ -167,6 +167,19 @@ def test_tfds_reader_shards_by_example_range(tmp_path: Path, monkeypatch) -> Non
     }
 
 
+def test_tfds_automatic_shard_planning_is_capped(monkeypatch) -> None:
+    reader = TfdsReader("tiny_dataset", examples_per_shard=1)
+    reader.num_examples_by_input = [1001]
+    monkeypatch.setattr(reader, "_ensure_builders", lambda: None)
+
+    shards = reader.list_shards()
+
+    assert len(shards) == 1000
+    ranges = [cast(RowRangeDescriptor, shard.descriptor) for shard in shards]
+    assert ranges[0].start == 0
+    assert ranges[-1].end == 1001
+
+
 def test_read_tfds_pipeline_entrypoint(tmp_path: Path, monkeypatch) -> None:
     builder = TinyDataset(data_dir=str(tmp_path))
     builder.download_and_prepare()
