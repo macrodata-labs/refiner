@@ -30,24 +30,24 @@ class _FakeClient:
         self.calls.append(("stop", kwargs))
         return {"status": "canceled"}
 
-    def cloud_debug_sync(self, **kwargs):
-        self.calls.append(("sync", kwargs))
-        return {"files": 1}
-
     def cloud_debug_doctor(self, **kwargs):
         self.calls.append(("doctor", kwargs))
         return {"status": "ready", "python": {"version": "3.10"}}
+
+
+def _args(command: str, **kwargs) -> Namespace:
+    return Namespace(debug_command=command, pipeline=None, job_id="job-1", **kwargs)
 
 
 def test_debug_commands_forward_to_cloud_api(monkeypatch, capsys) -> None:
     client = _FakeClient()
     monkeypatch.setattr(debug, "MacrodataClient", lambda: client)
 
-    assert debug.cmd_debug_status(Namespace(job_id="job-1", json=False)) == 0
+    assert debug._dispatch(_args("status", json=False)) == 0
     assert (
-        debug.cmd_debug_exec(
-            Namespace(
-                job_id="job-1",
+        debug._dispatch(
+            _args(
+                "exec",
                 exec_command=["--", "python", "-V"],
                 workdir=None,
                 timeout=20,
@@ -56,9 +56,9 @@ def test_debug_commands_forward_to_cloud_api(monkeypatch, capsys) -> None:
         == 0
     )
     assert (
-        debug.cmd_debug_run(
-            Namespace(
-                job_id="job-1",
+        debug._dispatch(
+            _args(
+                "run",
                 max_shards=1,
                 timeout=30,
                 profile=False,
@@ -67,7 +67,7 @@ def test_debug_commands_forward_to_cloud_api(monkeypatch, capsys) -> None:
         )
         == 2
     )
-    assert debug.cmd_debug_stop(Namespace(job_id="job-1", json=False)) == 0
+    assert debug._dispatch(_args("stop", json=False)) == 0
 
     assert client.calls == [
         ("status", {"job_id": "job-1"}),
@@ -106,9 +106,9 @@ def test_debug_run_profiles_and_downloads_flamegraph(
     output = tmp_path / "attempt.svg"
 
     assert (
-        debug.cmd_debug_run(
-            Namespace(
-                job_id="job-1",
+        debug._dispatch(
+            _args(
+                "run",
                 max_shards=1,
                 timeout=30,
                 profile=True,
@@ -117,20 +117,8 @@ def test_debug_run_profiles_and_downloads_flamegraph(
         )
         == 2
     )
-
     assert output.read_text() == "<svg>profile</svg>"
-    assert client.calls == [
-        (
-            "run",
-            {
-                "job_id": "job-1",
-                "max_shards": 1,
-                "timeout_secs": 30,
-                "profile": True,
-            },
-        ),
-        ("profile", {"job_id": "job-1"}),
-    ]
+    assert client.calls[-1] == ("profile", {"job_id": "job-1"})
     assert f"Profile saved to {output}" in capsys.readouterr().out
 
 
@@ -154,23 +142,60 @@ def test_profile_download_uses_a_unique_temporary_file(monkeypatch, tmp_path) ->
     assert all(not path.exists() for path in temporary_paths)
 
 
-def test_debug_sync_and_doctor(monkeypatch, tmp_path, capsys) -> None:
-    client = _FakeClient()
-    monkeypatch.setattr(debug, "MacrodataClient", lambda: client)
-    (tmp_path / "pipeline.py").write_text("PIPELINE = 1\n")
+def test_file_driven_parser_supports_create_sync_and_exec() -> None:
+    create = debug._parse_debug_args(["pipeline.py"])
+    assert create.debug_command == "create"
+    assert create.pipeline == "pipeline.py"
+
+    explicit_create = debug._parse_debug_args(["create", "pipeline.py"])
+    assert explicit_create.debug_command == "create"
+    assert explicit_create.pipeline == "pipeline.py"
+
+    sync = debug._parse_debug_args(["sync", "pipeline.py"])
+    assert sync.debug_command == "sync"
+    assert sync.pipeline == "pipeline.py"
+
+    execute = debug._parse_debug_args(
+        ["exec", "pipeline.py", "--timeout", "10", "--", "python", "-V"]
+    )
+    assert execute.exec_command == ["python", "-V"]
+    assert execute.timeout == 10
+
+
+def test_capture_requires_exactly_one_cloud_launch(monkeypatch) -> None:
+    monkeypatch.setattr(debug, "cmd_run", lambda _args: 0)
+
+    try:
+        debug._capture_launcher("pipeline.py", [])
+    except ValueError as error:
+        assert "found none" in str(error)
+    else:
+        raise AssertionError("capture without launch should fail")
+
+
+def test_capture_executes_an_unchanged_pipeline_script(tmp_path) -> None:
+    script = tmp_path / "pipeline.py"
+    script.write_text(
+        "import refiner as mdr\n"
+        "mdr.from_items([1, 2]).launch_cloud(name='captured pipeline')\n"
+    )
+
+    launcher = debug._capture_launcher(str(script), [])
+
+    assert launcher.name == "captured pipeline"
+
+
+def test_debug_reports_expected_errors_without_traceback(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        debug,
+        "_dispatch",
+        lambda _args: (_ for _ in ()).throw(RuntimeError("not ready")),
+    )
 
     assert (
-        debug.cmd_debug_sync(Namespace(job_id="job-1", path=str(tmp_path), json=False))
-        == 0
+        debug.cmd_debug(
+            Namespace(debug_help=False, debug_args=["status", "pipeline.py"])
+        )
+        == 1
     )
-    assert debug.cmd_debug_doctor(Namespace(job_id="job-1", json=False)) == 0
-
-    sync_call = client.calls[0]
-    assert sync_call[0] == "sync"
-    assert sync_call[1]["job_id"] == "job-1"
-    assert isinstance(sync_call[1]["archive"], bytes)
-    sha256 = sync_call[1]["sha256"]
-    assert isinstance(sha256, str)
-    assert len(sha256) == 64
-    assert client.calls[1] == ("doctor", {"job_id": "job-1"})
-    assert "Synced 1 files" in capsys.readouterr().out
+    assert capsys.readouterr().err == "not ready\n"

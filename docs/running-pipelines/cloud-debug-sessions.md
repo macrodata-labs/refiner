@@ -5,103 +5,103 @@ description: "Iterate on a pipeline inside one retained cloud worker"
 
 # Cloud debug sessions
 
-Use a cloud debug session when a pipeline needs the cloud runtime, dependencies,
-data access, CPU, or GPU, but you want to validate one worker before scaling out.
+Use a cloud debug session to validate a pipeline in its real cloud environment
+before launching it at scale. Keep the pipeline script unchanged:
 
 ```python
 import refiner as mdr
 
 pipeline = mdr.read_jsonl("s3://datasets/input.jsonl")
-pipeline.launch_cloud(name="debug-reader", debug=True)
+pipeline.launch_cloud(name="debug-reader", num_workers=16)
 ```
 
-The submission still creates a normal cloud job, registers its real shards, and
-uses the normal worker entrypoint. It allocates one non-preemptible worker and
-keeps that worker ready instead of immediately consuming shards.
-
-The launch output prints the job ID and follow-up commands. Wait for the worker,
-then run the pipeline against a private copy of its shard ledger:
+Create a retained session by passing that script to the CLI:
 
 ```bash
-macrodata debug status JOB_ID
-macrodata debug run JOB_ID --max-shards 1
+macrodata debug pipeline.py
 ```
 
-Every `debug run` rebuilds the private ledger from the job's registered shards.
-Completing or failing a debug shard therefore does not mutate the job's real
-shard ledger, and the same inputs are available on the next run. Omit
-`--max-shards` to exercise all registered shards assigned to the retained
-worker.
+The command executes the script locally, requires exactly one
+`launch_cloud(...)` call, and creates a normal cloud job from that launch. The
+job registers its real stage-0 shards and allocates one non-preemptible worker.
+The CLI remembers the session for the pipeline path, waits for the worker, and
+synchronizes the current project before returning.
 
-Synchronize the current project before another attempt:
+Run a small attempt:
 
 ```bash
-macrodata debug sync JOB_ID .
-macrodata debug run JOB_ID --max-shards 1
+macrodata debug run pipeline.py --max-shards 1
 ```
 
-Sync excludes version-control data, virtual environments, caches,
-`node_modules`, and dotenv files. The worker verifies the archive digest and
-atomically replaces the prior source tree, so a failed upload cannot leave a
-partial tree. Both the project root and its `src/` directory take precedence on
-`PYTHONPATH` for subsequent attempts.
+Attempts use the normal worker entrypoint, runtime token, environment,
+resources, and telemetry. Shard claims and completions are written to a private
+SQLite ledger in the retained worker, not the job's canonical shard ledger.
+Every attempt resets that private ledger, so the same inputs can be rerun.
 
-Source sync updates imported Python modules. When you change the pipeline
-graph, reader, writer, or a callable captured into the serialized pipeline,
-also replace the session's pipeline payload before running again:
-
-```python
-pipeline.sync_cloud_debug("JOB_ID")
-```
-
-This serializes stage 0 locally and atomically replaces the payload used by the
-next attempt. Retained debug sessions currently reject nonzero stages because
-their runtime token, shard snapshot, and upstream boundary belong to stage 0.
-
-Inspect the exact retained environment when imports or dependencies behave
-differently from the submitting machine:
+After editing source or the pipeline graph, perform a complete sync and rerun:
 
 ```bash
-macrodata debug doctor JOB_ID
+macrodata debug sync pipeline.py
+macrodata debug run pipeline.py --max-shards 1
 ```
 
-Doctor reports the worker Python executable/version, installed Refiner,
-Cloudpickle, py-spy and Torch versions, GPU visibility, source digest, and the
-pipeline payload path. It does not return mounted secret values.
+Sync executes the script again, captures its current cloud launch, uploads the
+project source and serialized stage-0 pipeline together, derives fresh shards
+inside the retained environment, and activates all three as one generation.
+An interrupted or invalid sync leaves the previous generation runnable. Version
+control data, virtual environments, caches, `node_modules`, and dotenv files are
+excluded.
 
-Profile the exact next attempt and download a py-spy flamegraph:
+Dependencies, Python and Refiner versions, CPU, memory, GPU, cloud placement,
+runtime services, secrets, and plain environment variables are fixed when the
+worker is allocated. If any of these settings change, sync asks you to stop and
+create a new session:
 
 ```bash
-refiner debug run JOB_ID --max-shards 1 --profile
+macrodata debug stop pipeline.py
+macrodata debug pipeline.py
 ```
 
-The SVG is written to `refiner-debug-profile.svg` by default. Use
-`--profile-output PATH` to choose another location, or retrieve the most recent
-profile again with `refiner debug profile JOB_ID --output PATH`. (`macrodata`
-remains an equivalent CLI alias.) Profiling
-wraps the normal worker entrypoint; it does not use a reduced or synthetic
-execution path.
-
-Run an arbitrary non-interactive command with argv preserved exactly:
+Inspect the retained environment or execute a non-interactive command:
 
 ```bash
-macrodata debug exec JOB_ID -- python -V
-macrodata debug exec JOB_ID -- bash -lc 'nvidia-smi && pip freeze | head'
+macrodata debug status pipeline.py
+macrodata debug doctor pipeline.py
+macrodata debug exec pipeline.py -- python -V
+macrodata debug exec pipeline.py -- bash -lc 'nvidia-smi && pip freeze | head'
 ```
 
-Exec commands time out after 20 minutes by default. Use `--timeout SECONDS` to
-set a different limit for one command.
+Exec commands time out after 20 minutes by default. Use `--timeout SECONDS` for
+a different limit.
 
-Close the session when you are done:
+Profile an attempt with py-spy:
 
 ```bash
-macrodata debug stop JOB_ID
+macrodata debug run pipeline.py --max-shards 1 --profile
 ```
 
-Closing uses normal cloud job cancellation. The retained worker and its
-ephemeral files are then removed.
+The flamegraph is written to `refiner-debug-profile.svg`. Choose another path
+with `--profile-output PATH`, or download the latest profile again:
 
-If the retained worker exits or is replaced after an infrastructure failure,
-the debug session fails instead of attaching to the replacement container.
-Start a new debug session to continue. Source synced into the old container and
-changes made with `debug exec` are ephemeral and are not recovered.
+```bash
+macrodata debug profile pipeline.py --output profile.svg
+```
+
+The pipeline path is the normal session handle. When local session state is not
+available, pass a job ID explicitly:
+
+```bash
+macrodata debug status --job JOB_ID
+macrodata debug sync pipeline.py --job JOB_ID
+```
+
+Close the session when finished:
+
+```bash
+macrodata debug stop pipeline.py
+```
+
+If the retained worker crashes or Modal replaces it, the job and debug session
+fail rather than silently continuing in a new container. Start a new session to
+continue. Synchronized files, profiles, and changes made through exec are
+ephemeral.

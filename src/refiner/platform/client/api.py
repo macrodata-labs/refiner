@@ -480,44 +480,21 @@ class MacrodataClient:
         self,
         *,
         job_id: str,
-        archive: bytes,
+        bundle: bytes,
         sha256: str,
+        allocation_fingerprint: str,
     ) -> dict[str, Any]:
         path = f"/api/cloud/debug/{quote(job_id, safe='')}/sync"
         url = f"{self.base_url}{path}"
         try:
             response = self._http_client.post(
                 url,
-                params={"sha256": sha256},
-                headers={"content-type": "application/gzip"},
-                content=archive,
-                timeout=300.0,
-            )
-        except httpx.RequestError as err:
-            raise MacrodataApiError(status=0, message=str(err), url=url) from err
-        if response.is_error:
-            raise MacrodataApiError(
-                status=response.status_code,
-                message=_http_error_message(response),
-                url=url,
-            )
-        return _decode_json_object(response, context=path, url=url)
-
-    def cloud_debug_sync_pipeline(
-        self,
-        *,
-        job_id: str,
-        payload: bytes,
-        sha256: str,
-    ) -> dict[str, Any]:
-        path = f"/api/cloud/debug/{quote(job_id, safe='')}/pipeline"
-        url = f"{self.base_url}{path}"
-        try:
-            response = self._http_client.post(
-                url,
-                params={"sha256": sha256},
-                headers={"content-type": "application/octet-stream"},
-                content=payload,
+                params={
+                    "sha256": sha256,
+                    "allocation_fingerprint": allocation_fingerprint,
+                },
+                headers={"content-type": "application/x-tar"},
+                content=bundle,
                 timeout=300.0,
             )
         except httpx.RequestError as err:
