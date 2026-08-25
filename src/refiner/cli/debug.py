@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext, redirect_stdout
 import json
 from pathlib import Path
 import sys
@@ -304,7 +305,9 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     script_args = _normalized_script_args(list(args.script_args))
     if not script_args and record is not None:
         script_args = record.script_args
-    launcher = _capture_launcher(args.pipeline, script_args)
+    output_context = redirect_stdout(sys.stderr) if args.json else nullcontext()
+    with output_context:
+        launcher = _capture_launcher(args.pipeline, script_args)
     project_root = (
         record.project_root if record is not None else find_project_root(args.pipeline)
     )

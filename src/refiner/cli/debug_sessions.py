@@ -2,15 +2,46 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
 import tempfile
-from typing import Any, Iterator
+import time
+from typing import Any, Iterator, Protocol, cast
 
 from refiner.platform.client import MacrodataClient
+
+
+class _FcntlBackend(Protocol):
+    LOCK_EX: int
+    LOCK_UN: int
+
+    def flock(self, fd: int, operation: int) -> None: ...
+
+
+class _MsvcrtBackend(Protocol):
+    LK_NBLCK: int
+    LK_UNLCK: int
+
+    def locking(self, fd: int, mode: int, nbytes: int) -> None: ...
+
+
+_fcntl: _FcntlBackend | None
+try:
+    import fcntl as _fcntl_module
+except ImportError:  # pragma: no cover - exercised on Windows
+    _fcntl = None
+else:
+    _fcntl = cast(_FcntlBackend, _fcntl_module)
+
+_msvcrt: _MsvcrtBackend | None
+try:
+    import msvcrt as _msvcrt_module
+except ImportError:  # pragma: no cover - exercised on Unix
+    _msvcrt = None
+else:
+    _msvcrt = cast(_MsvcrtBackend, _msvcrt_module)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +70,37 @@ def _scope(client: MacrodataClient) -> tuple[str, str]:
 
 
 @contextmanager
+def _exclusive_file_lock(path: Path) -> Iterator[None]:
+    with path.open("a+b") as lock:
+        os.chmod(path, 0o600)
+        if _fcntl is not None:
+            _fcntl.flock(lock.fileno(), _fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                _fcntl.flock(lock.fileno(), _fcntl.LOCK_UN)
+            return
+        if _msvcrt is None:
+            raise RuntimeError("file locking is unavailable on this platform")
+        lock.seek(0, os.SEEK_END)
+        if lock.tell() == 0:
+            lock.write(b"\0")
+            lock.flush()
+        while True:
+            lock.seek(0)
+            try:
+                _msvcrt.locking(lock.fileno(), _msvcrt.LK_NBLCK, 1)
+                break
+            except OSError:
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            lock.seek(0)
+            _msvcrt.locking(lock.fileno(), _msvcrt.LK_UNLCK, 1)
+
+
+@contextmanager
 def session_creation_lock(
     *, script: str | Path, client: MacrodataClient
 ) -> Iterator[None]:
@@ -51,9 +113,7 @@ def session_creation_lock(
     lock_directory.mkdir(parents=True, exist_ok=True)
     os.chmod(lock_directory, 0o700)
     lock_path = lock_directory / f"{lock_key}.lock"
-    with lock_path.open("a+", encoding="utf-8") as lock:
-        os.chmod(lock_path, 0o600)
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    with _exclusive_file_lock(lock_path):
         yield
 
 
@@ -62,8 +122,7 @@ def _locked_registry() -> Iterator[Path]:
     path = debug_sessions_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(".lock")
-    with lock_path.open("a+", encoding="utf-8") as lock:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    with _exclusive_file_lock(lock_path):
         yield path
 
 

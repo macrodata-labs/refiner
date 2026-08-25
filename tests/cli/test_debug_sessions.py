@@ -3,6 +3,7 @@ from __future__ import annotations
 from threading import Event, Thread
 from types import SimpleNamespace
 
+from refiner.cli import debug_sessions
 from refiner.cli.debug_sessions import (
     find_session,
     new_session_record,
@@ -72,3 +73,24 @@ def test_session_creation_lock_serializes_same_pipeline(monkeypatch, tmp_path) -
     contender.join(timeout=1)
     assert not contender.is_alive()
     assert acquired.is_set()
+
+
+def test_exclusive_file_lock_uses_windows_backend(monkeypatch, tmp_path) -> None:
+    calls: list[int] = []
+
+    class _Msvcrt:
+        LK_NBLCK = 1
+        LK_UNLCK = 2
+
+        @staticmethod
+        def locking(_fd: int, mode: int, size: int) -> None:
+            assert size == 1
+            calls.append(mode)
+
+    monkeypatch.setattr(debug_sessions, "_fcntl", None)
+    monkeypatch.setattr(debug_sessions, "_msvcrt", _Msvcrt)
+
+    with debug_sessions._exclusive_file_lock(tmp_path / "session.lock"):
+        assert calls == [_Msvcrt.LK_NBLCK]
+
+    assert calls == [_Msvcrt.LK_NBLCK, _Msvcrt.LK_UNLCK]

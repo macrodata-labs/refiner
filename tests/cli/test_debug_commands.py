@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from argparse import Namespace
+import json
 from pathlib import Path
 
 from refiner.cli import debug
@@ -183,6 +184,43 @@ def test_capture_executes_an_unchanged_pipeline_script(tmp_path) -> None:
     launcher = debug._capture_launcher(str(script), [])
 
     assert launcher.name == "captured pipeline"
+
+
+def test_debug_sync_json_redirects_pipeline_stdout(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(debug, "MacrodataClient", lambda: object())
+    monkeypatch.setattr(
+        debug,
+        "_job_for_target",
+        lambda _args, _client: ("job-1", None),
+    )
+
+    def capture_launcher(_pipeline, _script_args):
+        print("pipeline diagnostic")
+        return object()
+
+    monkeypatch.setattr(debug, "_capture_launcher", capture_launcher)
+    monkeypatch.setattr(debug, "find_project_root", lambda _pipeline: Path("."))
+    monkeypatch.setattr(
+        debug,
+        "_sync_launcher",
+        lambda **_kwargs: {"status": "ready", "shards": 2},
+    )
+
+    assert (
+        debug._cmd_sync(
+            Namespace(
+                pipeline="pipeline.py",
+                job_id="job-1",
+                script_args=[],
+                json=True,
+            )
+        )
+        == 0
+    )
+
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"status": "ready", "shards": 2}
+    assert captured.err == "pipeline diagnostic\n"
 
 
 def test_debug_reports_expected_errors_without_traceback(monkeypatch, capsys) -> None:
