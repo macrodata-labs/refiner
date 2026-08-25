@@ -206,7 +206,7 @@ def _sync_launcher(
     client: MacrodataClient,
 ) -> dict[str, Any]:
     with pickle_project_modules_by_value(project_root):
-        prepared = launcher.prepare_debug_sync()
+        prepared = launcher.prepare_debug_sync(client=client)
     bundle = build_debug_sync_bundle(
         source_root=project_root,
         pipeline_payload=prepared.pipeline_payload,

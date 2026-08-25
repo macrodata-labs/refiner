@@ -354,7 +354,10 @@ class CloudLauncher(BaseLauncher):
         return stages, manifest, plan, resolved_secret_sources, resolved_env
 
     def _secret_mount_spec(
-        self, resolved_secret_sources: list[dict[str, Any]] | None
+        self,
+        resolved_secret_sources: list[dict[str, Any]] | None,
+        *,
+        workspace_secret_versions: dict[str, list[dict[str, str]]] | None = None,
     ) -> list[dict[str, object]]:
         specs: list[dict[str, object]] = []
         for source in resolved_secret_sources or []:
@@ -369,16 +372,70 @@ class CloudLauncher(BaseLauncher):
                     }
                 )
             else:
+                env_name = str(source.get("envname") or "default")
+                selected_keys = (
+                    set(source["keys"])
+                    if isinstance(source.get("keys"), list)
+                    else None
+                )
                 specs.append(
                     {
                         "kind": "env",
-                        "name": source.get("envname"),
+                        "name": env_name,
                         "keys": sorted(source["keys"])
                         if isinstance(source.get("keys"), list)
                         else None,
+                        "versions": [
+                            secret
+                            for secret in (workspace_secret_versions or {}).get(
+                                env_name, []
+                            )
+                            if selected_keys is None or secret["name"] in selected_keys
+                        ],
                     }
                 )
         return specs
+
+    @staticmethod
+    def _workspace_secret_versions(
+        *,
+        client: MacrodataClient | None,
+        resolved_secret_sources: list[dict[str, Any]] | None,
+    ) -> dict[str, list[dict[str, str]]]:
+        env_names = {
+            str(source.get("envname") or "default")
+            for source in resolved_secret_sources or []
+            if source.get("__type__") == "__envkeys__"
+        }
+        versions: dict[str, list[dict[str, str]]] = {}
+        if not env_names:
+            return versions
+        resolved_client = client or MacrodataClient()
+        for env_name in sorted(env_names):
+            payload = resolved_client.cli_list_secrets(env=env_name)
+            secrets = payload.get("secrets")
+            if not isinstance(secrets, list):
+                raise ValueError("invalid workspace secret metadata response")
+            env_versions: list[dict[str, str]] = []
+            for secret in secrets:
+                if not isinstance(secret, dict):
+                    raise ValueError("invalid workspace secret metadata response")
+                secret_id = secret.get("id")
+                name = secret.get("name")
+                version = secret.get("version")
+                if not all(
+                    isinstance(value, str) and value for value in (secret_id, name)
+                ) or not (
+                    isinstance(version, str)
+                    and len(version) == 64
+                    and all(character in "0123456789abcdef" for character in version)
+                ):
+                    raise ValueError("invalid workspace secret metadata response")
+                env_versions.append({"id": secret_id, "name": name, "version": version})
+            versions[env_name] = sorted(
+                env_versions, key=lambda secret: (secret["name"], secret["id"])
+            )
+        return versions
 
     def _debug_allocation_fingerprint(
         self,
@@ -387,6 +444,7 @@ class CloudLauncher(BaseLauncher):
         manifest: dict[str, object],
         resolved_secret_sources: list[dict[str, Any]] | None,
         resolved_env: dict[str, str] | None,
+        workspace_secret_versions: dict[str, list[dict[str, str]]] | None = None,
     ) -> str:
         stage_specs: list[dict[str, object]] = []
         for stage in stages:
@@ -414,7 +472,10 @@ class CloudLauncher(BaseLauncher):
             "environment": manifest.get("environment"),
             "dependencies": manifest.get("dependencies"),
             "stages": stage_specs,
-            "secret_mounts": self._secret_mount_spec(resolved_secret_sources),
+            "secret_mounts": self._secret_mount_spec(
+                resolved_secret_sources,
+                workspace_secret_versions=workspace_secret_versions,
+            ),
             "env": resolved_env,
         }
         encoded = json.dumps(
@@ -425,7 +486,9 @@ class CloudLauncher(BaseLauncher):
         ).encode()
         return hashlib.sha256(encoded).hexdigest()
 
-    def prepare_debug_sync(self) -> PreparedDebugSync:
+    def prepare_debug_sync(
+        self, *, client: MacrodataClient | None = None
+    ) -> PreparedDebugSync:
         if self.continue_from_job is not None:
             raise ValueError("cloud debug cannot be combined with continue_from_job")
         stages, manifest, _, resolved_secret_sources, resolved_env = (
@@ -435,6 +498,10 @@ class CloudLauncher(BaseLauncher):
         if stage is None:
             raise ValueError("pipeline has no stage 0")
         serialized = PreparedPipelinePayload.from_pipeline(stage.pipeline)
+        workspace_secret_versions = self._workspace_secret_versions(
+            client=client,
+            resolved_secret_sources=resolved_secret_sources,
+        )
         return PreparedDebugSync(
             pipeline_payload=serialized.payload_bytes,
             pipeline_sha256=serialized.sha256,
@@ -443,6 +510,7 @@ class CloudLauncher(BaseLauncher):
                 manifest=manifest,
                 resolved_secret_sources=resolved_secret_sources,
                 resolved_env=resolved_env,
+                workspace_secret_versions=workspace_secret_versions,
             ),
         )
 
@@ -471,6 +539,10 @@ class CloudLauncher(BaseLauncher):
             self._resolve_submission()
         )
         if debug:
+            workspace_secret_versions = self._workspace_secret_versions(
+                client=client,
+                resolved_secret_sources=resolved_secret_sources,
+            )
             manifest = dict(manifest)
             manifest["debug_allocation_fingerprint"] = (
                 self._debug_allocation_fingerprint(
@@ -478,6 +550,7 @@ class CloudLauncher(BaseLauncher):
                     manifest=manifest,
                     resolved_secret_sources=resolved_secret_sources,
                     resolved_env=resolved_env,
+                    workspace_secret_versions=workspace_secret_versions,
                 )
             )
         try:

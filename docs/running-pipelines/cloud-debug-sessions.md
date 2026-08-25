@@ -34,9 +34,8 @@ macrodata debug run pipeline.py --max-shards 1
 ```
 
 Attempts use the normal worker entrypoint, runtime token, environment,
-resources, and telemetry. Shard claims and completions are written to a private
-SQLite ledger in the retained worker, not the job's canonical shard ledger.
-Every attempt resets that private ledger, so the same inputs can be rerun.
+resources, and telemetry. Every attempt starts with fresh shard state, so the
+same inputs can be rerun without changing the job's normal execution records.
 
 After editing source or the pipeline graph, perform a complete sync and rerun:
 
@@ -105,3 +104,10 @@ If the retained worker crashes or Modal replaces it, the job and debug session
 fail rather than silently continuing in a new container. Start a new session to
 continue. Synchronized files, profiles, and changes made through exec are
 ephemeral.
+
+## Internal Notes
+
+Shard claims and completions are written to an atomic, private SQLite ledger in
+the retained worker rather than the job's canonical shard ledger. Each attempt
+resets that private ledger and passes it explicitly to the normal cloud worker
+entrypoint.
