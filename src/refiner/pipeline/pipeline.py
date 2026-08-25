@@ -1362,11 +1362,14 @@ def load_lance(
     columns: Sequence[str] | None = None,
     batch_size: int = 65_536,
     num_shards: int | None = None,
+    max_rows: int | None = None,
 ) -> RefinerPipeline:
     """Create a pipeline over one immutable version of a Lance dataset.
 
     ``num_shards`` groups whole, adjacent Lance fragments into the requested
     number of scheduling shards without splitting individual fragments.
+    ``max_rows`` bounds the source prefix before shard planning, so later
+    fragments are not scheduled or read.
     """
     return RefinerPipeline(
         source=LanceSource(
@@ -1375,6 +1378,7 @@ def load_lance(
             columns=columns,
             batch_size=batch_size,
             num_shards=num_shards,
+            max_rows=max_rows,
         )
     )
 
