@@ -6,11 +6,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from refiner.execution.engine import block_num_rows
+from refiner.execution.operators.row import AsyncStepTeardownError
 from refiner.pipeline.data.shard import Shard
 from refiner.pipeline.pipeline import RefinerPipeline
 from refiner.pipeline.sinks import NullSink
 from refiner.services import RuntimeServiceSpec, ServiceManager
 from refiner.worker.context import logger, set_active_run_context, set_active_step_index
+from refiner.worker.errors import describe_lifecycle_error
 from refiner.worker.lifecycle import RuntimeLifecycle
 from refiner.worker.metrics.emitter import (
     NOOP_USER_METRICS_EMITTER,
@@ -96,6 +98,7 @@ class Worker:
             self.pipeline._next_step_index() if self.pipeline.sink is not None else None
         )
         runtime_services_started = False
+        source_exhausted = False
 
         def _heartbeat_once() -> None:
             with inflight_lock:
@@ -179,13 +182,14 @@ class Worker:
             )
             heartbeat_thread.start()
 
-        def _source_rows():
-            nonlocal previous, claimed, runtime_services_started
+        def _source_rows(*, claim_one_shard: bool = False):
+            nonlocal previous, claimed, runtime_services_started, source_exhausted
             while True:
                 if heartbeat_error is not None:
                     raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
                 shard = self.runtime_lifecycle.claim(previous=previous)
                 if shard is None:
+                    source_exhausted = True
                     logger.info(
                         "no more shards worker_id={} claimed={}",
                         self.worker_id,
@@ -236,6 +240,16 @@ class Worker:
                     source_done_shards.add(shard.id)
                 _maybe_complete_shard(shard.id)
                 previous = shard
+                if claim_one_shard:
+                    break
+
+        def _source_windows():
+            if not self.pipeline.source.claim_shards_sequentially:
+                yield _source_rows()
+                return
+
+            while not source_exhausted:
+                yield _source_rows(claim_one_shard=True)
 
         with set_active_run_context(
             job_id=self.job_id,
@@ -274,8 +288,8 @@ class Worker:
 
             try:
                 try:
-                    for block in self.pipeline.execute(
-                        _source_rows(),
+                    for block in self.pipeline._execute_windows(
+                        _source_windows(),
                         on_shard_delta=_apply_row_delta,
                     ):
                         if heartbeat_error is not None:
@@ -304,19 +318,21 @@ class Worker:
                     raise
                 except Exception as e:
                     execution_error = e
-                    failed_error = str(e).strip() or type(e).__name__
+                    lifecycle_error = describe_lifecycle_error(e)
                     with inflight_lock:
                         in_flight_count = len(inflight_by_id)
                     logger.exception(
-                        "worker execution failed worker_id={} claimed={} completed={} in_flight={} error={}",
+                        "worker execution failed worker_id={} claimed={} completed={} in_flight={}",
                         self.worker_id,
                         claimed,
                         completed,
                         in_flight_count,
-                        failed_error,
                     )
                     self.user_metrics_emitter.force_flush_logs()
-                    failed += _fail_inflight_shards(failed_error)
+                    failed_inflight = _fail_inflight_shards(lifecycle_error)
+                    failed += failed_inflight
+                    if isinstance(e, AsyncStepTeardownError) and failed_inflight == 0:
+                        raise
                 else:
                     _heartbeat_once()
                     with inflight_lock:

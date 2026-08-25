@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Generator
 
 from loguru import logger as _base_logger
 from refiner.worker.metrics.emitter import NOOP_USER_METRICS_EMITTER, UserMetricsEmitter
+from refiner.worker.errors import annotate_step_error
 
 if TYPE_CHECKING:
     from refiner.services.manager import ServiceManager
@@ -156,6 +157,9 @@ def set_active_step_index(step_index: int | None) -> Generator[None, None, None]
     token: Token[int | None] = _ACTIVE_STEP_INDEX.set(step_index)
     try:
         yield
+    except BaseException as error:
+        annotate_step_error(error, step_index)
+        raise
     finally:
         _ACTIVE_STEP_INDEX.reset(token)
 

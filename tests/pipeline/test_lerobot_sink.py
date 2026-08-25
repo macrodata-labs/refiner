@@ -455,6 +455,7 @@ def _lerobot_episode(
     values: list[float],
     metadata: LeRobotMetadata | None = None,
     shard_id: str | None = None,
+    source_row_id: int | None = None,
 ) -> LeRobotRow:
     frames = [
         DictRow(
@@ -476,6 +477,7 @@ def _lerobot_episode(
                 "length": len(frames),
             },
             shard_id=shard_id,
+            source_row_id=source_row_id,
         ),
         metadata=metadata or _metadata(),
         frames=frames,
@@ -1056,6 +1058,34 @@ def test_lerobot_sink_closes_video_writers_concurrently(tmp_path: Path) -> None:
 
     assert started == 2
     assert sorted(closed) == ["left", "right"]
+
+
+def test_write_lerobot_does_not_persist_source_identity(tmp_path: Path) -> None:
+    out_root = tmp_path / "internal-identity"
+    writer = LeRobotWriterSink(str(out_root))
+    row = _lerobot_episode(
+        episode_index=0,
+        task="pick",
+        task_index=0,
+        values=[1.0],
+        shard_id="shard-1",
+        source_row_id=42,
+    )
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime()),
+    ):
+        writer.write_shard_block("shard-1", [row])
+        writer.on_shard_complete("shard-1")
+
+    episode_file = next((out_root / "meta").glob("chunk-*/episodes/file-000.parquet"))
+    episodes = pq.read_table(episode_file)
+    assert "__source_row_id" not in episodes.column_names
+    assert "__shard_id" not in episodes.column_names
 
 
 def test_write_lerobot_preserves_stable_task_index_mapping(tmp_path: Path) -> None:

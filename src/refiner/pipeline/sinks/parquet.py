@@ -11,9 +11,16 @@ from refiner.pipeline.data.datatype import (
     dtype_to_plan,
     schema_with_dtypes,
 )
-from refiner.pipeline.data.shard import SHARD_ID_COLUMN
+from refiner.pipeline.data.block import strip_internal_columns
 from refiner.pipeline.data.tabular import Tabular
-from refiner.pipeline.sinks.assets import AssetUploadManager, MissingAssetPolicy
+from refiner.pipeline.sinks.assets import (
+    AssetUploadManager,
+    AssetWriteConfig,
+    BlobAssetConfig,
+    BlobAssetManager,
+    FileAssetConfig,
+    asset_config_to_plan,
+)
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.worker.context import get_active_worker_token
@@ -27,34 +34,32 @@ class ParquetSink(BaseSink):
         *,
         filename_template: str = "{shard_id}__w{worker_id}.parquet",
         compression: str | None = None,
-        upload_assets: bool = False,
-        assets_subdir: str = "assets",
-        max_asset_uploads_in_flight: int = 16,
-        missing_asset_policy: MissingAssetPolicy = "error",
+        assets: AssetWriteConfig | None = None,
         dtypes: DTypeMapping | None = None,
     ):
         self.output = DataFolder.resolve(output)
         self.filename_template = filename_template
         self.compression = compression
-        self.upload_assets = upload_assets
-        self.assets_subdir = assets_subdir
-        self.missing_asset_policy = missing_asset_policy
+        self.assets = assets
         self.dtypes = dtypes
         self._writers: dict[str, pq.ParquetWriter] = {}
         self._schema: pa.Schema | None = None
-        self._assets = (
-            AssetUploadManager(
+        if isinstance(assets, FileAssetConfig):
+            self._assets = AssetUploadManager(
                 self.output,
-                assets_subdir=assets_subdir,
+                assets_subdir=assets.subdir,
                 filename_template=filename_template,
-                max_uploads_in_flight=max_asset_uploads_in_flight,
-                missing_asset_policy=missing_asset_policy,
+                max_uploads_in_flight=assets.max_in_flight,
+                missing_asset_policy=assets.missing_policy,
             )
-            if upload_assets
-            else None
-        )
-        if self._assets is not None:
-            self.assets_subdir = self._assets.assets_subdir
+        elif isinstance(assets, BlobAssetConfig):
+            self._assets = BlobAssetManager(
+                self.output,
+                config=assets,
+                filename_template=filename_template,
+            )
+        else:
+            self._assets = None
 
     def set_input_schema(self, schema: pa.Schema | None) -> None:
         self._schema = schema_with_dtypes(schema, self.dtypes, preserve_metadata=False)
@@ -91,8 +96,7 @@ class ParquetSink(BaseSink):
                 if not block
                 else block[0].tabular_type.from_rows(block, schema=self._schema).table
             )
-        if SHARD_ID_COLUMN in table.schema.names:
-            table = table.drop_columns([SHARD_ID_COLUMN])
+        table = strip_internal_columns(table)
         if self._assets is None:
             self._writer(shard_id, table.schema).write_table(table)
             return table.num_rows
@@ -103,6 +107,8 @@ class ParquetSink(BaseSink):
         return table.num_rows
 
     def on_shard_complete(self, shard_id: str) -> None:
+        if self._assets is not None:
+            self._assets.on_shard_complete(shard_id)
         writer = self._writers.pop(shard_id, None)
         if writer is not None:
             writer.close()
@@ -124,10 +130,8 @@ class ParquetSink(BaseSink):
         }
         if self.compression is not None:
             args["compression"] = self.compression
-        if self.upload_assets:
-            args["upload_assets"] = True
-            args["assets_subdir"] = self.assets_subdir
-            args["missing_asset_policy"] = self.missing_asset_policy
+        if self.assets is not None:
+            args["assets"] = asset_config_to_plan(self.assets)
         if self.dtypes:
             args["dtypes"] = {
                 key: dtype_to_plan(dtype) for key, dtype in self.dtypes.items()
@@ -139,7 +143,7 @@ class ParquetSink(BaseSink):
             output=self.output,
             filename_template=self.filename_template,
             reducer_name="write_parquet_reduce",
-            assets_subdir=self.assets_subdir if self.upload_assets else None,
+            assets_subdir=self.assets.subdir if self.assets is not None else None,
         )
 
 

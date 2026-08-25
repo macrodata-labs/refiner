@@ -11,9 +11,13 @@ to the Macrodata Cloud.
 ```python
 pipeline.launch_local(
     name="debug-local",
-    num_workers=2,
+    num_workers="auto",
 )
 ```
+
+With `num_workers="auto"`, Refiner starts one local worker for each shard in
+the current stage. An empty stage starts no workers. Pass a positive
+integer to cap execution at a fixed number of worker processes.
 
 The local launcher is useful for:
 

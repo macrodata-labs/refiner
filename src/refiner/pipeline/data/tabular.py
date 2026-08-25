@@ -8,7 +8,11 @@ import pyarrow as pa
 import numpy as np
 
 from refiner.pipeline.expressions import Expr, eval_expr_arrow
-from refiner.pipeline.data.shard import SHARD_ID_COLUMN
+from refiner.pipeline.data.shard import (
+    INTERNAL_ROW_COLUMNS,
+    SHARD_ID_COLUMN,
+    SOURCE_ROW_ID_COLUMN,
+)
 from refiner.pipeline.data.row import ArrowRowView, Row, _OverlayRow
 
 _NEXT_TABULAR_ID = count()
@@ -24,6 +28,7 @@ class Tabular:
         self.columns = tuple(unit.column(name) for name in self.names)
         self.index_by_name = {name: i for i, name in enumerate(self.names)}
         self.shard_idx = self.index_by_name.get(SHARD_ID_COLUMN)
+        self.source_row_idx = self.index_by_name.get(SOURCE_ROW_ID_COLUMN)
 
     @classmethod
     def from_rows(
@@ -143,7 +148,7 @@ def _table_from_rows(
     seen: set[str] = set()
     for row in rows:
         for name in row:
-            if name == SHARD_ID_COLUMN or name in seen:
+            if name in INTERNAL_ROW_COLUMNS or name in seen:
                 continue
             seen.add(name)
             names.append(name)
@@ -154,6 +159,8 @@ def _table_from_rows(
         }
         if any(row.shard_id is not None for row in rows):
             columns[SHARD_ID_COLUMN] = [row.shard_id for row in rows]
+        if (source_row_ids := _source_row_id_array(rows)) is not None:
+            columns[SOURCE_ROW_ID_COLUMN] = source_row_ids
         return pa.table(columns)
 
     arrays: dict[str, pa.Array] = {}
@@ -173,6 +180,8 @@ def _table_from_rows(
             [row.shard_id for row in rows],
             type=pa.string(),
         )
+    if (source_row_ids := _source_row_id_array(rows)) is not None:
+        arrays[SOURCE_ROW_ID_COLUMN] = source_row_ids
     if not metadata_by_name:
         return pa.table(arrays)
     fields = [
@@ -187,6 +196,15 @@ def _concat_tables(tables: Sequence[pa.Table]) -> pa.Table:
         return pa.concat_tables(tables)
     except pa.ArrowInvalid:
         return pa.concat_tables(tables, promote_options="default")
+
+
+def _source_row_id_array(
+    rows: Sequence[Row],
+) -> pa.Array | None:
+    values = [row.source_row_id for row in rows]
+    if all(value is None for value in values):
+        return None
+    return pa.array(values, type=pa.uint64())
 
 
 def _sorted_arrow_rows(rows: Sequence[Row]) -> Sequence[Row]:
@@ -261,7 +279,7 @@ def _arrow_table_from_group(
         else {}
     )
     if schema is None and not changed_columns:
-        return _with_shard_id(table, rows[0].shard_id, len(rows))
+        return _with_execution_identity(table, rows)
 
     for name, changes in changed_columns.items():
         if all(name not in row for row in rows):
@@ -305,17 +323,24 @@ def _arrow_table_from_group(
         changed_names=set(changed_columns),
     )
 
-    return _with_shard_id(table, rows[0].shard_id, len(rows))
+    return _with_execution_identity(table, rows)
 
 
-def _with_shard_id(
+def _with_execution_identity(
     table: pa.Table,
-    shard_id: str | None,
-    num_rows: int,
+    rows: Sequence[Row],
 ) -> pa.Table:
+    shard_id = rows[0].shard_id
     if shard_id is not None:
-        shard_col = pa.array([shard_id] * num_rows, type=pa.string())
+        shard_col = pa.array([shard_id] * len(rows), type=pa.string())
         table = set_or_append_column(table, SHARD_ID_COLUMN, shard_col)
+    if SOURCE_ROW_ID_COLUMN not in table.column_names:
+        if (source_row_ids := _source_row_id_array(rows)) is not None:
+            table = set_or_append_column(
+                table,
+                SOURCE_ROW_ID_COLUMN,
+                source_row_ids,
+            )
     return table
 
 

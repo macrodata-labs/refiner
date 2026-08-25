@@ -6,6 +6,7 @@ from typing import Any
 
 from refiner.pipeline.data.shard import RowRangeDescriptor, Shard
 from refiner.pipeline.sources.base import BaseSource
+from refiner.pipeline.sources.shard_limit import validate_shard_count
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.steps import FlatMapStep, MapResult
 
@@ -15,10 +16,17 @@ class TaskSource(BaseSource):
 
     name = "task"
 
-    def __init__(self, *, num_tasks: int) -> None:
+    def __init__(
+        self,
+        *,
+        num_tasks: int,
+        claim_shards_sequentially: bool = True,
+    ) -> None:
         if num_tasks <= 0:
             raise ValueError("num_tasks must be > 0")
+        validate_shard_count(num_tasks, source="Task")
         self._num_tasks = num_tasks
+        self.claim_shards_sequentially = claim_shards_sequentially
 
     def list_shards(self) -> list[Shard]:
         return [
@@ -35,8 +43,11 @@ class TaskSource(BaseSource):
             raise ValueError(f"Invalid task rank {rank} for {self._num_tasks} tasks")
         yield DictRow({"task_rank": rank})
 
-    def describe(self) -> dict[str, int]:
-        return {"num_tasks": self._num_tasks}
+    def describe(self) -> dict[str, Any]:
+        return {
+            "num_tasks": self._num_tasks,
+            "claim_shards_sequentially": self.claim_shards_sequentially,
+        }
 
 
 @dataclass(frozen=True, slots=True)

@@ -17,14 +17,21 @@ shards, run transforms, write outputs, and report logs and metrics.
 ```python
 pipeline.launch_cloud(
     name="aloha-trim",
-    num_workers=8,
+    num_workers="auto",
     cpus_per_worker=4,
     mem_mb_per_worker=8192,
     secrets={"HF_TOKEN": None},
 )
 ```
 
-## Compute provider
+Set `num_workers="auto"` to request one worker for every shard in each stage.
+The cloud registration runtime discovers shards after secrets and environment
+variables are mounted, then Macrodata Cloud applies its normal worker and GPU
+limits to the resulting count. The submitting machine does not need access to
+private inputs. An empty stage starts no worker containers and completes after
+shard registration. Pass a positive integer when you want a fixed worker count.
+
+## Execution provider
 
 Modal remains the default. For a CPU-only run on AWS Batch, pass `provider="aws"`:
 
@@ -42,6 +49,35 @@ AWS Batch supports pip dependencies, secrets, environment variables, multiple
 workers, continuation, and multi-stage pipelines. It does not currently support
 GPUs, managed runtime services, apt packages, custom images, or arbitrary file
 and directory attachments.
+
+## Cloud and region placement
+
+For Modal execution, workers use AWS by default. Select one supported public
+cloud with `cloud`; this placement setting is separate from the `provider`
+execution-backend setting above:
+
+```python
+pipeline.launch_cloud(
+    name="gcp-workers",
+    cloud="gcp",  # "aws", "oci", or "gcp"
+)
+```
+
+By default, workers may run in the US, EEA, or Canada. Pass one selector or a
+list; a worker is accepted when it matches any selector:
+
+```python
+pipeline.launch_cloud(
+    name="north-america-workers",
+    cloud="aws",
+    region=["us-east", "ca"],
+)
+```
+
+Broad selectors are `us`, `eu`, `ca`, and `uk`. Narrow selectors are
+`us-east`, `us-central`, `us-south`, `us-west`, `eu-west`, `eu-north`, and
+`eu-south`. `eu` excludes the UK. Madrid is classified as `eu-south`; the
+defensive `FRA*` and `AMS` aliases are classified as `eu-west`.
 
 ## What gets submitted
 

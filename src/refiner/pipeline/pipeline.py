@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Callable, cast
+from typing import TYPE_CHECKING, Any, Callable, Literal, cast
 
 from fsspec import AbstractFileSystem
 
@@ -30,8 +30,16 @@ from refiner.pipeline.steps import (
     VectorizedSegmentStep,
     WithColumnsStep,
 )
-from refiner.pipeline.sinks import BaseSink, JsonlSink, ParquetSink, ZarrSink
-from refiner.pipeline.sinks.assets import MissingAssetPolicy
+from refiner.pipeline.sinks import (
+    BaseSink,
+    JsonlSink,
+    LanceDatasetSink,
+    LanceSink,
+    LanceWriteMode,
+    ParquetSink,
+    ZarrSink,
+)
+from refiner.pipeline.sinks.assets import AssetWriteConfig
 from refiner.pipeline.sources import (
     BaseSource,
     CsvReader,
@@ -39,6 +47,7 @@ from refiner.pipeline.sources import (
     HFDatasetReader,
     Hdf5Reader,
     JsonReader,
+    LanceSource,
     McapReader,
     ParquetReader,
     TfdsReader,
@@ -49,11 +58,12 @@ from refiner.pipeline.sources.readers.hdf5 import MissingPolicy
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.readers.mcap import SyncMethod
 from refiner.pipeline.sources.items import ItemsSource
+from refiner.pipeline.sources.shard_limit import validate_shard_count
 from refiner.pipeline.sources.task import TaskSource, TaskStep
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.datatype import DTypeLike, DTypeMapping
 from refiner.pipeline.data.row import Row
-from refiner.pipeline.data.shard import SHARD_ID_COLUMN
+from refiner.pipeline.data.shard import INTERNAL_ROW_COLUMNS
 from refiner.execution.engine import (
     Block,
     Segment,
@@ -62,7 +72,11 @@ from refiner.execution.engine import (
     iter_rows,
     schema_after_segments,
 )
-from refiner.execution.operators.row import ShardDeltaFn
+from refiner.execution.operators.row import (
+    AsyncWindowRegistry,
+    ShardDeltaFn,
+    close_async_steps,
+)
 from refiner.pipeline.sources.base import SourceUnit
 from refiner.pipeline.sources.readers.utils import (
     DEFAULT_TARGET_SHARD_BYTES,
@@ -76,12 +90,14 @@ if TYPE_CHECKING:
     from refiner.launchers.cloud import CloudLaunchResult
     from refiner.launchers.local import LaunchStats
     from refiner.launchers.secrets import SecretInput
+    from refiner.platform.client import CloudProvider, CloudRegion
 
 
 class RefinerPipeline:
     source: BaseSource
     pipeline_steps: tuple[RefinerStep, ...]
     _compiled_segments: tuple[Segment, ...] | None
+    max_block_rows: int | None
     max_vectorized_block_bytes: int | None
     sink: BaseSink | None
 
@@ -90,6 +106,7 @@ class RefinerPipeline:
         source: BaseSource,
         pipeline_steps: Sequence[RefinerStep] | None = None,
         *,
+        max_block_rows: int | None = None,
         max_vectorized_block_bytes: int | None = None,
         sink: BaseSink | None = None,
     ):
@@ -98,16 +115,20 @@ class RefinerPipeline:
         Args:
             source: Source that plans shards and emits source rows or blocks.
             pipeline_steps: Ordered transform steps applied after the source.
-            max_vectorized_block_bytes: Optional target byte cap for vectorized
-                Arrow blocks. Smaller values reduce peak memory at the cost of
-                more block boundaries.
+            max_block_rows: Optional maximum rows emitted in one execution block.
+            max_vectorized_block_bytes: Optional soft byte cap for vectorized
+                Arrow blocks. Python row blocks are controlled by
+                ``max_block_rows`` instead.
             sink: Optional writer sink attached by a ``write_*`` method.
         """
+        if max_block_rows is not None and max_block_rows <= 0:
+            raise ValueError("max_block_rows must be > 0 when provided")
         if max_vectorized_block_bytes is not None and max_vectorized_block_bytes <= 0:
             raise ValueError("max_vectorized_block_bytes must be > 0 when provided")
         self.source = source
         self.pipeline_steps = tuple(pipeline_steps) if pipeline_steps else ()
         self._compiled_segments = None
+        self.max_block_rows = max_block_rows
         self.max_vectorized_block_bytes = max_vectorized_block_bytes
         self.sink = sink
 
@@ -121,6 +142,7 @@ class RefinerPipeline:
         return self.__class__(
             self.source,
             self.pipeline_steps + (step,),
+            max_block_rows=self.max_block_rows,
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             sink=self.sink,
         )
@@ -153,23 +175,40 @@ class RefinerPipeline:
             return self.__class__(
                 self.source,
                 self.pipeline_steps[:-1] + (merged,),
+                max_block_rows=self.max_block_rows,
                 max_vectorized_block_bytes=self.max_vectorized_block_bytes,
                 sink=self.sink,
             )
         return self.add_step(VectorizedSegmentStep(ops=(op,)))
+
+    def with_max_block_rows(self, max_block_rows: int | None) -> "RefinerPipeline":
+        """Return a copy with a different execution block row limit.
+
+        Set this to emit source and transformed blocks after at most this many
+        rows. ``None`` uses the execution engine's default block sizing.
+        """
+        return self.__class__(
+            self.source,
+            self.pipeline_steps,
+            max_block_rows=max_block_rows,
+            max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+            sink=self.sink,
+        )
 
     def with_max_vectorized_block_bytes(
         self, max_vectorized_block_bytes: int | None
     ) -> "RefinerPipeline":
         """Return a copy with a different vectorized block byte cap.
 
-        Set this when vectorized expression/table operations should operate on
-        smaller Arrow chunks to reduce memory pressure. ``None`` leaves block
-        sizing to the execution engine.
+        This applies to Arrow blocks from sources and vectorized operations. Use
+        ``with_max_block_rows`` to control Python row blocks. The byte cap is soft
+        because one indivisible Arrow row may exceed it. ``None`` leaves
+        vectorized block sizing to the execution engine.
         """
         return self.__class__(
             self.source,
             self.pipeline_steps,
+            max_block_rows=self.max_block_rows,
             max_vectorized_block_bytes=max_vectorized_block_bytes,
             sink=self.sink,
         )
@@ -184,6 +223,7 @@ class RefinerPipeline:
         return self.__class__(
             self.source,
             self.pipeline_steps,
+            max_block_rows=self.max_block_rows,
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             sink=sink,
         )
@@ -361,7 +401,9 @@ class RefinerPipeline:
 
         ``fn`` receives a ``pyarrow.Table`` and must return a ``pyarrow.Table``.
         Adjacent vectorized operations are fused so they can run inside the same
-        Arrow segment.
+        Arrow segment. The returned table must preserve Refiner's internal shard
+        ID and source-row-ID columns so execution identity stays aligned through
+        filters and reordering.
         """
         return self._add_vectorized_op(
             FnTableStep(fn=fn, index=self._next_step_index())
@@ -389,16 +431,16 @@ class RefinerPipeline:
     def select(self, *columns: str) -> "RefinerPipeline":
         """Keep only the named columns.
 
-        The internal shard id column is preserved automatically for execution
-        bookkeeping and is not part of the public column selection.
+        Internal execution-identity columns are preserved automatically and are
+        not part of the public column selection.
         """
         if not columns:
             raise ValueError("select requires at least one column")
-        if SHARD_ID_COLUMN in columns:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if invalid := set(columns).intersection(INTERNAL_ROW_COLUMNS):
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(
             SelectStep(
-                columns=tuple(columns) + (SHARD_ID_COLUMN,),
+                columns=tuple(columns) + INTERNAL_ROW_COLUMNS,
                 index=self._next_step_index(),
             )
         )
@@ -411,8 +453,8 @@ class RefinerPipeline:
         """
         if not assignments:
             raise ValueError("with_columns requires at least one assignment")
-        if SHARD_ID_COLUMN in assignments:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if invalid := set(assignments).intersection(INTERNAL_ROW_COLUMNS):
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         exprs = {
             name: value if isinstance(value, Expr) else lit(value)
             for name, value in assignments.items()
@@ -427,8 +469,8 @@ class RefinerPipeline:
         This is a convenience wrapper around ``with_columns`` for a single
         assignment. Non-expression values are treated as literals.
         """
-        if name == SHARD_ID_COLUMN:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if name in INTERNAL_ROW_COLUMNS:
+            raise ValueError(f"{name} is an internal column")
         expr = value if isinstance(value, Expr) else lit(value)
         return self._add_vectorized_op(
             WithColumnsStep(assignments={name: expr}, index=self._next_step_index())
@@ -438,12 +480,12 @@ class RefinerPipeline:
         """Drop the named columns from each row or Arrow block.
 
         ``drop`` is vectorized and can be fused with adjacent expression-backed
-        operations. The internal shard id column cannot be dropped.
+        operations. Internal execution-identity columns cannot be dropped.
         """
         if not columns:
             raise ValueError("drop requires at least one column")
-        if SHARD_ID_COLUMN in columns:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if invalid := set(columns).intersection(INTERNAL_ROW_COLUMNS):
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(
             DropStep(columns=tuple(columns), index=self._next_step_index())
         )
@@ -452,12 +494,14 @@ class RefinerPipeline:
         """Rename columns using ``old_name=new_name`` keyword arguments.
 
         For example, ``pipeline.rename(old="new")`` renames column ``old`` to
-        ``new``. The internal shard id column cannot be renamed.
+        ``new``. Internal execution-identity columns cannot be renamed.
         """
         if not mapping:
             raise ValueError("rename requires at least one mapping")
-        if SHARD_ID_COLUMN in mapping or SHARD_ID_COLUMN in mapping.values():
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if invalid := set(mapping).intersection(INTERNAL_ROW_COLUMNS) | set(
+            mapping.values()
+        ).intersection(INTERNAL_ROW_COLUMNS):
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(
             RenameStep(mapping=mapping, index=self._next_step_index())
         )
@@ -470,11 +514,32 @@ class RefinerPipeline:
         """
         if not dtypes:
             raise ValueError("cast requires at least one dtype mapping")
-        if SHARD_ID_COLUMN in dtypes:
-            raise ValueError(f"{SHARD_ID_COLUMN} is an internal column")
+        if invalid := set(dtypes).intersection(INTERNAL_ROW_COLUMNS):
+            raise ValueError(f"{sorted(invalid)[0]} is an internal column")
         return self._add_vectorized_op(
             CastStep(dtypes=dtypes, index=self._next_step_index())
         )
+
+    def _execute_windows(
+        self,
+        windows: Iterable[Iterable[SourceUnit]],
+        *,
+        on_shard_delta: ShardDeltaFn | None = None,
+    ) -> Iterable[Block]:
+        async_window_registry: AsyncWindowRegistry = {}
+        try:
+            for rows in windows:
+                yield from execute_segments(
+                    rows,
+                    self._get_compiled_segments(),
+                    vectorized_chunk_rows=self.max_block_rows,
+                    max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+                    on_shard_delta=on_shard_delta,
+                    input_schema=self.source.schema,
+                    async_window_registry=async_window_registry,
+                )
+        finally:
+            close_async_steps(self.pipeline_steps)
 
     def execute(
         self,
@@ -494,12 +559,9 @@ class RefinerPipeline:
             on_shard_delta: Optional callback used by workers to track shard
                 progress as rows move through the pipeline.
         """
-        yield from execute_segments(
-            rows,
-            self._get_compiled_segments(),
-            max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+        yield from self._execute_windows(
+            (rows,),
             on_shard_delta=on_shard_delta,
-            input_schema=self.source.schema,
         )
 
     def iter_rows(self) -> Iterable[Row]:
@@ -517,7 +579,9 @@ class RefinerPipeline:
         This delegates to the source shard planner and is useful for debugging
         sharding decisions without executing the pipeline transforms.
         """
-        return list(self.source.list_shards())
+        shards = list(self.source.list_shards())
+        validate_shard_count(len(shards), source="Source")
+        return shards
 
     def materialize(self) -> list[Row]:
         """Execute locally and collect every output row into memory.
@@ -548,10 +612,7 @@ class RefinerPipeline:
         output: DataFolderLike,
         *,
         filename_template: str = "{shard_id}__w{worker_id}.jsonl",
-        upload_assets: bool = False,
-        assets_subdir: str = "assets",
-        max_asset_uploads_in_flight: int = 16,
-        missing_asset_policy: MissingAssetPolicy = "error",
+        assets: AssetWriteConfig | None = None,
     ) -> "RefinerPipeline":
         """Attach a JSONL writer sink.
 
@@ -559,22 +620,13 @@ class RefinerPipeline:
             output: Output folder or URL prefix.
             filename_template: Per-worker output filename template. Available
                 fields include ``shard_id`` and ``worker_id``.
-            upload_assets: Whether referenced local assets should be copied
-                beside the JSONL output and rewritten to output paths.
-            assets_subdir: Subdirectory used when ``upload_assets`` is enabled.
-            max_asset_uploads_in_flight: Concurrent asset uploads per worker.
-            missing_asset_policy: How missing assets are handled when uploading:
-                error, keep the original reference, or write null depending on
-                the sink policy.
+            assets: Optional individual-file or packed-blob asset configuration.
         """
         return self.with_sink(
             JsonlSink(
                 output=output,
                 filename_template=filename_template,
-                upload_assets=upload_assets,
-                assets_subdir=assets_subdir,
-                max_asset_uploads_in_flight=max_asset_uploads_in_flight,
-                missing_asset_policy=missing_asset_policy,
+                assets=assets,
             )
         )
 
@@ -584,10 +636,7 @@ class RefinerPipeline:
         *,
         filename_template: str = "{shard_id}__w{worker_id}.parquet",
         compression: str | None = None,
-        upload_assets: bool = False,
-        assets_subdir: str = "assets",
-        max_asset_uploads_in_flight: int = 16,
-        missing_asset_policy: MissingAssetPolicy = "error",
+        assets: AssetWriteConfig | None = None,
         dtypes: DTypeMapping | None = None,
     ) -> "RefinerPipeline":
         """Attach a Parquet writer sink.
@@ -597,11 +646,7 @@ class RefinerPipeline:
             filename_template: Per-worker output filename template. Available
                 fields include ``shard_id`` and ``worker_id``.
             compression: Optional Parquet compression codec.
-            upload_assets: Whether referenced local assets should be copied
-                beside the Parquet output and rewritten to output paths.
-            assets_subdir: Subdirectory used when ``upload_assets`` is enabled.
-            max_asset_uploads_in_flight: Concurrent asset uploads per worker.
-            missing_asset_policy: How missing assets are handled when uploading.
+            assets: Optional individual-file or packed-blob asset configuration.
             dtypes: Optional dtype overrides for written columns.
         """
         return self.with_sink(
@@ -609,11 +654,53 @@ class RefinerPipeline:
                 output=output,
                 filename_template=filename_template,
                 compression=compression,
-                upload_assets=upload_assets,
-                assets_subdir=assets_subdir,
-                max_asset_uploads_in_flight=max_asset_uploads_in_flight,
-                missing_asset_policy=missing_asset_policy,
+                assets=assets,
                 dtypes=dtypes,
+            )
+        )
+
+    def write_lance(
+        self,
+        output: DataFolderLike,
+        *,
+        filename_template: str = "{shard_id}__w{worker_id}.lance",
+        assets: AssetWriteConfig | None = None,
+    ) -> "RefinerPipeline":
+        """Attach a writer that creates one standalone Lance file per shard."""
+        return self.with_sink(
+            LanceSink(
+                output=output,
+                filename_template=filename_template,
+                assets=assets,
+            )
+        )
+
+    def write_lance_dataset(
+        self,
+        output: DataFolderLike,
+        *,
+        mode: LanceWriteMode = "create",
+        columns: Sequence[str] | None = None,
+        assets: AssetWriteConfig | None = None,
+    ) -> "RefinerPipeline":
+        """Attach a distributed Lance dataset writer or schema-evolution sink."""
+        source_uri: str | None = None
+        source_version: int | None = None
+        if mode == "add_columns":
+            if not isinstance(self.source, LanceSource):
+                raise ValueError(
+                    "add_columns requires a pipeline created by load_lance"
+                )
+            source_uri = self.source.dataset_uri
+            source_version = self.source.version
+        return self.with_sink(
+            LanceDatasetSink(
+                output=output,
+                mode=mode,
+                columns=columns,
+                source_uri=source_uri,
+                source_version=source_version,
+                assets=assets,
             )
         )
 
@@ -676,7 +763,7 @@ class RefinerPipeline:
         self,
         *,
         name: str,
-        num_workers: int = 1,
+        num_workers: int | Literal["auto"] = 1,
         rundir: str | None = None,
         gpu: GPU | None = None,
     ) -> "LaunchStats":
@@ -684,7 +771,8 @@ class RefinerPipeline:
 
         Args:
             name: Human-readable run name.
-            num_workers: Number of local worker processes.
+            num_workers: Number of local worker processes, or ``"auto"`` to
+                launch one worker per stage shard.
             rundir: Optional explicit local run directory. Reuse it to resume a prior local run.
             gpu: Optional GPU devices exposed per worker. `cuda_version` is accepted
                 for API consistency but ignored by local launch.
@@ -705,10 +793,12 @@ class RefinerPipeline:
         *,
         name: str,
         provider: str = "modal",
-        num_workers: int = 1,
+        num_workers: int | Literal["auto"] = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpu: GPU | None = None,
+        cloud: CloudProvider = "aws",
+        region: CloudRegion | Sequence[CloudRegion] = ("us", "eu", "ca"),
         sync_local_dependencies: bool = False,
         dependencies: Sequence[str] | None = None,
         refiner_extras: Sequence[str] | None = None,
@@ -723,10 +813,16 @@ class RefinerPipeline:
             name: Human-readable run name.
             provider: Cloud compute provider. Supported values are ``"modal"`` and
                 ``"aws"``.
-            num_workers: Requested logical worker count.
+            num_workers: Requested logical worker count, or ``"auto"`` to
+                launch one worker per stage shard.
             cpus_per_worker: Optional requested CPU cores per worker.
             mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
             gpu: Optional structured GPU request.
+            cloud: Public cloud provider. Supported values are ``"aws"``,
+                ``"oci"``, and ``"gcp"``.
+            region: One region selector or a sequence of selectors. Workers are
+                accepted when their placement matches any selector. This does
+                not request a priced Modal region constraint.
             sync_local_dependencies: Include packages detected from the local
                 environment in the cloud runtime.
             dependencies: Additional packages to install in the cloud runtime.
@@ -757,6 +853,8 @@ class RefinerPipeline:
             cpus_per_worker=cpus_per_worker,
             mem_mb_per_worker=mem_mb_per_worker,
             gpu=gpu,
+            cloud=cloud,
+            region=region,
             sync_local_dependencies=sync_local_dependencies,
             dependencies=dependencies,
             refiner_extras=refiner_extras,
@@ -1261,6 +1359,30 @@ def read_parquet(
     )
 
 
+def load_lance(
+    input: DataFolderLike,
+    *,
+    version: int | str | None = None,
+    columns: Sequence[str] | None = None,
+    batch_size: int = 65_536,
+    num_shards: int | None = None,
+) -> RefinerPipeline:
+    """Create a pipeline over one immutable version of a Lance dataset.
+
+    ``num_shards`` groups whole, adjacent Lance fragments into the requested
+    number of scheduling shards without splitting individual fragments.
+    """
+    return RefinerPipeline(
+        source=LanceSource(
+            input,
+            version=version,
+            columns=columns,
+            batch_size=batch_size,
+            num_shards=num_shards,
+        )
+    )
+
+
 def read_hf_dataset(
     repo: str,
     config: str | None = None,
@@ -1480,14 +1602,20 @@ def task(
     fn: Callable[[int, int], Any],
     *,
     num_tasks: int,
+    claim_shards_sequentially: bool = True,
 ) -> RefinerPipeline:
     """Create a task-style pipeline with one callback invocation per rank.
 
     ``fn`` receives ``(task_rank, num_tasks)`` and is invoked once for each
     integer rank in ``range(num_tasks)``. This is useful for jobs that perform
-    side effects or generate work without reading an input dataset.
+    side effects or generate work without reading an input dataset. By default,
+    each worker fully processes one shard before claiming another. Set
+    ``claim_shards_sequentially=False`` to preserve unbounded shard claiming.
     """
-    source = TaskSource(num_tasks=num_tasks)
+    source = TaskSource(
+        num_tasks=num_tasks,
+        claim_shards_sequentially=claim_shards_sequentially,
+    )
     return RefinerPipeline(source=source).add_step(
         TaskStep(fn=fn, num_tasks=num_tasks, index=1)
     )

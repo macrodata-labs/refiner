@@ -6,7 +6,7 @@ import pyarrow as pa
 import pytest
 
 from refiner.pipeline.data.row import DictRow
-from refiner.pipeline.data.shard import SHARD_ID_COLUMN
+from refiner.pipeline.data.shard import SHARD_ID_COLUMN, SOURCE_ROW_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 import refiner.pipeline.pipeline as pipeline_module
 import refiner.execution.engine as engine_module
@@ -41,28 +41,65 @@ def test_vectorized_pipeline_ops_execute_in_order() -> None:
     assert [str(r["text_clean"]) for r in out] == ["bee", "cee"]
 
 
-def test_select_preserves_internal_shard_column() -> None:
+def test_select_preserves_internal_execution_columns() -> None:
     pipeline = from_items([{"x": 1}, {"x": 2}]).select("x")
     blocks = list(pipeline.execute(pipeline.source.read()))
     assert blocks
     tabular = next(block for block in blocks if isinstance(block, Tabular))
     assert SHARD_ID_COLUMN in tabular.table.column_names
+    assert SOURCE_ROW_ID_COLUMN in tabular.table.column_names
 
 
+def test_tabular_allows_partial_source_row_identity() -> None:
+    table = Tabular.from_rows(
+        [
+            DictRow({"x": 1}, source_row_id=0),
+            DictRow({"x": 2}),
+        ]
+    ).table
+
+    assert table.column(SOURCE_ROW_ID_COLUMN).type == pa.uint64()
+    assert table.column(SOURCE_ROW_ID_COLUMN).to_pylist() == [0, None]
+
+
+def test_arrow_backed_rows_reuse_source_row_identity_column() -> None:
+    source = Tabular(
+        pa.table(
+            {
+                "x": [1, 2],
+                SOURCE_ROW_ID_COLUMN: pa.array([10, 11], type=pa.uint64()),
+            }
+        )
+    )
+    rows = [row.update(y=int(row["x"]) + 1) for row in source]
+
+    output = Tabular.from_rows(rows).table
+
+    source_buffer = source.table.column(SOURCE_ROW_ID_COLUMN).chunk(0).buffers()[1]
+    output_buffer = output.column(SOURCE_ROW_ID_COLUMN).chunk(0).buffers()[1]
+    assert source_buffer is not None
+    assert output_buffer is not None
+    assert output_buffer.address == source_buffer.address
+
+
+@pytest.mark.parametrize("internal_column", [SHARD_ID_COLUMN, SOURCE_ROW_ID_COLUMN])
 @pytest.mark.parametrize(
-    ("builder", "kwargs"),
+    ("builder", "kwargs_factory"),
     [
-        ("select", (SHARD_ID_COLUMN,)),
-        ("drop", (SHARD_ID_COLUMN,)),
-        ("with_column", (SHARD_ID_COLUMN, 1)),
-        ("with_columns", {SHARD_ID_COLUMN: 1}),
-        ("rename", {SHARD_ID_COLUMN: "renamed"}),
-        ("rename", {"x": SHARD_ID_COLUMN}),
-        ("cast", {SHARD_ID_COLUMN: "string"}),
+        ("select", lambda name: (name,)),
+        ("drop", lambda name: (name,)),
+        ("with_column", lambda name: (name, 1)),
+        ("with_columns", lambda name: {name: 1}),
+        ("rename", lambda name: {name: "renamed"}),
+        ("rename", lambda name: {"x": name}),
+        ("cast", lambda name: {name: "string"}),
     ],
 )
-def test_vectorized_ops_reject_internal_shard_column(builder, kwargs) -> None:
+def test_vectorized_ops_reject_internal_columns(
+    internal_column, builder, kwargs_factory
+) -> None:
     pipeline = from_items([{"x": 1}])
+    kwargs = kwargs_factory(internal_column)
     with pytest.raises(ValueError, match="internal column"):
         if isinstance(kwargs, tuple):
             getattr(pipeline, builder)(*kwargs)
@@ -70,14 +107,21 @@ def test_vectorized_ops_reject_internal_shard_column(builder, kwargs) -> None:
             getattr(pipeline, builder)(**kwargs)
 
 
-def test_vectorized_ops_reject_internal_shard_column_exprs() -> None:
+@pytest.mark.parametrize("internal_column", [SHARD_ID_COLUMN, SOURCE_ROW_ID_COLUMN])
+def test_vectorized_ops_reject_internal_column_exprs(internal_column: str) -> None:
     pipeline = from_items([{"x": 1}])
     with pytest.raises(ValueError, match="internal column"):
-        pipeline.with_column("sid", col(SHARD_ID_COLUMN))
+        pipeline.with_column("sid", col(internal_column))
     with pytest.raises(ValueError, match="internal column"):
-        pipeline.with_columns(sid=col(SHARD_ID_COLUMN))
+        pipeline.with_columns(sid=col(internal_column))
     with pytest.raises(ValueError, match="internal column"):
-        pipeline.filter(col(SHARD_ID_COLUMN) == "abc")
+        pipeline.filter(col(internal_column) == "abc")
+
+
+def test_non_lance_pipeline_allows_lance_bookkeeping_names() -> None:
+    name = "__refiner_lance_fragment_id"
+    rows = from_items([{name: 7}]).select(name).materialize()
+    assert [int(row[name]) for row in rows] == [7]
 
 
 def test_vectorized_and_row_udf_segments_interoperate() -> None:
@@ -145,6 +189,17 @@ def test_map_table_runs_on_vectorized_path() -> None:
 
     assert [int(r["x"]) for r in out] == [1, 2, 3]
     assert [int(r["y"]) for r in out] == [11, 12, 13]
+
+
+def test_map_table_reorder_preserves_source_row_identity() -> None:
+    pipeline = from_items([{"x": 1}, {"x": 2}, {"x": 3}]).map_table(
+        lambda table: table.sort_by([("x", "descending")])
+    )
+
+    rows = [row for block in pipeline.execute(pipeline.source.read()) for row in block]
+
+    assert [int(row["x"]) for row in rows] == [3, 2, 1]
+    assert [row.source_row_id for row in rows] == [2, 1, 0]
 
 
 def test_apply_vectorized_op_filter_without_explicit_shard_counts() -> None:
@@ -244,6 +299,30 @@ def test_apply_vectorized_ops_requires_map_table_lineage_when_tracking() -> None
                 )
             ],
             return_row_indices=True,
+        )
+
+
+@pytest.mark.parametrize("dropped", [SHARD_ID_COLUMN, SOURCE_ROW_ID_COLUMN])
+def test_apply_vectorized_ops_requires_map_table_execution_identity(
+    dropped: str,
+) -> None:
+    table = pa.table(
+        {
+            SHARD_ID_COLUMN: pa.array(["s1", "s1"]),
+            SOURCE_ROW_ID_COLUMN: pa.array([0, 1], type=pa.uint64()),
+            "x": pa.array([1, 2]),
+        }
+    )
+
+    with pytest.raises(ValueError, match=rf"must preserve internal columns: {dropped}"):
+        apply_vectorized_ops(
+            table,
+            [
+                FnTableStep(
+                    fn=lambda current: current.drop_columns([dropped]),
+                    index=1,
+                )
+            ],
         )
 
 
@@ -374,6 +453,75 @@ def test_max_vectorized_block_bytes_can_force_smaller_blocks() -> None:
     assert all(int(block.table.num_rows) <= 1 for block in tabular_blocks)
 
 
+def test_max_vectorized_block_bytes_does_not_split_row_blocks() -> None:
+    pipeline = (
+        from_items([{"payload": b"x" * 6} for _ in range(5)])
+        .map(lambda row: row)
+        .with_max_vectorized_block_bytes(12)
+    )
+
+    blocks = list(pipeline.execute(pipeline.source.read()))
+
+    block_lengths = []
+    for block in blocks:
+        assert isinstance(block, list)
+        block_lengths.append(len(block))
+    assert block_lengths == [5]
+
+
+def test_block_limits_apply_to_source_only_rows() -> None:
+    pipeline = (
+        from_items([{"payload": b"x" * 6} for _ in range(5)])
+        .with_max_block_rows(3)
+        .with_max_vectorized_block_bytes(12)
+    )
+
+    blocks = list(pipeline.execute(pipeline.source.read()))
+
+    block_lengths = []
+    for block in blocks:
+        assert isinstance(block, list)
+        block_lengths.append(len(block))
+    assert block_lengths == [3, 2]
+
+
+def test_max_block_rows_splits_source_tabular_blocks() -> None:
+    source = Tabular(pa.table({"x": list(range(5))}))
+
+    blocks = list(
+        engine_module.execute_segments(
+            [source],
+            (),
+            vectorized_chunk_rows=2,
+        )
+    )
+
+    block_lengths = []
+    for block in blocks:
+        assert isinstance(block, Tabular)
+        block_lengths.append(int(block.table.num_rows))
+    assert block_lengths == [2, 2, 1]
+
+
+def test_max_block_rows_limits_map_async_results() -> None:
+    async def add_payload(row):
+        return {"payload": b"x" * 8}
+
+    pipeline = (
+        from_items([{"id": index} for index in range(5)])
+        .map_async(add_payload, max_in_flight=2)
+        .with_max_block_rows(2)
+    )
+
+    blocks = list(pipeline.execute(pipeline.source.read()))
+
+    block_lengths = []
+    for block in blocks:
+        assert isinstance(block, list)
+        block_lengths.append(len(block))
+    assert block_lengths == [2, 2, 1]
+
+
 def test_vectorized_chunk_shrink_is_run_local(monkeypatch) -> None:
     calls: list[int] = []
     original_from_rows = engine_module.Tabular.from_rows
@@ -430,6 +578,11 @@ def test_row_segment_to_vectorized_chunk_shrink_is_budgeted(monkeypatch) -> None
 def test_with_max_vectorized_block_bytes_validates_positive() -> None:
     with pytest.raises(ValueError):
         from_items([{"x": 1}]).with_max_vectorized_block_bytes(0)
+
+
+def test_with_max_block_rows_validates_positive() -> None:
+    with pytest.raises(ValueError):
+        from_items([{"x": 1}]).with_max_block_rows(0)
 
 
 def test_vectorized_expression_extensions() -> None:

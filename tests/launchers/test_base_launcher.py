@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import cast
 
+import pytest
+
 from refiner.job_urls import build_job_tracking_url
 from refiner.platform.client import MacrodataClient
 from refiner.pipeline import RefinerPipeline
@@ -26,6 +28,16 @@ class _ResourceHintLauncher(_DummyLauncher):
             num_workers=compute.num_workers,
             cpus_per_worker=1,
             gpu=GPU(count=2, type="h100", cuda_version="12.4"),
+        )
+
+
+@pytest.mark.parametrize("num_workers", [0, -1, "AUTO"])
+def test_launcher_rejects_invalid_worker_count(num_workers) -> None:
+    with pytest.raises(ValueError, match="num_workers must be > 0 or 'auto'"):
+        _DummyLauncher(
+            pipeline=cast(RefinerPipeline, object()),
+            name="unit-test",
+            num_workers=num_workers,
         )
 
 

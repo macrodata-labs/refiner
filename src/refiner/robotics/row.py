@@ -172,6 +172,10 @@ class _RoboticsRowView(Row, RoboticsRow):
     def __getitem__(self, key: str) -> Any:
         return self._row[key]
 
+    @property
+    def source_row_id(self) -> int | None:
+        return self._row.source_row_id
+
     def __iter__(self) -> Iterator[str]:
         hidden = set(self._source_frame_keys())
         for key in tuple(hidden):

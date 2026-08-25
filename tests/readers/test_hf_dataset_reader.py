@@ -705,3 +705,19 @@ def test_hf_dataset_fallback_treats_non_positive_shards_as_auto(monkeypatch) -> 
     reader = HFDatasetReader("org/repo", num_shards=-1)
 
     assert len(reader.list_shards()) == 3
+
+
+def test_hf_dataset_fallback_rejects_oversized_automatic_plan(monkeypatch) -> None:
+    class FakeStreamingDataset:
+        num_shards = 10_001
+
+    _install_datasets(monkeypatch, dataset=FakeStreamingDataset())
+
+    def fake_get_json(url: str, *, timeout: float) -> object:
+        del timeout
+        return _empty_parquet_resolution(url)
+
+    monkeypatch.setattr(hf_dataset, "_get_json", fake_get_json)
+
+    with pytest.raises(ValueError, match=r"10,000-shard limit"):
+        HFDatasetReader("org/repo").list_shards()

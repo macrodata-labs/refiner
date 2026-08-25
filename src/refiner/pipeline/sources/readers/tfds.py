@@ -13,6 +13,10 @@ from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.shard import RowRangeDescriptor, Shard
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
+from refiner.pipeline.sources.shard_limit import (
+    validate_num_shards,
+    validate_shard_count,
+)
 from refiner.pipeline.sources.readers.utils import (
     PathSelection,
     path_selection_map,
@@ -81,6 +85,7 @@ class TfdsReader(BaseSource):
             raise ValueError("examples_per_shard must be > 0")
         if num_shards is not None and num_shards <= 0:
             raise ValueError("num_shards must be > 0 when provided")
+        validate_num_shards(num_shards)
         self.inputs = (input,) if isinstance(input, str) else tuple(input)
         if not self.inputs:
             raise ValueError("read_tfds input sequence cannot be empty")
@@ -258,6 +263,12 @@ class TfdsReader(BaseSource):
         total_examples = sum(counts)
         shards: list[Shard] = []
         if self.num_shards is None:
+            planned_count = sum(
+                (count + self.examples_per_shard - 1) // self.examples_per_shard
+                for count in counts
+                if count > 0
+            )
+            validate_shard_count(planned_count, source="TFDS automatic")
             offset = 0
             for count in counts:
                 for start in range(offset, offset + count, self.examples_per_shard):

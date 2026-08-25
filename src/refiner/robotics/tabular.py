@@ -99,6 +99,10 @@ class RoboticsTabular(Tabular):
         return self._tabular.shard_idx
 
     @property
+    def source_row_idx(self) -> int | None:
+        return self._tabular.source_row_idx
+
+    @property
     def needs_row_indices(self) -> bool:
         return bool(self.side_data)
 

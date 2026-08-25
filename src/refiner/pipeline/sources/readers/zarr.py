@@ -20,6 +20,10 @@ from refiner.pipeline.data.datatype import (
 from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.shard import RowRangeDescriptor, Shard
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
+from refiner.pipeline.sources.shard_limit import (
+    validate_num_shards,
+    validate_shard_count,
+)
 from refiner.pipeline.sources.readers.utils import (
     DEFAULT_TARGET_SHARD_BYTES,
     PathSelection,
@@ -89,6 +93,7 @@ class ZarrReader(BaseSource):
             raise ValueError("target_shard_bytes must be greater than zero")
         if num_shards is not None and num_shards <= 0:
             raise ValueError("num_shards must be greater than zero")
+        validate_num_shards(num_shards)
         if row_batch_size is not None and row_batch_size <= 0:
             raise ValueError("row_batch_size must be greater than zero")
         self.arrays = (
@@ -187,6 +192,7 @@ class ZarrReader(BaseSource):
                 split_ranges = self._shard_ranges(group, arrays)
             source_key = str(source_index)
             for start, end in split_ranges:
+                validate_shard_count(len(shards) + 1, source="Zarr")
                 shards.append(
                     Shard.from_row_range(
                         start=start,
@@ -431,6 +437,7 @@ class ZarrReader(BaseSource):
                     ),
                 )
                 step = max(chunk_rows, (target_rows // chunk_rows) * chunk_rows)
+                validate_shard_count(ceil(row_count / step), source="Zarr automatic")
             return [
                 (start, min(start + step, row_count))
                 for start in range(0, row_count, step)
@@ -466,11 +473,13 @@ class ZarrReader(BaseSource):
                 and current_bytes + row_bytes > self.target_shard_bytes
             ):
                 ranges.append((shard_start, row_index))
+                validate_shard_count(len(ranges), source="Zarr automatic")
                 shard_start = row_index
                 current_bytes = 0
             current_bytes += row_bytes
             previous_end = end
         ranges.append((shard_start, row_count))
+        validate_shard_count(len(ranges), source="Zarr automatic")
         _check_final_end(arrays, previous_end, label="row_ends", exact=True)
         return ranges
 

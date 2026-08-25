@@ -8,6 +8,7 @@ from fsspec.asyn import AsyncFileSystem
 from fsspec.implementations.dirfs import DirFileSystem
 from fsspec.implementations.local import LocalFileSystem
 
+from refiner.io._s3fs import install_s3fs_concurrent_writes_for
 from refiner.io.datafile import DataFile, _storage_options_for_path
 from refiner.io.utils import required_refiner_extras
 
@@ -45,6 +46,7 @@ class DataFolder(DirFileSystem):
         """
         AsyncFileSystem.__init__(self)
         self._fs = fs
+        self._explicit_fs = fs is not None
         # Keep string paths unresolved so cloud submission can inspect manifests
         # and infer extras without requiring local remote-storage credentials.
         self._path = fs._strip_protocol(path) if fs is not None else path
@@ -61,6 +63,7 @@ class DataFolder(DirFileSystem):
             )
             if not self._path:
                 self._path = "/"
+        install_s3fs_concurrent_writes_for(self._fs)
         return self._fs, self._path
 
     @property
@@ -70,6 +73,7 @@ class DataFolder(DirFileSystem):
     @fs.setter
     def fs(self, value: AbstractFileSystem | None) -> None:
         self._fs = value
+        self._explicit_fs = value is not None
 
     @property
     def path(self) -> str:
@@ -143,6 +147,10 @@ class DataFolder(DirFileSystem):
 
     def required_refiner_extras(self) -> tuple[str, ...]:
         return required_refiner_extras(self._path, self._fs)
+
+    @property
+    def has_explicit_filesystem_configuration(self) -> bool:
+        return self._explicit_fs or bool(self._storage_options)
 
     def abs_paths(self, paths: str | Iterable[str]) -> str | list[str]:
         """

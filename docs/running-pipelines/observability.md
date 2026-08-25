@@ -49,6 +49,10 @@ def transform(row):
     return row
 ```
 
+Persisted shard failure reasons include a message capped at 512 characters and
+the step index when available. Worker logs retain the full exception and
+traceback.
+
 ## CLI inspection
 
 ```bash

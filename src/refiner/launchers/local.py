@@ -4,8 +4,9 @@ import json
 import subprocess
 import sys
 import threading
+from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
 
 import cloudpickle
@@ -52,7 +53,7 @@ class LocalLauncher(BaseLauncher):
         *,
         pipeline: RefinerPipeline,
         name: str,
-        num_workers: int = 1,
+        num_workers: int | Literal["auto"] = 1,
         rundir: str | None = None,
         gpu: GPU | None = None,
     ):
@@ -68,6 +69,24 @@ class LocalLauncher(BaseLauncher):
         )
         self.job_tracking_url: str | None = None
         self._total_stages = 1
+
+    def _resolved_stages(
+        self,
+        stages: list[PlannedStage] | None = None,
+    ) -> list[PlannedStage]:
+        resolved = super()._resolved_stages(stages)
+        return [
+            replace(
+                stage,
+                compute=replace(
+                    stage.compute,
+                    num_workers=len(stage.pipeline.list_shards()),
+                ),
+            )
+            if stage.compute.num_workers == "auto"
+            else stage
+            for stage in resolved
+        ]
 
     def _collect_worker_results(
         self,
@@ -283,23 +302,12 @@ class LocalLauncher(BaseLauncher):
     ) -> LaunchStats:
         # Resolve worker capacity and remaining stage shards.
         stage_workers = stage.compute.num_workers
+        if not isinstance(stage_workers, int):
+            raise RuntimeError("local stage worker count was not resolved")
         if self.job_id is None or self.rundir is None:
             raise RuntimeError(
                 "local launcher must be initialized in launch() before running stages"
             )
-        available_cpus = len(available_cpu_ids())
-        if stage_workers > available_cpus:
-            logger.warning(
-                f"stage {stage.index} requested {stage_workers} workers, but only {available_cpus} CPUs are available on this machine."
-            )
-        gpu_sets = (
-            build_gpu_sets(
-                num_workers=stage_workers,
-                gpu_count_per_worker=stage.compute.gpu.count,
-            )
-            if stage.compute.gpu is not None
-            else [[] for _ in range(stage_workers)]
-        )
         completed_shard_ids = {
             row.shard_id
             for row in read_finalized_workers(
@@ -324,6 +332,23 @@ class LocalLauncher(BaseLauncher):
                 failed=0,
                 output_rows=0,
             )
+
+        if self.num_workers == "auto" and stage.compute.inherit_launcher_resources:
+            stage_workers = len(shards)
+        available_cpus = len(available_cpu_ids())
+        if stage_workers > available_cpus:
+            logger.warning(
+                f"stage {stage.index} requested {stage_workers} workers, but only {available_cpus} CPUs are available on this machine."
+            )
+
+        gpu_sets = (
+            build_gpu_sets(
+                num_workers=stage_workers,
+                gpu_count_per_worker=stage.compute.gpu.count,
+            )
+            if stage.compute.gpu is not None
+            else [[] for _ in range(stage_workers)]
+        )
 
         # Persist the stage payload and worker assignments under the rundir.
         stage_run_dir = Path(self.rundir) / f"stage-{stage.index}"
@@ -381,7 +406,7 @@ class LocalLauncher(BaseLauncher):
         if attach_mode_override() == "detach":
             raise SystemExit("--detach is only supported for cloud launches.")
         available_cpus = len(available_cpu_ids())
-        if self.num_workers > available_cpus:
+        if isinstance(self.num_workers, int) and self.num_workers > available_cpus:
             logger.warning(
                 f"launch requested {self.num_workers} workers, but only {available_cpus} CPUs are available on this machine."
             )

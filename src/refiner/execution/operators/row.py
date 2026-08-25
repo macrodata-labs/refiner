@@ -22,6 +22,28 @@ from refiner.worker.context import set_active_step_index
 from refiner.worker.metrics.api import register_gauge
 
 AsyncCloseFn = Callable[[], Coroutine[object, object, None]]
+AsyncWindowRegistry = dict[int, AsyncWindow[Row]]
+
+
+class AsyncStepTeardownError(RuntimeError):
+    """Raised when an async pipeline callable fails to close."""
+
+
+def close_async_steps(steps: Sequence[RefinerStep]) -> None:
+    """Close async callables owned by the provided pipeline steps."""
+    close_fns: list[AsyncCloseFn] = []
+    for step in steps:
+        if not isinstance(step, AsyncRowStep):
+            continue
+        fn = getattr(step, "fn", None)
+        close = getattr(fn, "aclose", None)
+        if close is not None:
+            close_fns.append(cast(AsyncCloseFn, close))
+    for close in close_fns:
+        try:
+            submit(close()).result()
+        except Exception as e:
+            raise AsyncStepTeardownError(str(e)) from e
 
 
 def execute_row_steps(
@@ -29,6 +51,7 @@ def execute_row_steps(
     steps: Sequence[RefinerStep],
     *,
     on_shard_delta: ShardDeltaFn | None = None,
+    async_window_registry: AsyncWindowRegistry | None = None,
 ) -> Iterator[Row]:
     """Execute row/batch/flatmap steps using per-step queues.
 
@@ -41,24 +64,32 @@ def execute_row_steps(
         return
 
     queues: list[RowBuffer] = [RowBuffer() for _ in range(len(ordered) + 1)]
-    async_windows: list[AsyncWindow[Row] | None] = [
-        AsyncWindow[Row](
-            max_in_flight=step.max_in_flight,
-            preserve_order=step.preserve_order,
+
+    def _async_window(step: AsyncRowStep) -> AsyncWindow[Row]:
+        window = (
+            async_window_registry.get(step.index)
+            if async_window_registry is not None
+            else None
         )
-        if isinstance(step, AsyncRowStep)
-        else None
-        for step in ordered
-    ]
-    for i, step in enumerate(ordered):
-        window = async_windows[i]
-        if window is not None:
+        if window is None:
+            window = AsyncWindow[Row](
+                max_in_flight=step.max_in_flight,
+                preserve_order=step.preserve_order,
+            )
+            if async_window_registry is not None:
+                async_window_registry[step.index] = window
             register_gauge(
                 "in_flight",
                 lambda window=window: len(window),
                 unit="rows",
                 step_index=step.index,
             )
+        return window
+
+    async_windows = [
+        _async_window(step) if isinstance(step, AsyncRowStep) else None
+        for step in ordered
+    ]
 
     async def _run_async_step(*, step: AsyncRowStep, row: Row) -> Row:
         with set_active_step_index(step.index):
@@ -177,21 +208,6 @@ def execute_row_steps(
         for i in range(len(ordered)):
             _run_step(i, flush_all=flush_all)
 
-    def _close_async_steps() -> None:
-        for window in async_windows:
-            if window is not None:
-                window.cancel_pending()
-        close_fns: list[AsyncCloseFn] = []
-        for step in ordered:
-            if not isinstance(step, AsyncRowStep):
-                continue
-            fn = getattr(step, "fn", None)
-            close = getattr(fn, "aclose", None)
-            if close is not None:
-                close_fns.append(cast(AsyncCloseFn, close))
-        for close in close_fns:
-            submit(close()).result()
-
     def _drain_output() -> Iterator[Row]:
         outq = queues[-1]
         if not outq:
@@ -207,7 +223,15 @@ def execute_row_steps(
         _pump(flush_all=True)
         yield from _drain_output()
     finally:
-        _close_async_steps()
+        for window in async_windows:
+            if window is not None:
+                window.cancel_pending()
 
 
-__all__ = ["execute_row_steps", "ShardDeltaFn"]
+__all__ = [
+    "AsyncWindowRegistry",
+    "AsyncStepTeardownError",
+    "close_async_steps",
+    "execute_row_steps",
+    "ShardDeltaFn",
+]

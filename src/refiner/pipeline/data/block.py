@@ -6,11 +6,20 @@ import numpy as np
 import pyarrow as pa
 
 from refiner.pipeline.data.row import Row
-from refiner.pipeline.data.shard import SHARD_ID_COLUMN
+from refiner.pipeline.data.shard import (
+    INTERNAL_ROW_COLUMNS,
+    SHARD_ID_COLUMN,
+)
 from refiner.pipeline.data.tabular import Tabular
 
 Block = list[Row] | Tabular
 StreamItem = Row | Block
+
+
+def strip_internal_columns(table: pa.Table) -> pa.Table:
+    """Remove execution-identity columns before exposing or persisting user data."""
+    present = [name for name in INTERNAL_ROW_COLUMNS if name in table.column_names]
+    return table.drop_columns(present) if present else table
 
 
 def split_block_by_shard(block: Block) -> tuple[dict[str, Block], dict[str, int]]:
@@ -132,4 +141,9 @@ def _split_tabular_by_shard_sorted(
     return dict(tables_by_shard), counts
 
 
-__all__ = ["Block", "StreamItem", "split_block_by_shard"]
+__all__ = [
+    "Block",
+    "StreamItem",
+    "split_block_by_shard",
+    "strip_internal_columns",
+]

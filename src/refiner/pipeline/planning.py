@@ -5,7 +5,7 @@ import inspect
 import textwrap
 from dataclasses import dataclass
 from types import CodeType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 from refiner.pipeline.steps import (
     CastStep,
@@ -37,10 +37,12 @@ if TYPE_CHECKING:
 
 _REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
 
+WorkerCount: TypeAlias = int | Literal["auto"]
+
 
 @dataclass(frozen=True, slots=True)
 class StageComputeRequirements:
-    num_workers: int
+    num_workers: WorkerCount
     cpus_per_worker: int | None = None
     memory_mb_per_worker: int | None = None
     gpu: GPU | None = None
@@ -462,14 +464,16 @@ def _compile_stage_steps(
 
 
 def plan_pipeline_stages(
-    pipeline: "RefinerPipeline", *, default_num_workers: int
+    pipeline: "RefinerPipeline", *, default_num_workers: WorkerCount
 ) -> list[PlannedStage]:
     """Return the ordered execution stages for a pipeline.
 
     This is currently a placeholder splitter that yields a single stage. Future
     multi-stage planning logic should live here.
     """
-    if default_num_workers <= 0:
+    if default_num_workers != "auto" and (
+        not isinstance(default_num_workers, int) or default_num_workers <= 0
+    ):
         raise ValueError("default_num_workers must be > 0")
 
     from refiner.pipeline.pipeline import RefinerPipeline
@@ -482,6 +486,7 @@ def plan_pipeline_stages(
         reducer_stage = RefinerPipeline(
             source=TaskSource(num_tasks=1),
             pipeline_steps=(),
+            max_block_rows=pipeline.max_block_rows,
             max_vectorized_block_bytes=pipeline.max_vectorized_block_bytes,
             sink=reducer,
         )

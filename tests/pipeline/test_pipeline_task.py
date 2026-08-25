@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+import pytest
+
 from refiner.pipeline import task
 from refiner.pipeline.planning import compile_pipeline_plan
+
+
+def test_task_rejects_shard_count_above_limit() -> None:
+    with pytest.raises(ValueError, match=r"10,000-shard limit"):
+        task(lambda rank, _world_size: rank, num_tasks=10_001)
 
 
 def test_task_invokes_fn_with_rank_and_world_size() -> None:
@@ -17,6 +24,22 @@ def test_task_invokes_fn_with_rank_and_world_size() -> None:
     assert seen == [(0, 4), (1, 4), (2, 4), (3, 4)]
     assert [int(row["rank"]) for row in out] == [0, 1, 2, 3]
     assert all(int(row["world_size"]) == 4 for row in out)
+
+
+def test_task_claims_shards_sequentially_by_default() -> None:
+    pipeline = task(lambda rank, _world_size: rank, num_tasks=2)
+
+    assert pipeline.source.claim_shards_sequentially is True
+
+
+def test_task_allows_unbounded_shard_claiming() -> None:
+    pipeline = task(
+        lambda rank, _world_size: rank,
+        num_tasks=2,
+        claim_shards_sequentially=False,
+    )
+
+    assert pipeline.source.claim_shards_sequentially is False
 
 
 def test_task_wraps_scalar_return_as_result() -> None:
@@ -68,11 +91,16 @@ def test_task_allows_yielding_multiple_rows() -> None:
 
 
 def test_task_compiles_source_and_task_step_plan() -> None:
-    pipeline = task(lambda rank, world_size: {"ok": rank < world_size}, num_tasks=3)
+    pipeline = task(
+        lambda rank, world_size: {"ok": rank < world_size},
+        num_tasks=3,
+        claim_shards_sequentially=False,
+    )
     payload = compile_pipeline_plan(pipeline)
     steps = payload["stages"][0]["steps"]
     assert steps[0]["name"] == "task"
     assert steps[0]["args"]["num_tasks"] == 3
+    assert steps[0]["args"]["claim_shards_sequentially"] is False
     assert steps[1]["name"] == "task_2"
     assert steps[1]["type"] == "flat_map"
     assert "fn" in steps[1]["args"]

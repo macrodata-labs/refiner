@@ -1,3 +1,5 @@
+import pytest
+
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.readers import CsvReader
@@ -9,6 +11,22 @@ def _rows_from_shard_units(units):
             yield from unit.to_rows()
         else:
             yield unit
+
+
+def test_csv_rejects_explicit_shard_count_above_limit(tmp_path):
+    path = tmp_path / "data.csv"
+    path.write_text("id\n1\n")
+
+    with pytest.raises(ValueError, match=r"10,000-shard limit"):
+        CsvReader(str(path), num_shards=10_001)
+
+
+def test_csv_rejects_oversized_automatic_plan(tmp_path):
+    path = tmp_path / "data.csv"
+    path.write_bytes(b"x" * 10_001)
+
+    with pytest.raises(ValueError, match=r"10,000-shard limit"):
+        CsvReader(str(path), target_shard_bytes=1).list_shards()
 
 
 def test_csv_bytes_lazy_reads_all_rows_exactly_once(tmp_path):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterator, Mapping, Sequence
 from collections import defaultdict
 from typing import Any, cast
@@ -9,7 +10,7 @@ import pytest
 
 from refiner.pipeline.data.shard import Shard
 from refiner import register_gauge
-from refiner.pipeline import RefinerPipeline
+from refiner.pipeline import RefinerPipeline, task
 from refiner.pipeline.expressions import col
 from refiner.execution.engine import iter_rows
 from refiner.pipeline.sinks import BaseSink
@@ -19,6 +20,7 @@ from refiner.worker.runner import Worker
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.worker.metrics.api import log_gauge
+from refiner.worker.metrics.emitter import UserMetricsEmitter
 from refiner.worker.lifecycle import FinalizedShardWorker, sort_finalized_workers
 
 
@@ -85,7 +87,7 @@ def test_sort_finalized_workers_uses_legacy_order_when_any_ordinal_is_missing() 
     ]
 
 
-class _NoopTelemetryEmitter:
+class _NoopTelemetryEmitter(UserMetricsEmitter):
     def emit_user_counter(self, **kwargs) -> None:
         del kwargs
 
@@ -354,7 +356,10 @@ def test_worker_fails_entire_claimed_group_on_exception() -> None:
     assert stats.failed == 2
     assert runtime_lifecycle.completed_ids == []
     assert runtime_lifecycle.failed_ids == [shard1.id, shard2.id]
-    assert runtime_lifecycle.failed_errors == ["kaboom", "kaboom"]
+    assert runtime_lifecycle.failed_errors == [
+        "kaboom | step_index=1",
+        "kaboom | step_index=1",
+    ]
 
 
 def test_worker_failure_uses_exception_type_when_message_is_empty() -> None:
@@ -377,7 +382,7 @@ def test_worker_failure_uses_exception_type_when_message_is_empty() -> None:
     stats = worker.run()
 
     assert stats.failed == 1
-    assert runtime_lifecycle.failed_errors == ["RuntimeError"]
+    assert runtime_lifecycle.failed_errors == ["RuntimeError | step_index=1"]
 
 
 def test_worker_can_batch_across_shards() -> None:
@@ -400,6 +405,7 @@ def test_worker_can_batch_across_shards() -> None:
         .batch_map(lambda rows: list(reversed(rows)), batch_size=2)
         .map(tap)
     )
+    assert pipeline.source.claim_shards_sequentially is False
 
     worker = Worker(
         pipeline=pipeline,
@@ -413,6 +419,200 @@ def test_worker_can_batch_across_shards() -> None:
     assert stats.claimed == 2
     assert stats.completed == 2
     assert emitted == [shard2.id, shard1.id]
+
+
+def test_task_worker_finalizes_first_shard_before_claiming_second() -> None:
+    events: list[str] = []
+
+    def run_task(rank: int, _world_size: int) -> dict[str, int]:
+        events.append(f"execute:{rank}")
+        return {"rank": rank}
+
+    pipeline = task(run_task, num_tasks=2).batch_map(
+        lambda rows: rows,
+        batch_size=8,
+    )
+    shards = pipeline.list_shards()
+
+    class _OrderedRuntimeLifecycle(_FakeRuntimeLifecycle):
+        def claim(self, previous: Shard | None = None) -> Shard | None:
+            shard = super().claim(previous)
+            if shard is not None:
+                events.append(f"claim:{shard.global_ordinal}")
+            return shard
+
+    class _FinalizingSink(_RecordingSink):
+        def on_shard_finalized(self, shard_id: str) -> None:
+            events.append(f"sink_finalized:{shard_id}")
+
+    runtime_lifecycle = _OrderedRuntimeLifecycle(shards)
+    worker = Worker(
+        pipeline=pipeline.with_sink(_FinalizingSink()),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
+        runtime_lifecycle=runtime_lifecycle,
+    )
+
+    stats = worker.run()
+
+    first_finalized = events.index(f"sink_finalized:{shards[0].id}")
+    second_claimed = events.index("claim:1")
+    assert first_finalized < second_claimed
+    assert events.index("execute:0") < second_claimed
+    assert stats.completed == 2
+
+
+def test_task_can_claim_shards_without_waiting_for_completion() -> None:
+    events: list[str] = []
+
+    def run_task(rank: int, _world_size: int) -> dict[str, int]:
+        events.append(f"execute:{rank}")
+        return {"rank": rank}
+
+    pipeline = task(
+        run_task,
+        num_tasks=2,
+        claim_shards_sequentially=False,
+    ).batch_map(lambda rows: rows, batch_size=2)
+    shards = pipeline.list_shards()
+
+    class _OrderedRuntimeLifecycle(_FakeRuntimeLifecycle):
+        def claim(self, previous: Shard | None = None) -> Shard | None:
+            shard = super().claim(previous)
+            if shard is not None:
+                events.append(f"claim:{shard.global_ordinal}")
+            return shard
+
+    class _FinalizingSink(_RecordingSink):
+        def on_shard_finalized(self, shard_id: str) -> None:
+            events.append(f"sink_finalized:{shard_id}")
+
+    runtime_lifecycle = _OrderedRuntimeLifecycle(shards)
+    worker = Worker(
+        pipeline=pipeline.with_sink(_FinalizingSink()),
+        job_id="job",
+        stage_index=0,
+        worker_id="local",
+        runtime_lifecycle=runtime_lifecycle,
+    )
+
+    stats = worker.run()
+
+    assert events.index("claim:1") < events.index(f"sink_finalized:{shards[0].id}")
+    assert stats.completed == 2
+
+
+def test_task_worker_keeps_async_callable_open_across_claim_windows() -> None:
+    class _AsyncCallable:
+        def __init__(self) -> None:
+            self.closed = False
+            self.close_calls = 0
+            self.ranks: list[int] = []
+
+        async def __call__(self, row: Row) -> dict[str, int]:
+            if self.closed:
+                raise RuntimeError("async callable reused after close")
+            rank = int(row["task_rank"])
+            self.ranks.append(rank)
+            return {"rank": rank}
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            self.closed = True
+
+    fn = _AsyncCallable()
+    metrics = _MetricRecordingTelemetryEmitter()
+    pipeline = task(lambda rank, _world_size: {"rank": rank}, num_tasks=2).map_async(
+        fn,
+        max_in_flight=1,
+    )
+    runtime_lifecycle = _FakeRuntimeLifecycle(pipeline.list_shards())
+    worker = Worker(
+        pipeline=pipeline,
+        job_id="job",
+        stage_index=0,
+        worker_id="local",
+        runtime_lifecycle=runtime_lifecycle,
+        user_metrics_emitter=metrics,
+    )
+
+    stats = worker.run()
+
+    assert stats.completed == 2
+    assert fn.ranks == [0, 1]
+    assert fn.close_calls == 1
+    assert len(metrics.registered_gauges) == 1
+
+
+def test_worker_propagates_async_teardown_failure_after_completion() -> None:
+    class _AsyncCallable:
+        async def __call__(self, row: Row) -> dict[str, int]:
+            return {"rank": int(row["task_rank"])}
+
+        async def aclose(self) -> None:
+            raise RuntimeError("async teardown failed")
+
+    pipeline = task(
+        lambda rank, _world_size: {"rank": rank},
+        num_tasks=1,
+    ).map_async(_AsyncCallable())
+    shards = pipeline.list_shards()
+    runtime_lifecycle = _FakeRuntimeLifecycle(shards)
+    worker = Worker(
+        pipeline=pipeline,
+        job_id="job",
+        stage_index=0,
+        worker_id="local",
+        runtime_lifecycle=runtime_lifecycle,
+    )
+
+    with pytest.raises(RuntimeError, match="async teardown failed"):
+        worker.run()
+
+    assert runtime_lifecycle.completed_ids == [shards[0].id]
+    assert runtime_lifecycle.failed_ids == []
+
+
+def test_task_worker_stops_claiming_after_heartbeat_failure() -> None:
+    heartbeat_should_fail = threading.Event()
+
+    class _HeartbeatFailingRuntimeLifecycle(_FakeRuntimeLifecycle):
+        def heartbeat(self, shards: list[Shard]) -> None:
+            super().heartbeat(shards)
+            if heartbeat_should_fail.is_set():
+                raise RuntimeError("heartbeat unavailable")
+
+    class _FailHeartbeatAfterWriteSink(_RecordingSink):
+        def write_block(self, block) -> tuple[dict[str, int], int]:
+            result = super().write_block(block)
+            heartbeat_should_fail.set()
+            heartbeat_thread = next(
+                thread
+                for thread in threading.enumerate()
+                if thread.name == "refiner-heartbeat-test-worker"
+            )
+            heartbeat_thread.join(timeout=2)
+            assert not heartbeat_thread.is_alive()
+            return result
+
+    pipeline = task(lambda rank, _world_size: {"rank": rank}, num_tasks=2)
+    runtime_lifecycle = _HeartbeatFailingRuntimeLifecycle(pipeline.list_shards())
+    worker = Worker(
+        pipeline=pipeline.with_sink(_FailHeartbeatAfterWriteSink()),
+        job_id="job",
+        stage_index=0,
+        worker_id="local",
+        worker_name="test-worker",
+        heartbeat_interval_seconds=1,
+        runtime_lifecycle=runtime_lifecycle,
+    )
+
+    stats = worker.run()
+
+    assert len(runtime_lifecycle.claim_previous) == 1
+    assert stats.claimed == 1
+    assert stats.completed == 1
 
 
 def test_worker_runtime_complete_errors_fail_the_shard_without_crashing() -> None:
@@ -637,7 +837,7 @@ def test_worker_suppresses_sink_close_errors_after_execution_failure() -> None:
 
     assert stats.failed == 1
     assert runtime_lifecycle.failed_ids == [shard.id]
-    assert runtime_lifecycle.failed_errors == ["kaboom"]
+    assert runtime_lifecycle.failed_errors == ["kaboom | step_index=1"]
 
 
 def test_worker_suppresses_sink_close_errors_after_run_failure() -> None:
@@ -711,7 +911,7 @@ def test_worker_preserves_execution_failure_when_emitter_shutdown_fails() -> Non
 
     assert stats.failed == 1
     assert runtime_lifecycle.failed_ids == [shard.id]
-    assert runtime_lifecycle.failed_errors == ["kaboom"]
+    assert runtime_lifecycle.failed_errors == ["kaboom | step_index=1"]
 
 
 __all__: list[str] = []

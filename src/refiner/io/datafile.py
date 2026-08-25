@@ -10,6 +10,7 @@ from typing import Any, TypeAlias, Union, cast
 from fsspec import AbstractFileSystem, url_to_fs
 from fsspec.implementations.http import HTTPFileSystem
 from fsspec.implementations.local import LocalFileSystem
+from refiner.io._s3fs import install_s3fs_concurrent_writes_for
 from refiner.io.utils import required_refiner_extras
 
 DataFilePath: TypeAlias = str | PathLike[str]
@@ -79,6 +80,7 @@ class DataFile:
                 self._path,
                 **_storage_options_for_path(self._path, self._storage_options),
             )
+        install_s3fs_concurrent_writes_for(self._fs)
         return self._fs, self._path
 
     @property
