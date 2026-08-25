@@ -34,6 +34,39 @@ jobs:
           set -euo pipefail
           cp .codex/apply-scale06-placement-client.py /tmp/apply-scale06-placement-client.py
           test "$(git hash-object /tmp/apply-scale06-placement-client.py)" = "05567d653d1c52cbda55b9c949d164e0a5fd2c2e"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('/tmp/apply-scale06-placement-client.py')
+          text = path.read_text()
+          old = '''    "tests/launchers/test_cloud_launcher.py",
+              """    assert request.stage_payloads[0].runtime.num_workers == 3
+              assert request.stage_payloads[0].runtime.cpus_per_worker == 2
+          """,
+              """    assert request.stage_payloads[0].runtime.num_workers == 3
+              assert request.stage_payloads[0].runtime.cloud == "aws"
+              assert request.stage_payloads[0].runtime.region == ("us", "eu", "ca")
+              assert request.stage_payloads[0].runtime.placement_mode == "best_effort"
+              assert request.stage_payloads[0].runtime.cpus_per_worker == 2
+          """,
+          )'''
+          new = '''    "tests/launchers/test_cloud_launcher.py",
+              """    assert request.stage_payloads[0].runtime is not None
+              assert request.stage_payloads[0].runtime.num_workers == 3
+              assert request.stage_payloads[0].runtime.cpus_per_worker == 2
+          """,
+              """    assert request.stage_payloads[0].runtime is not None
+              assert request.stage_payloads[0].runtime.num_workers == 3
+              assert request.stage_payloads[0].runtime.cloud == "aws"
+              assert request.stage_payloads[0].runtime.region == ("us", "eu", "ca")
+              assert request.stage_payloads[0].runtime.placement_mode == "best_effort"
+              assert request.stage_payloads[0].runtime.cpus_per_worker == 2
+          """,
+          )'''
+          if text.count(old) != 1:
+              raise RuntimeError(f'unexpected applicator anchor count: {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
           python3 -m py_compile /tmp/apply-scale06-placement-client.py
           git reset --hard "$SCALE06_REFINER_BASE"
           python3 /tmp/apply-scale06-placement-client.py
