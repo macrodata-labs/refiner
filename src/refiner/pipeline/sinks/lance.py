@@ -98,17 +98,21 @@ def _schema_difference(expected: pa.Schema, actual: pa.Schema) -> str:
 
 
 def _cast_to_planned_schema(table: pa.Table, schema: pa.Schema) -> pa.Table:
-    """Normalize every worker's materialized output to the planned schema."""
-    actual_names = set(table.schema.names)
-    expected_names = set(schema.names)
-    if actual_names != expected_names:
-        raise ValueError(
-            "Lance output columns differ from planned schema: "
-            + _schema_difference(schema, table.schema)
+    """Normalize fields known to the planner without forbidding row-map drops.
+
+    Python row maps may use ``row.drop(...)``; their dynamic removal is not
+    visible to the static pipeline schema.  Every surviving field that *is*
+    known to the planner is nevertheless cast to its declared field, which
+    makes dtypes and metadata deterministic across workers.
+    """
+    fields: list[pa.Field] = []
+    for actual_field in table.schema:
+        planned_index = schema.get_field_index(actual_field.name)
+        fields.append(
+            actual_field if planned_index < 0 else schema.field(planned_index)
         )
-    # Selecting establishes the planner's deterministic column order; cast uses
-    # the target fields/metadata rather than preserving worker-local inference.
-    return table.select(schema.names).cast(schema, safe=True)
+    target = pa.schema(fields, metadata=schema.metadata)
+    return table.cast(target, safe=True)
 
 
 def _validate_write_mode(mode: str) -> None:
