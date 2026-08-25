@@ -24,6 +24,50 @@ pipeline.launch_cloud(
 )
 ```
 
+## Cloud and region placement
+
+Workers use AWS by default. Select one supported public cloud with `cloud`:
+
+```python
+pipeline.launch_cloud(
+    name="gcp-workers",
+    cloud="gcp",  # "aws", "oci", or "gcp"
+)
+```
+
+By default, workers may run in the US, EEA, or Canada. Pass one selector or a
+list; a worker is accepted when it matches any selector:
+
+```python
+pipeline.launch_cloud(
+    name="north-america-workers",
+    cloud="aws",
+    region=["us-east", "ca"],
+)
+```
+
+Broad selectors are `us`, `eu`, `ca`, and `uk`. Narrow selectors are
+`us-east`, `us-central`, `us-south`, `us-west`, `eu-west`, `eu-north`, and
+`eu-south`. `eu` excludes the UK. Madrid is classified as `eu-south`; the
+defensive `FRA*` and `AMS` aliases are classified as `eu-west`.
+
+The default `placement_mode="best_effort"` lets the provider choose a region,
+then rejects and safely retries a worker that lands outside the requested
+selectors. Use strict placement when a job must not spill to another region:
+
+```python
+pipeline.launch_cloud(
+    name="strict-eu-workers",
+    cloud="aws",
+    region=["eu-west", "uk"],
+    placement_mode="strict",
+)
+```
+
+Strict placement also sends the region list as a native provider placement
+constraint. If the provider cannot satisfy it, the job remains fail-closed
+instead of silently running elsewhere.
+
 ## What gets submitted
 
 A cloud submission includes:

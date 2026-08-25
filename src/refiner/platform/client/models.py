@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 import msgspec
 
@@ -11,6 +11,22 @@ from refiner.pipeline.resources import GPU
 from refiner.pipeline.data.shard import Shard
 from refiner.services.base import RuntimeServiceSpec
 from refiner.worker.lifecycle import FinalizedShardWorker
+
+CloudPlacementMode = Literal["best_effort", "strict"]
+CloudProvider = Literal["aws", "oci", "gcp"]
+CloudRegion = Literal[
+    "us",
+    "eu",
+    "ca",
+    "uk",
+    "us-east",
+    "us-central",
+    "us-south",
+    "us-west",
+    "eu-west",
+    "eu-north",
+    "eu-south",
+]
 
 
 class WorkspaceIdentity(msgspec.Struct, frozen=True):
@@ -127,10 +143,16 @@ class CloudRuntimeConfig:
     cpus_per_worker: int | None = None
     mem_mb_per_worker: int | None = None
     gpu: GPU | None = None
+    cloud: CloudProvider = "aws"
+    region: tuple[CloudRegion, ...] = ("us", "eu", "ca")
+    placement_mode: CloudPlacementMode = "best_effort"
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "num_workers": self.num_workers,
+            "cloud": self.cloud,
+            "region": list(self.region),
+            "placement_mode": self.placement_mode,
         }
         if self.cpus_per_worker is not None:
             payload["cpus_per_worker"] = self.cpus_per_worker

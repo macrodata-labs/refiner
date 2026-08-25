@@ -57,6 +57,19 @@ def _request() -> CloudRunCreateRequest:
     )
 
 
+def test_cloud_runtime_config_preserves_positional_resource_order() -> None:
+    gpu = GPU(count=2, type="h100", cuda_version="12.4")
+
+    runtime = CloudRuntimeConfig(2, 4, 8192, gpu)
+
+    assert runtime.cpus_per_worker == 4
+    assert runtime.mem_mb_per_worker == 8192
+    assert runtime.gpu is gpu
+    assert runtime.cloud == "aws"
+    assert runtime.region == ("us", "eu", "ca")
+    assert runtime.placement_mode == "best_effort"
+
+
 def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -96,6 +109,9 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
             },
             "runtime": {
                 "num_workers": 2,
+                "cloud": "aws",
+                "region": ["us", "eu", "ca"],
+                "placement_mode": "best_effort",
                 "cpus_per_worker": 4,
                 "mem_mb_per_worker": 8192,
                 "gpu": {
@@ -191,7 +207,12 @@ def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> N
             "pipeline_payload": {
                 "file_id": "00000000-0000-7000-8000-000000000123",
             },
-            "runtime": {"num_workers": 1},
+            "runtime": {
+                "num_workers": 1,
+                "cloud": "aws",
+                "region": ["us", "eu", "ca"],
+                "placement_mode": "best_effort",
+            },
         }
     ]
 

@@ -89,6 +89,11 @@ if TYPE_CHECKING:
     from refiner.launchers.cloud import CloudLaunchResult
     from refiner.launchers.local import LaunchStats
     from refiner.launchers.secrets import SecretInput
+    from refiner.platform.client import (
+        CloudPlacementMode,
+        CloudProvider,
+        CloudRegion,
+    )
 
 
 class RefinerPipeline:
@@ -791,6 +796,9 @@ class RefinerPipeline:
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpu: GPU | None = None,
+        cloud: CloudProvider = "aws",
+        region: CloudRegion | Sequence[CloudRegion] = ("us", "eu", "ca"),
+        placement_mode: CloudPlacementMode = "best_effort",
         sync_local_dependencies: bool = False,
         dependencies: Sequence[str] | None = None,
         refiner_extras: Sequence[str] | None = None,
@@ -807,6 +815,14 @@ class RefinerPipeline:
             cpus_per_worker: Optional requested CPU cores per worker.
             mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
             gpu: Optional structured GPU request.
+            cloud: Public cloud provider. Supported values are ``"aws"``,
+                ``"oci"``, and ``"gcp"``.
+            region: One region selector or a sequence of selectors. Workers are
+                accepted when their placement matches any selector.
+            placement_mode: ``"best_effort"`` lets the provider choose placement
+                and rejects workers that land outside the selectors. ``"strict"``
+                also requests the native provider region constraint and fails
+                instead of silently spilling to a different region.
             sync_local_dependencies: Include packages detected from the local
                 environment in the cloud runtime.
             dependencies: Additional packages to install in the cloud runtime.
@@ -836,6 +852,9 @@ class RefinerPipeline:
             cpus_per_worker=cpus_per_worker,
             mem_mb_per_worker=mem_mb_per_worker,
             gpu=gpu,
+            cloud=cloud,
+            region=region,
+            placement_mode=placement_mode,
             sync_local_dependencies=sync_local_dependencies,
             dependencies=dependencies,
             refiner_extras=refiner_extras,

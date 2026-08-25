@@ -23,6 +23,9 @@ from refiner.platform.client import (
     CloudFileUploadStatus,
     CloudRunCreateRequest,
     CloudRuntimeConfig,
+    CloudPlacementMode,
+    CloudProvider,
+    CloudRegion,
     MacrodataApiError,
     MacrodataClient,
     StagePayload,
@@ -44,6 +47,23 @@ if TYPE_CHECKING:
 
 _FALLBACK_ENV_VAR = "MACRODATA_FALLBACK_TO_LATEST_PYPI"
 _CLOUD_FILE_BATCH_SIZE = 100
+_SUPPORTED_CLOUDS = frozenset({"aws", "oci", "gcp"})
+_SUPPORTED_PLACEMENT_MODES = frozenset({"best_effort", "strict"})
+_SUPPORTED_REGIONS = frozenset(
+    {
+        "us",
+        "eu",
+        "ca",
+        "uk",
+        "us-east",
+        "us-central",
+        "us-south",
+        "us-west",
+        "eu-west",
+        "eu-north",
+        "eu-south",
+    }
+)
 _UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
@@ -83,6 +103,34 @@ def _parse_continue_from_job(value: str | None) -> str | None:
     return f"{normalized_job_id}:{stage_index}"
 
 
+def _normalize_cloud(value: str) -> CloudProvider:
+    if value not in _SUPPORTED_CLOUDS:
+        supported = ", ".join(sorted(_SUPPORTED_CLOUDS))
+        raise ValueError(f"cloud must be one of: {supported}")
+    return cast(CloudProvider, value)
+
+
+def _normalize_regions(value: str | Sequence[str]) -> tuple[CloudRegion, ...]:
+    values = (value,) if isinstance(value, str) else tuple(value)
+    if not values:
+        raise ValueError("region must contain at least one selector")
+    invalid = sorted({item for item in values if item not in _SUPPORTED_REGIONS})
+    if invalid:
+        supported = ", ".join(sorted(_SUPPORTED_REGIONS))
+        raise ValueError(
+            f"unsupported region selector(s): {', '.join(invalid)}; "
+            f"expected one or more of: {supported}"
+        )
+    return cast(tuple[CloudRegion, ...], tuple(dict.fromkeys(values)))
+
+
+def _normalize_placement_mode(value: str) -> CloudPlacementMode:
+    if value not in _SUPPORTED_PLACEMENT_MODES:
+        supported = ", ".join(sorted(_SUPPORTED_PLACEMENT_MODES))
+        raise ValueError(f"placement_mode must be one of: {supported}")
+    return cast(CloudPlacementMode, value)
+
+
 @dataclass(frozen=True, slots=True)
 class CloudLaunchResult:
     job_id: str
@@ -101,6 +149,10 @@ class CloudLauncher(BaseLauncher):
         cpus_per_worker: Optional requested CPU cores per worker.
         mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
         gpu: Optional GPU runtime request for cloud scheduling.
+        cloud: Public cloud provider used for worker placement.
+        region: Accepted region selectors for worker placement.
+        placement_mode: ``"best_effort"`` validates the actual worker placement;
+            ``"strict"`` also requests the native provider region constraint.
         sync_local_dependencies: Whether to include packages detected from the
             local environment in the cloud runtime.
         dependencies: Additional packages to install in the cloud runtime.
@@ -121,6 +173,9 @@ class CloudLauncher(BaseLauncher):
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpu: GPU | None = None,
+        cloud: CloudProvider = "aws",
+        region: CloudRegion | Sequence[CloudRegion] = ("us", "eu", "ca"),
+        placement_mode: CloudPlacementMode = "best_effort",
         sync_local_dependencies: bool = False,
         dependencies: Sequence[str] | None = None,
         refiner_extras: Sequence[str] | None = None,
@@ -143,6 +198,9 @@ class CloudLauncher(BaseLauncher):
             raise ValueError("mem_mb_per_worker must be > 0")
         self.cpus_per_worker = cpus_per_worker
         self.mem_mb_per_worker = mem_mb_per_worker
+        self.cloud = _normalize_cloud(cloud)
+        self.region = _normalize_regions(region)
+        self.placement_mode = _normalize_placement_mode(placement_mode)
         self.sync_local_dependencies = sync_local_dependencies
         self.dependencies = dependencies
         self.refiner_extras = refiner_extras
@@ -313,6 +371,9 @@ class CloudLauncher(BaseLauncher):
                             cpus_per_worker=stage.compute.cpus_per_worker,
                             mem_mb_per_worker=stage.compute.memory_mb_per_worker,
                             gpu=stage.compute.gpu,
+                            cloud=self.cloud,
+                            region=self.region,
+                            placement_mode=self.placement_mode,
                         ),
                         runtime_services=collect_pipeline_services(stage.pipeline),
                     )
