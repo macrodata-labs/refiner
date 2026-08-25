@@ -8,6 +8,7 @@
 - [In-process debugging](running-pipelines/in-process-debugging.md)
 - [Local launcher](running-pipelines/local-launcher.md)
 - [Cloud launcher](running-pipelines/cloud-launcher.md)
+- [Cloud debug sessions](running-pipelines/cloud-debug-sessions.md)
 - [Resources, GPUs, and services](running-pipelines/resources-gpus-and-services.md)
 - [Observability](running-pipelines/observability.md)
 

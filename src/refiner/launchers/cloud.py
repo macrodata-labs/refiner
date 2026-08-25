@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import hashlib
+import json
 import os
 import re
 import sys
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from refiner.cli.run.modes import (
     CloudAttachContext,
@@ -129,6 +131,13 @@ class CloudLaunchResult:
     stage_index: int
     status: str
     warnings: list[str]
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedDebugSync:
+    pipeline_payload: bytes
+    pipeline_sha256: str
+    allocation_fingerprint: str
 
 
 class CloudLauncher(BaseLauncher):
@@ -335,14 +344,15 @@ class CloudLauncher(BaseLauncher):
             for stage, serialized in zip(stages, serialized_payloads, strict=True)
         }
 
-    def launch(self) -> CloudLaunchResult:
-        try:
-            client = MacrodataClient()
-        except MacrodataCredentialsError as err:
-            raise SystemExit(
-                "Launching jobs in the Macrodata cloud requires Macrodata "
-                "authentication. Run `macrodata login` or set MACRODATA_API_KEY."
-            ) from err
+    def _resolve_submission(
+        self,
+    ) -> tuple[
+        list[PlannedStage],
+        dict[str, object],
+        dict[str, object],
+        list[dict[str, Any]] | None,
+        dict[str, str] | None,
+    ]:
         resolved_secret_sources, secret_values = resolve_secret_sources(self.secrets)
         resolved_env = resolve_env_mapping(self.env) if self.env else None
         stages = self._resolved_stages()
@@ -351,6 +361,208 @@ class CloudLauncher(BaseLauncher):
             stages=stages,
         )
         plan = self._compiled_plan(stages, secret_values=secret_values)
+        return stages, manifest, plan, resolved_secret_sources, resolved_env
+
+    def _secret_mount_spec(
+        self,
+        resolved_secret_sources: list[dict[str, Any]] | None,
+        *,
+        workspace_secret_versions: dict[str, list[dict[str, str]]] | None = None,
+    ) -> list[dict[str, object]]:
+        specs: list[dict[str, object]] = []
+        for source in resolved_secret_sources or []:
+            if source.get("__type__") != "__envkeys__":
+                specs.append(
+                    {
+                        "kind": "dict",
+                        "value_digests": {
+                            key: hashlib.sha256(str(value).encode()).hexdigest()
+                            for key, value in sorted(source.items())
+                        },
+                    }
+                )
+            else:
+                env_name = str(source.get("envname") or "default")
+                selected_keys = (
+                    set(source["keys"])
+                    if isinstance(source.get("keys"), list)
+                    else None
+                )
+                specs.append(
+                    {
+                        "kind": "env",
+                        "name": env_name,
+                        "keys": sorted(source["keys"])
+                        if isinstance(source.get("keys"), list)
+                        else None,
+                        "versions": [
+                            secret
+                            for secret in (workspace_secret_versions or {}).get(
+                                env_name, []
+                            )
+                            if selected_keys is None or secret["name"] in selected_keys
+                        ],
+                    }
+                )
+        return specs
+
+    @staticmethod
+    def _workspace_secret_versions(
+        *,
+        client: MacrodataClient | None,
+        resolved_secret_sources: list[dict[str, Any]] | None,
+    ) -> dict[str, list[dict[str, str]]]:
+        env_names = {
+            str(source.get("envname") or "default")
+            for source in resolved_secret_sources or []
+            if source.get("__type__") == "__envkeys__"
+        }
+        versions: dict[str, list[dict[str, str]]] = {}
+        if not env_names:
+            return versions
+        resolved_client = client or MacrodataClient()
+        for env_name in sorted(env_names):
+            payload = resolved_client.cli_list_secrets(env=env_name)
+            secrets = payload.get("secrets")
+            if not isinstance(secrets, list):
+                raise ValueError("invalid workspace secret metadata response")
+            env_versions: list[dict[str, str]] = []
+            for secret in secrets:
+                if not isinstance(secret, dict):
+                    raise ValueError("invalid workspace secret metadata response")
+                secret_id = secret.get("id")
+                name = secret.get("name")
+                version = secret.get("version")
+                if not all(
+                    isinstance(value, str) and value for value in (secret_id, name)
+                ) or not (
+                    isinstance(version, str)
+                    and len(version) == 64
+                    and all(character in "0123456789abcdef" for character in version)
+                ):
+                    raise ValueError("invalid workspace secret metadata response")
+                env_versions.append({"id": secret_id, "name": name, "version": version})
+            versions[env_name] = sorted(
+                env_versions, key=lambda secret: (secret["name"], secret["id"])
+            )
+        return versions
+
+    def _debug_allocation_fingerprint(
+        self,
+        *,
+        stages: list[PlannedStage],
+        manifest: dict[str, object],
+        resolved_secret_sources: list[dict[str, Any]] | None,
+        resolved_env: dict[str, str] | None,
+        workspace_secret_versions: dict[str, list[dict[str, str]]] | None = None,
+    ) -> str:
+        stage_specs: list[dict[str, object]] = []
+        for stage in stages:
+            runtime = CloudRuntimeConfig(
+                num_workers=1,
+                cloud=self.cloud,
+                region=self.region,
+                cpus_per_worker=stage.compute.cpus_per_worker,
+                mem_mb_per_worker=stage.compute.memory_mb_per_worker,
+                gpu=stage.compute.gpu,
+            ).to_dict()
+            runtime.pop("num_workers", None)
+            stage_specs.append(
+                {
+                    "stage_index": stage.index,
+                    "runtime": runtime,
+                    "runtime_services": [
+                        service.to_dict()
+                        for service in collect_pipeline_services(stage.pipeline)
+                    ],
+                }
+            )
+        allocation = {
+            "schema_version": 1,
+            "environment": manifest.get("environment"),
+            "dependencies": manifest.get("dependencies"),
+            "stages": stage_specs,
+            "secret_mounts": self._secret_mount_spec(
+                resolved_secret_sources,
+                workspace_secret_versions=workspace_secret_versions,
+            ),
+            "env": resolved_env,
+        }
+        encoded = json.dumps(
+            allocation,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
+    def prepare_debug_sync(
+        self, *, client: MacrodataClient | None = None
+    ) -> PreparedDebugSync:
+        if self.continue_from_job is not None:
+            raise ValueError("cloud debug cannot be combined with continue_from_job")
+        stages, manifest, _, resolved_secret_sources, resolved_env = (
+            self._resolve_submission()
+        )
+        stage = next((item for item in stages if item.index == 0), None)
+        if stage is None:
+            raise ValueError("pipeline has no stage 0")
+        serialized = PreparedPipelinePayload.from_pipeline(stage.pipeline)
+        workspace_secret_versions = self._workspace_secret_versions(
+            client=client,
+            resolved_secret_sources=resolved_secret_sources,
+        )
+        return PreparedDebugSync(
+            pipeline_payload=serialized.payload_bytes,
+            pipeline_sha256=serialized.sha256,
+            allocation_fingerprint=self._debug_allocation_fingerprint(
+                stages=stages,
+                manifest=manifest,
+                resolved_secret_sources=resolved_secret_sources,
+                resolved_env=resolved_env,
+                workspace_secret_versions=workspace_secret_versions,
+            ),
+        )
+
+    def launch(self) -> CloudLaunchResult:
+        from refiner.launchers.cloud_debug_capture import active_cloud_launch_capture
+
+        capture = active_cloud_launch_capture()
+        if capture is not None:
+            return capture.capture(self)
+        return self._launch(debug=False)
+
+    def launch_debug(self) -> CloudLaunchResult:
+        return self._launch(debug=True)
+
+    def _launch(self, *, debug: bool) -> CloudLaunchResult:
+        if debug and self.continue_from_job is not None:
+            raise ValueError("cloud debug cannot be combined with continue_from_job")
+        try:
+            client = MacrodataClient()
+        except MacrodataCredentialsError as err:
+            raise SystemExit(
+                "Launching jobs in the Macrodata cloud requires Macrodata "
+                "authentication. Run `macrodata login` or set MACRODATA_API_KEY."
+            ) from err
+        stages, manifest, plan, resolved_secret_sources, resolved_env = (
+            self._resolve_submission()
+        )
+        if debug:
+            workspace_secret_versions = self._workspace_secret_versions(
+                client=client,
+                resolved_secret_sources=resolved_secret_sources,
+            )
+            manifest = dict(manifest)
+            manifest["debug_allocation_fingerprint"] = (
+                self._debug_allocation_fingerprint(
+                    stages=stages,
+                    manifest=manifest,
+                    resolved_secret_sources=resolved_secret_sources,
+                    resolved_env=resolved_env,
+                    workspace_secret_versions=workspace_secret_versions,
+                )
+            )
         try:
             pipeline_payloads = self._upload_stage_payloads(
                 client=client, stages=stages
@@ -380,6 +592,7 @@ class CloudLauncher(BaseLauncher):
                 env=resolved_env,
                 continue_from_job=self.continue_from_job,
                 unsafe_continue=self.unsafe_continue,
+                debug=debug,
             )
             resp = client.cloud_submit_job(request=request)
         except MacrodataCredentialsError as err:
@@ -406,6 +619,13 @@ class CloudLauncher(BaseLauncher):
             stage_index=resp.stage_index,
         )
         print(f"Cloud job launched. View job:\n  {tracking_url}")
+        if debug:
+            return CloudLaunchResult(
+                job_id=resp.job_id,
+                stage_index=resp.stage_index,
+                status=resp.status,
+                warnings=response_warnings,
+            )
         attach_mode = resolve_launcher_attach_mode(interactive=stdout_is_interactive())
         if attach_mode == "detach":
             emit_cloud_followup_commands(context=context)
@@ -435,4 +655,4 @@ class CloudLauncher(BaseLauncher):
         )
 
 
-__all__ = ["CloudLauncher", "CloudLaunchResult"]
+__all__ = ["CloudLauncher", "CloudLaunchResult", "PreparedDebugSync"]
