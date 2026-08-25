@@ -51,6 +51,15 @@ An interrupted or invalid sync leaves the previous generation runnable. Version
 control data, virtual environments, caches, `node_modules`, and dotenv files are
 excluded.
 
+Sync reuses the script arguments remembered when the session was created. Pass
+new arguments after `--` to replace them, or end the command with `--` to clear
+them and run the script with its default arguments:
+
+```bash
+macrodata debug sync pipeline.py -- --rows 20
+macrodata debug sync pipeline.py --
+```
+
 Dependencies, Python and Refiner versions, CPU, memory, GPU, cloud placement,
 runtime services, secrets, and plain environment variables are fixed when the
 worker is allocated. If any of these settings change, sync asks you to stop and
