@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 import sys
+import tempfile
 from typing import Any
 
 from refiner.platform.client import MacrodataClient
@@ -35,9 +36,22 @@ def _save_profile(payload: dict[str, Any], output: str) -> Path:
         raise RuntimeError("cloud debug profile response did not contain an SVG")
     output_path = Path(output).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = output_path.with_name(f".{output_path.name}.tmp")
-    temporary_path.write_text(profile, encoding="utf-8")
-    temporary_path.replace(output_path)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=output_path.parent,
+            prefix=f".{output_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_file.write(profile)
+            temporary_path = Path(temporary_file.name)
+        temporary_path.replace(output_path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
     return output_path
 
 

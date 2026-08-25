@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from pathlib import Path
 
 from refiner.cli import debug
 
@@ -131,6 +132,26 @@ def test_debug_run_profiles_and_downloads_flamegraph(
         ("profile", {"job_id": "job-1"}),
     ]
     assert f"Profile saved to {output}" in capsys.readouterr().out
+
+
+def test_profile_download_uses_a_unique_temporary_file(monkeypatch, tmp_path) -> None:
+    temporary_paths: list[Path] = []
+    named_temporary_file = debug.tempfile.NamedTemporaryFile
+
+    def record_temporary_file(*args, **kwargs):
+        temporary_file = named_temporary_file(*args, **kwargs)
+        temporary_paths.append(Path(temporary_file.name))
+        return temporary_file
+
+    monkeypatch.setattr(debug.tempfile, "NamedTemporaryFile", record_temporary_file)
+    output = tmp_path / "profile.svg"
+
+    debug._save_profile({"profile": "<svg>first</svg>"}, str(output))
+    debug._save_profile({"profile": "<svg>second</svg>"}, str(output))
+
+    assert output.read_text() == "<svg>second</svg>"
+    assert len(set(temporary_paths)) == 2
+    assert all(not path.exists() for path in temporary_paths)
 
 
 def test_debug_sync_and_doctor(monkeypatch, tmp_path, capsys) -> None:
