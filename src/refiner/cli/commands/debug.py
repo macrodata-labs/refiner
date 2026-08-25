@@ -44,7 +44,7 @@ def register_debug_command(
     )
     execute.add_argument("job_id")
     execute.add_argument("--workdir")
-    execute.add_argument("--timeout", type=int, default=300)
+    execute.add_argument("--timeout", type=int, default=1200)
     execute.add_argument("exec_command", nargs=argparse.REMAINDER)
     execute.set_defaults(handler_module="refiner.cli.debug", handler="cmd_debug_exec")
 

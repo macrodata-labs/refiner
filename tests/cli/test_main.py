@@ -22,6 +22,7 @@ def test_parser_has_debug_commands() -> None:
     assert args.exec_command == ["python", "-V"]
     assert args.debug_command == "exec"
     assert args.job_id == "job-1"
+    assert args.timeout == 1200
 
     sync_args = parser.parse_args(["debug", "sync", "job-1", "project"])
     assert sync_args.debug_command == "sync"

@@ -89,6 +89,9 @@ macrodata debug exec JOB_ID -- python -V
 macrodata debug exec JOB_ID -- bash -lc 'nvidia-smi && pip freeze | head'
 ```
 
+Exec commands time out after 20 minutes by default. Use `--timeout SECONDS` to
+set a different limit for one command.
+
 Close the session when you are done:
 
 ```bash
@@ -102,18 +105,3 @@ If the retained worker exits or is replaced after an infrastructure failure,
 the debug session fails instead of attaching to the replacement container.
 Start a new debug session to continue. Source synced into the old container and
 changes made with `debug exec` are ephemeral and are not recovered.
-
-## Current scope
-
-Debug sessions are intentionally single-worker and start at the first pipeline
-stage. They are for validating correctness, dependencies, resource behavior,
-and performance before a separate normal launch scales out. Concurrent debug
-attempts in one session are rejected.
-
-## Internal Notes
-
-The retained Modal function input requests non-preemptible CPU allocation. A
-container-generation fence rejects any replacement task for the same worker
-rank. A read-only snapshot of registered shards seeds an atomic SQLite ledger
-in the container for each attempt; the canonical cloud worker command receives
-that ledger explicitly.
