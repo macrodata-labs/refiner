@@ -54,9 +54,9 @@ also replace the session's pipeline payload before running again:
 pipeline.sync_cloud_debug("JOB_ID")
 ```
 
-This serializes the selected stage locally and atomically replaces the payload
-used by the next attempt. Pass `stage_index=` when selecting a nonzero planned
-stage.
+This serializes stage 0 locally and atomically replaces the payload used by the
+next attempt. Retained debug sessions currently reject nonzero stages because
+their runtime token, shard snapshot, and upstream boundary belong to stage 0.
 
 Inspect the exact retained environment when imports or dependencies behave
 differently from the submitting machine:
@@ -98,6 +98,11 @@ macrodata debug stop JOB_ID
 Closing uses normal cloud job cancellation. The retained worker and its
 ephemeral files are then removed.
 
+If the retained worker exits or is replaced after an infrastructure failure,
+the debug session fails instead of attaching to the replacement container.
+Start a new debug session to continue. Source synced into the old container and
+changes made with `debug exec` are ephemeral and are not recovered.
+
 ## Current scope
 
 Debug sessions are intentionally single-worker and start at the first pipeline
@@ -107,6 +112,8 @@ attempts in one session are rejected.
 
 ## Internal Notes
 
-The retained Modal function input is non-preemptible. A read-only snapshot of
-registered shards seeds an atomic SQLite ledger in the container for each
-attempt; the canonical cloud worker command receives that ledger explicitly.
+The retained Modal function input requests non-preemptible CPU allocation. A
+container-generation fence rejects any replacement task for the same worker
+rank. A read-only snapshot of registered shards seeds an atomic SQLite ledger
+in the container for each attempt; the canonical cloud worker command receives
+that ledger explicitly.

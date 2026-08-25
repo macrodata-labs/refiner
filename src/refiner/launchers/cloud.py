@@ -448,6 +448,8 @@ class CloudLauncher(BaseLauncher):
         job_id: str,
         stage_index: int = 0,
     ) -> dict[str, object]:
+        if stage_index != 0:
+            raise ValueError("cloud debug sessions currently support stage 0 only")
         stages = self._resolved_stages()
         stage = next((stage for stage in stages if stage.index == stage_index), None)
         if stage is None:

@@ -319,6 +319,13 @@ def test_pipeline_can_replace_retained_debug_payload(monkeypatch) -> None:
     assert result == {"sha256": captured["sha256"]}
 
 
+def test_pipeline_rejects_nonzero_debug_stage_sync() -> None:
+    pipeline = read_jsonl("input.jsonl")
+
+    with pytest.raises(ValueError, match="currently support stage 0 only"):
+        pipeline.sync_cloud_debug("job-123", stage_index=1)
+
+
 def test_pipeline_launch_cloud_preserves_auto_workers_without_listing_shards(
     monkeypatch,
 ) -> None:
