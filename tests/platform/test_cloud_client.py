@@ -163,7 +163,8 @@ def test_cloud_debug_client_uses_retained_session_routes(monkeypatch) -> None:
         workdir="/tmp/refiner-debug",
         timeout_secs=12,
     )
-    client.cloud_debug_run(job_id="job/1", max_shards=1, timeout_secs=30)
+    client.cloud_debug_run(job_id="job/1", max_shards=1, timeout_secs=30, profile=True)
+    client.cloud_debug_profile(job_id="job/1")
     client.cloud_debug_stop(job_id="job/1")
     client.cloud_debug_doctor(job_id="job/1")
 
@@ -171,6 +172,7 @@ def test_cloud_debug_client_uses_retained_session_routes(monkeypatch) -> None:
         "/api/cloud/debug/job%2F1/status",
         "/api/cloud/debug/job%2F1/exec",
         "/api/cloud/debug/job%2F1/run",
+        "/api/cloud/debug/job%2F1/profile",
         "/api/cloud/debug/job%2F1/stop",
         "/api/cloud/debug/job%2F1/doctor",
     ]
@@ -179,10 +181,16 @@ def test_cloud_debug_client_uses_retained_session_routes(monkeypatch) -> None:
         "timeout_secs": 12,
         "workdir": "/tmp/refiner-debug",
     }
-    assert calls[2]["json_payload"] == {"timeout_secs": 30, "max_shards": 1}
+    assert calls[2]["json_payload"] == {
+        "timeout_secs": 30,
+        "max_shards": 1,
+        "profile": True,
+    }
+    assert calls[1]["retry_attempts"] == 1
+    assert calls[2]["retry_attempts"] == 1
 
 
-def test_cloud_debug_sync_streams_archive_bytes() -> None:
+def test_cloud_debug_sync_streams_bundle_bytes() -> None:
     captured: list[tuple[httpx.Request, bytes]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -198,26 +206,18 @@ def test_cloud_debug_sync_streams_archive_bytes() -> None:
 
     result = client.cloud_debug_sync(
         job_id="job-1",
-        archive=b"archive-bytes",
+        bundle=b"bundle-bytes",
         sha256="a" * 64,
-    )
-    pipeline_result = client.cloud_debug_sync_pipeline(
-        job_id="job-1",
-        payload=b"cloudpickle",
-        sha256="b" * 64,
+        allocation_fingerprint="b" * 64,
     )
 
     request, content = captured[0]
     assert request.url.path == "/api/cloud/debug/job-1/sync"
     assert request.url.params["sha256"] == "a" * 64
-    assert request.headers["content-type"] == "application/gzip"
-    assert content == b"archive-bytes"
+    assert request.url.params["allocation_fingerprint"] == "b" * 64
+    assert request.headers["content-type"] == "application/x-tar"
+    assert content == b"bundle-bytes"
     assert result == {"files": 2}
-    pipeline_request, pipeline_content = captured[1]
-    assert pipeline_request.url.path == "/api/cloud/debug/job-1/pipeline"
-    assert pipeline_request.url.params["sha256"] == "b" * 64
-    assert pipeline_content == b"cloudpickle"
-    assert pipeline_result == {"files": 2}
 
 
 def test_cloud_client_cloud_submit_job_requires_job_and_stage_ids(monkeypatch) -> None:

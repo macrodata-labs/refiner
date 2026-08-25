@@ -17,15 +17,12 @@ def test_parser_has_auth_commands() -> None:
 
 def test_parser_has_debug_commands() -> None:
     parser = build_parser()
-    args = parser.parse_args(["debug", "exec", "job-1", "--", "python", "-V"])
+    args = parser.parse_args(["debug", "exec", "pipeline.py", "--", "python", "-V"])
     assert args.command == "debug"
-    assert args.exec_command == ["python", "-V"]
-    assert args.debug_command == "exec"
-    assert args.job_id == "job-1"
+    assert args.debug_args == ["exec", "pipeline.py", "--", "python", "-V"]
 
-    sync_args = parser.parse_args(["debug", "sync", "job-1", "project"])
-    assert sync_args.debug_command == "sync"
-    assert sync_args.path == "project"
+    create_args = parser.parse_args(["debug", "pipeline.py"])
+    assert create_args.debug_args == ["pipeline.py"]
 
 
 def test_parser_has_run_command() -> None:

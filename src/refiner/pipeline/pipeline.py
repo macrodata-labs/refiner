@@ -805,7 +805,6 @@ class RefinerPipeline:
         env: Mapping[str, object | None] | None = None,
         continue_from_job: str | None = None,
         unsafe_continue: bool = False,
-        debug: bool = False,
     ) -> "CloudLaunchResult":
         """Launch the pipeline on Macrodata Cloud.
 
@@ -840,8 +839,6 @@ class RefinerPipeline:
                 job id, one prior job id plus `:stage_index`, or `"infer"`.
             unsafe_continue: Allow continue when the reused stage boundary is not
                 fully compatible with the current pipeline.
-            debug: Retain one non-preemptible cloud worker for repeated debug
-                runs instead of scaling the job out.
         """
         from refiner.launchers.cloud import CloudLauncher
 
@@ -861,33 +858,8 @@ class RefinerPipeline:
             env=dict(env) if env is not None else None,
             continue_from_job=continue_from_job,
             unsafe_continue=unsafe_continue,
-            debug=debug,
         )
         return launcher.launch()
-
-    def sync_cloud_debug(
-        self,
-        job_id: str,
-        *,
-        stage_index: int = 0,
-    ) -> dict[str, object]:
-        """Replace the pipeline payload used by a retained cloud debug session.
-
-        Source synchronization updates imported modules; call this method as
-        well when the pipeline graph, reader, writer, or captured callable has
-        changed.
-        """
-        from refiner.launchers.cloud import CloudLauncher
-
-        launcher = CloudLauncher(
-            pipeline=self,
-            name="debug-sync",
-            debug=True,
-        )
-        return launcher.sync_debug_pipeline(
-            job_id=job_id,
-            stage_index=stage_index,
-        )
 
     def write_lerobot(
         self,

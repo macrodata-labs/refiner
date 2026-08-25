@@ -41,6 +41,27 @@ def _prepared_payload(payload_bytes: bytes) -> PreparedPipelinePayload:
     )
 
 
+class _SecretMetadataClient:
+    def __init__(self, versions: dict[str, str], *, env: str = "production"):
+        self.versions = versions
+        self.env = env
+
+    def cli_list_secrets(self, *, env: str | None = None) -> dict[str, object]:
+        assert env == self.env
+        return {
+            "secrets": [
+                {
+                    "id": f"secret-{index}",
+                    "name": name,
+                    "version": version,
+                }
+                for index, (name, version) in enumerate(
+                    sorted(self.versions.items()), start=1
+                )
+            ]
+        }
+
+
 def _cloud_file_upload_instruction(
     file: CloudFileUploadRequestItem,
     *,
@@ -78,6 +99,7 @@ def _stub_cloud_submit(
     fail_on_upload_urls: bool = False,
     fail_on_upload: bool = False,
     fail_on_complete: bool = False,
+    workspace_secrets: list[dict[str, str]] | None = None,
 ) -> dict[str, object]:
     captured: dict[str, object] = {
         "events": [],
@@ -159,6 +181,10 @@ def _stub_cloud_submit(
                 warnings: list[str] = []
 
             return _Resp()
+
+        def cli_list_secrets(self, *, env: str | None = None) -> dict[str, object]:
+            cast(list[str], captured["events"]).append(f"list-secrets:{env}")
+            return {"secrets": workspace_secrets or []}
 
     monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", FakeMacrodataClient)
     monkeypatch.setattr(
@@ -260,9 +286,11 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert captured["events"] == ["upload-urls", "upload", "complete", "submit"]
 
 
-def test_pipeline_launch_cloud_debug_submits_and_does_not_attach(
+def test_captured_pipeline_launch_submits_debug_and_does_not_attach(
     monkeypatch, capsys
 ) -> None:
+    from refiner.launchers.cloud_debug_capture import capture_cloud_launches
+
     captured = _stub_cloud_submit(monkeypatch)
     monkeypatch.setattr("refiner.launchers.cloud.stdout_is_interactive", lambda: True)
     monkeypatch.setattr(
@@ -270,53 +298,154 @@ def test_pipeline_launch_cloud_debug_submits_and_does_not_attach(
         lambda **_: pytest.fail("debug launch must not attach to normal job logs"),
     )
 
-    result = read_jsonl("input.jsonl").launch_cloud(
-        name="debug cloud",
-        num_workers=16,
-        debug=True,
-    )
+    with capture_cloud_launches() as capture:
+        placeholder = read_jsonl("input.jsonl").launch_cloud(
+            name="debug cloud",
+            num_workers=16,
+        )
+    assert placeholder.status == "captured"
+    result = capture.single().launch_debug()
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.debug is True
     assert request.stage_payloads[0].runtime.num_workers == 16
     assert result.job_id == "job-123"
-    output = capsys.readouterr().out
-    assert "macrodata debug status job-123" in output
-    assert "macrodata debug run job-123" in output
-    assert "macrodata debug stop job-123" in output
+    assert "Cloud job launched" in capsys.readouterr().out
 
 
-def test_pipeline_launch_cloud_debug_rejects_continue() -> None:
+def test_debug_launch_rejects_continue() -> None:
+    launcher = CloudLauncher(
+        pipeline=read_jsonl("input.jsonl"),
+        name="debug cloud",
+        continue_from_job="00000000-0000-1000-8000-000000000123",
+    )
+
     with pytest.raises(ValueError, match="debug cannot be combined"):
-        CloudLauncher(
-            pipeline=read_jsonl("input.jsonl"),
-            name="debug cloud",
-            debug=True,
-            continue_from_job="00000000-0000-1000-8000-000000000123",
-        )
+        launcher.launch_debug()
 
 
-def test_pipeline_can_replace_retained_debug_payload(monkeypatch) -> None:
-    captured: dict[str, object] = {}
-
-    class FakeMacrodataClient:
-        def cloud_debug_sync_pipeline(self, **kwargs):
-            captured.update(kwargs)
-            return {"sha256": kwargs["sha256"]}
-
-    monkeypatch.setattr("refiner.launchers.cloud.MacrodataClient", FakeMacrodataClient)
+def test_launcher_prepares_debug_sync_payload(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote", lambda _ref: True
+    )
     monkeypatch.setattr(
         "refiner.launchers.cloud.PreparedPipelinePayload.from_pipeline",
         lambda _pipeline: _prepared_payload(b"updated-pipeline"),
     )
-    pipeline = read_jsonl("input.jsonl")
+    launcher = CloudLauncher(pipeline=read_jsonl("input.jsonl"), name="debug")
 
-    result = pipeline.sync_cloud_debug("job-123")
+    prepared = launcher.prepare_debug_sync()
 
-    assert captured["job_id"] == "job-123"
-    assert captured["payload"] == b"updated-pipeline"
-    assert captured["sha256"] == _prepared_payload(b"updated-pipeline").sha256
-    assert result == {"sha256": captured["sha256"]}
+    assert prepared.pipeline_payload == b"updated-pipeline"
+    assert prepared.pipeline_sha256 == _prepared_payload(b"updated-pipeline").sha256
+    assert len(prepared.allocation_fingerprint) == 64
+
+
+def test_debug_allocation_fingerprint_changes_with_resolved_secret(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote", lambda _ref: True
+    )
+    monkeypatch.setenv("API_KEY", "first-secret")
+    first = CloudLauncher(
+        pipeline=read_jsonl("input.jsonl"),
+        name="debug",
+        secrets={"API_KEY": None},
+    ).prepare_debug_sync()
+
+    monkeypatch.setenv("API_KEY", "rotated-secret")
+    second = CloudLauncher(
+        pipeline=read_jsonl("input.jsonl"),
+        name="debug",
+        secrets={"API_KEY": None},
+    ).prepare_debug_sync()
+
+    assert first.allocation_fingerprint != second.allocation_fingerprint
+
+
+def test_debug_allocation_fingerprint_changes_with_workspace_secret_rotation(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote", lambda _ref: True
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.PreparedPipelinePayload.from_pipeline",
+        lambda _pipeline: _prepared_payload(b"pipeline"),
+    )
+
+    client = _SecretMetadataClient({"API_KEY": "a" * 64})
+    launcher = CloudLauncher(
+        pipeline=read_jsonl("input.jsonl"),
+        name="debug",
+        secrets=Secrets.env(name="production", keys=["API_KEY"]),
+    )
+    first = launcher.prepare_debug_sync(client=cast(MacrodataClient, client))
+    client.versions["API_KEY"] = "b" * 64
+    second = launcher.prepare_debug_sync(client=cast(MacrodataClient, client))
+
+    assert first.allocation_fingerprint != second.allocation_fingerprint
+
+
+def test_debug_allocation_fingerprint_ignores_unselected_workspace_secret(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote", lambda _ref: True
+    )
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.PreparedPipelinePayload.from_pipeline",
+        lambda _pipeline: _prepared_payload(b"pipeline"),
+    )
+
+    client = _SecretMetadataClient({"API_KEY": "a" * 64, "UNRELATED": "b" * 64})
+    launcher = CloudLauncher(
+        pipeline=read_jsonl("input.jsonl"),
+        name="debug",
+        secrets=Secrets.env(name="production", keys=["API_KEY"]),
+    )
+    first = launcher.prepare_debug_sync(client=cast(MacrodataClient, client))
+    client.versions["UNRELATED"] = "c" * 64
+    second = launcher.prepare_debug_sync(client=cast(MacrodataClient, client))
+
+    assert first.allocation_fingerprint == second.allocation_fingerprint
+
+
+def test_debug_launch_fingerprint_changes_with_workspace_secret_version(
+    monkeypatch,
+) -> None:
+    workspace_secrets = [
+        {
+            "id": "00000000-0000-7000-8000-000000000001",
+            "name": "API_KEY",
+            "version": "a" * 64,
+        }
+    ]
+    captured = _stub_cloud_submit(
+        monkeypatch,
+        workspace_secrets=workspace_secrets,
+    )
+    launcher = CloudLauncher(
+        pipeline=read_jsonl("input.jsonl"),
+        name="debug",
+        secrets=Secrets.env(name="production", keys=["API_KEY"]),
+    )
+
+    launcher.launch_debug()
+    first_request = cast(CloudRunCreateRequest, captured["submit_request"])
+    first_fingerprint = cast(dict[str, object], first_request.manifest)[
+        "debug_allocation_fingerprint"
+    ]
+    workspace_secrets[0]["version"] = "b" * 64
+    launcher.launch_debug()
+    second_request = cast(CloudRunCreateRequest, captured["submit_request"])
+    second_fingerprint = cast(dict[str, object], second_request.manifest)[
+        "debug_allocation_fingerprint"
+    ]
+
+    assert first_fingerprint != second_fingerprint
+    assert cast(list[str], captured["events"]).count("list-secrets:production") == 2
 
 
 def test_pipeline_launch_cloud_preserves_auto_workers_without_listing_shards(
