@@ -51,13 +51,22 @@ An interrupted or invalid sync leaves the previous generation runnable. Version
 control data, virtual environments, caches, `node_modules`, and dotenv files are
 excluded.
 
-Sync reuses the script arguments remembered when the session was created. Pass
-new arguments after `--` to replace them, or end the command with `--` to clear
-them and run the script with its default arguments:
+When local session state is available, sync reuses the script arguments
+remembered when the session was created. Pass new arguments after `--` to
+replace them, or end the command with `--` to clear them and run the script with
+its default arguments:
 
 ```bash
 macrodata debug sync pipeline.py -- --rows 20
 macrodata debug sync pipeline.py --
+```
+
+If local session state is unavailable and you select the session with `--job`,
+repeat any required script arguments after `--`. Without them, the script runs
+with its default arguments:
+
+```bash
+macrodata debug sync pipeline.py --job JOB_ID -- --rows 20
 ```
 
 Dependencies, Python and Refiner versions, CPU, memory, GPU, cloud placement,
