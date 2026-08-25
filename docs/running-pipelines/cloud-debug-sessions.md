@@ -54,7 +54,8 @@ excluded.
 When local session state is available, sync reuses the script arguments
 remembered when the session was created. Pass new arguments after `--` to
 replace them, or end the command with `--` to clear them and run the script with
-its default arguments:
+its default arguments for that sync. These overrides do not change the
+remembered creation arguments, so a later bare sync reuses the original values:
 
 ```bash
 macrodata debug sync pipeline.py -- --rows 20
