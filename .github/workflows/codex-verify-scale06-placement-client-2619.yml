@@ -1,0 +1,102 @@
+name: Codex Verify Scale 06 Placement Client 2619
+
+on:
+  push:
+    branches:
+      - codex/scale-06-placement-client-2619-verifier
+  workflow_dispatch:
+
+concurrency:
+  group: codex-scale06-placement-client-2619
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-publish:
+    name: Verify and publish placement client candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SCALE06_REFINER_BASE: 2619b75c2cf1059e0a3bd7172c5610252d3d091b
+      SCALE06_REFINER_CANDIDATE: codex/scale-06-placement-client-2619-candidate
+    steps:
+      - name: Checkout verifier transport
+        uses: actions/checkout@v4
+        with:
+          ref: codex/scale-06-placement-client-2619-verifier
+          fetch-depth: 0
+
+      - name: Reconstruct clean placement client tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .codex/apply-scale06-placement-client.py /tmp/apply-scale06-placement-client.py
+          test "$(git hash-object /tmp/apply-scale06-placement-client.py)" = "05567d653d1c52cbda55b9c949d164e0a5fd2c2e"
+          python3 -m py_compile /tmp/apply-scale06-placement-client.py
+          git reset --hard "$SCALE06_REFINER_BASE"
+          python3 /tmp/apply-scale06-placement-client.py
+          git diff --check
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Format implementation
+        run: uv run ruff format --force-exclude .
+
+      - name: Ruff lint
+        run: uv run ruff check --force-exclude .
+
+      - name: Ruff format check
+        run: uv run ruff format --force-exclude --check .
+
+      - name: Type check
+        run: uv run ty check
+
+      - name: Full test suite
+        env:
+          PYTHONPATH: src
+        run: uv run pytest
+
+      - name: Verify exact product scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          actual="$(git diff --cached --name-only | sort -u)"
+          expected="$(printf '%s\n' \
+            docs/running-pipelines/cloud-launcher.md \
+            src/refiner/launchers/cloud.py \
+            src/refiner/pipeline/pipeline.py \
+            src/refiner/platform/client/__init__.py \
+            src/refiner/platform/client/models.py \
+            tests/launchers/test_cloud_launcher.py \
+            tests/platform/test_cloud_client.py | sort)"
+          diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$actual")
+          git diff --cached --check
+          test -z "$(find . -path './.git' -prune -o -path './.codex' -print -quit)"
+          test -z "$(find .github/workflows -maxdepth 1 -type f -name 'codex-verify-scale06-placement-client-2619.yml' -print -quit)"
+          test "$(git rev-parse HEAD)" = "$SCALE06_REFINER_BASE"
+
+      - name: Publish clean candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Codex"
+          git config user.email "codex@openai.com"
+          git commit \
+            -m "feat(cloud): expose strict placement controls" \
+            -m "Forward cloud, region, and fail-closed placement mode from the pipeline launcher while preserving positional runtime resource arguments." \
+            -m "Co-Authored-By: Codex <codex@openai.com>"
+          git push --force origin HEAD:"$SCALE06_REFINER_CANDIDATE"
