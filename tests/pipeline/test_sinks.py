@@ -29,6 +29,7 @@ from refiner.pipeline.sinks.lance import (
     LanceDatasetCommitReducerSink,
     LanceDatasetSink,
     _StreamingAddColumnsWriter,
+    _cast_to_planned_schema,
     _job_token,
     _schema_to_base64,
 )
@@ -80,6 +81,23 @@ def test_iter_rows_ignores_sink(tmp_path) -> None:
     out = list(pipeline.iter_rows())
     assert [int(row["x"]) for row in out] == [1, 2]
     assert list(tmp_path.iterdir()) == []
+
+
+def test_lance_writer_normalizes_worker_schema_metadata() -> None:
+    planned = pa.schema(
+        [pa.field("x", pa.int64(), metadata={b"unit": b"planned"})],
+        metadata={b"schema": b"planned"},
+    )
+    worker_local = pa.schema(
+        [pa.field("x", pa.int64(), metadata={b"unit": b"worker"})],
+        metadata={b"schema": b"worker"},
+    )
+    table = pa.Table.from_arrays([pa.array([1, 2])], schema=worker_local)
+
+    normalized = _cast_to_planned_schema(table, planned)
+
+    assert normalized.schema.equals(planned, check_metadata=True)
+    assert normalized.to_pydict() == {"x": [1, 2]}
 
 
 def test_launch_local_writes_jsonl_per_shard(tmp_path) -> None:
