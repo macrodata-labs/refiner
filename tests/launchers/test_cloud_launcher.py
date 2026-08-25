@@ -312,6 +312,26 @@ def test_launcher_prepares_debug_sync_payload(monkeypatch) -> None:
     assert len(prepared.allocation_fingerprint) == 64
 
 
+def test_debug_allocation_fingerprint_changes_with_resolved_secret(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("API_KEY", "first-secret")
+    first = CloudLauncher(
+        pipeline=read_jsonl("input.jsonl"),
+        name="debug",
+        secrets={"API_KEY": None},
+    ).prepare_debug_sync()
+
+    monkeypatch.setenv("API_KEY", "rotated-secret")
+    second = CloudLauncher(
+        pipeline=read_jsonl("input.jsonl"),
+        name="debug",
+        secrets={"API_KEY": None},
+    ).prepare_debug_sync()
+
+    assert first.allocation_fingerprint != second.allocation_fingerprint
+
+
 def test_pipeline_launch_cloud_preserves_auto_workers_without_listing_shards(
     monkeypatch,
 ) -> None:

@@ -353,23 +353,28 @@ class CloudLauncher(BaseLauncher):
         plan = self._compiled_plan(stages, secret_values=secret_values)
         return stages, manifest, plan, resolved_secret_sources, resolved_env
 
-    def _secret_mount_spec(self) -> list[dict[str, object]]:
+    def _secret_mount_spec(
+        self, resolved_secret_sources: list[dict[str, Any]] | None
+    ) -> list[dict[str, object]]:
         specs: list[dict[str, object]] = []
-        for source in self.secrets:
-            if source._kind == "dict":
+        for source in resolved_secret_sources or []:
+            if source.get("__type__") != "__envkeys__":
                 specs.append(
                     {
                         "kind": "dict",
-                        "keys": sorted((source._values or {}).keys()),
+                        "value_digests": {
+                            key: hashlib.sha256(str(value).encode()).hexdigest()
+                            for key, value in sorted(source.items())
+                        },
                     }
                 )
             else:
                 specs.append(
                     {
                         "kind": "env",
-                        "name": source._env_name,
-                        "keys": sorted(source._keys)
-                        if source._keys is not None
+                        "name": source.get("envname"),
+                        "keys": sorted(source["keys"])
+                        if isinstance(source.get("keys"), list)
                         else None,
                     }
                 )
@@ -380,6 +385,7 @@ class CloudLauncher(BaseLauncher):
         *,
         stages: list[PlannedStage],
         manifest: dict[str, object],
+        resolved_secret_sources: list[dict[str, Any]] | None,
         resolved_env: dict[str, str] | None,
     ) -> str:
         stage_specs: list[dict[str, object]] = []
@@ -408,7 +414,7 @@ class CloudLauncher(BaseLauncher):
             "environment": manifest.get("environment"),
             "dependencies": manifest.get("dependencies"),
             "stages": stage_specs,
-            "secret_mounts": self._secret_mount_spec(),
+            "secret_mounts": self._secret_mount_spec(resolved_secret_sources),
             "env": resolved_env,
         }
         encoded = json.dumps(
@@ -422,7 +428,9 @@ class CloudLauncher(BaseLauncher):
     def prepare_debug_sync(self) -> PreparedDebugSync:
         if self.continue_from_job is not None:
             raise ValueError("cloud debug cannot be combined with continue_from_job")
-        stages, manifest, _, _, resolved_env = self._resolve_submission()
+        stages, manifest, _, resolved_secret_sources, resolved_env = (
+            self._resolve_submission()
+        )
         stage = next((item for item in stages if item.index == 0), None)
         if stage is None:
             raise ValueError("pipeline has no stage 0")
@@ -433,6 +441,7 @@ class CloudLauncher(BaseLauncher):
             allocation_fingerprint=self._debug_allocation_fingerprint(
                 stages=stages,
                 manifest=manifest,
+                resolved_secret_sources=resolved_secret_sources,
                 resolved_env=resolved_env,
             ),
         )
@@ -467,6 +476,7 @@ class CloudLauncher(BaseLauncher):
                 self._debug_allocation_fingerprint(
                     stages=stages,
                     manifest=manifest,
+                    resolved_secret_sources=resolved_secret_sources,
                     resolved_env=resolved_env,
                 )
             )

@@ -14,6 +14,7 @@ from refiner.cli.debug_sessions import (
     new_session_record,
     remove_session,
     save_session,
+    session_creation_lock,
 )
 from refiner.cli.debug_sync import (
     build_debug_sync_bundle,
@@ -254,28 +255,29 @@ def _wait_until_ready(
 def _cmd_create(args: argparse.Namespace) -> int:
     client = MacrodataClient()
     script = Path(args.pipeline).expanduser().resolve()
-    existing = find_session(script=script, client=client)
-    if existing is not None:
-        status = client.cloud_debug_status(job_id=existing.job_id).get("status")
-        if status not in {"failed", "stopped"}:
-            raise SystemExit(
-                f"A debug session already exists for {script}: {existing.job_id}. "
-                f"Use `macrodata debug sync {args.pipeline}` or stop it first."
-            )
-        remove_session(script=script, client=client)
-    script_args = _normalized_script_args(list(args.script_args))
-    launcher = _capture_launcher(str(script), script_args)
-    project_root = find_project_root(script)
-    with pickle_project_modules_by_value(project_root):
-        result = launcher.launch_debug()
-    record = new_session_record(
-        script=script,
-        project_root=project_root,
-        script_args=script_args,
-        job_id=result.job_id,
-        client=client,
-    )
-    save_session(record)
+    with session_creation_lock(script=script, client=client):
+        existing = find_session(script=script, client=client)
+        if existing is not None:
+            status = client.cloud_debug_status(job_id=existing.job_id).get("status")
+            if status not in {"failed", "stopped"}:
+                raise SystemExit(
+                    f"A debug session already exists for {script}: {existing.job_id}. "
+                    f"Use `macrodata debug sync {args.pipeline}` or stop it first."
+                )
+            remove_session(script=script, client=client)
+        script_args = _normalized_script_args(list(args.script_args))
+        launcher = _capture_launcher(str(script), script_args)
+        project_root = find_project_root(script)
+        with pickle_project_modules_by_value(project_root):
+            result = launcher.launch_debug()
+        record = new_session_record(
+            script=script,
+            project_root=project_root,
+            script_args=script_args,
+            job_id=result.job_id,
+            client=client,
+        )
+        save_session(record)
     print(f"Debug session {result.job_id} remembered for {script}")
     _wait_until_ready(
         client=client,

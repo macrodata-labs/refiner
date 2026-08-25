@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -35,6 +36,25 @@ def _scope(client: MacrodataClient) -> tuple[str, str]:
     else:
         workspace = identity.key_id or identity.name
     return client.base_url.rstrip("/"), workspace
+
+
+@contextmanager
+def session_creation_lock(
+    *, script: str | Path, client: MacrodataClient
+) -> Iterator[None]:
+    script_path = str(Path(script).expanduser().resolve())
+    base_url, workspace = _scope(client)
+    lock_key = hashlib.sha256(
+        json.dumps([script_path, base_url, workspace], separators=(",", ":")).encode()
+    ).hexdigest()
+    lock_directory = debug_sessions_path().parent / "debug_session_locks"
+    lock_directory.mkdir(parents=True, exist_ok=True)
+    os.chmod(lock_directory, 0o700)
+    lock_path = lock_directory / f"{lock_key}.lock"
+    with lock_path.open("a+", encoding="utf-8") as lock:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        yield
 
 
 @contextmanager
@@ -156,4 +176,5 @@ __all__ = [
     "new_session_record",
     "remove_session",
     "save_session",
+    "session_creation_lock",
 ]

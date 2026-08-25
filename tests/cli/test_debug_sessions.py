@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from threading import Event, Thread
 from types import SimpleNamespace
 
 from refiner.cli.debug_sessions import (
@@ -7,6 +8,7 @@ from refiner.cli.debug_sessions import (
     new_session_record,
     remove_session,
     save_session,
+    session_creation_lock,
 )
 
 
@@ -45,3 +47,28 @@ def test_session_registry_is_scoped_by_pipeline_endpoint_and_workspace(
     assert find_session(script=script, client=_Client("workspace-b")) is None  # type: ignore[arg-type]
     remove_session(script=script, client=client)  # type: ignore[arg-type]
     assert find_session(script=script, client=client) is None  # type: ignore[arg-type]
+
+
+def test_session_creation_lock_serializes_same_pipeline(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    script = tmp_path / "project" / "pipeline.py"
+    script.parent.mkdir()
+    script.write_text("pass\n")
+    client = _Client("workspace-a")
+    waiting = Event()
+    acquired = Event()
+
+    def acquire_again() -> None:
+        waiting.set()
+        with session_creation_lock(script=script, client=client):  # type: ignore[arg-type]
+            acquired.set()
+
+    with session_creation_lock(script=script, client=client):  # type: ignore[arg-type]
+        contender = Thread(target=acquire_again)
+        contender.start()
+        assert waiting.wait(timeout=1)
+        assert not acquired.wait(timeout=0.05)
+
+    contender.join(timeout=1)
+    assert not contender.is_alive()
+    assert acquired.is_set()
