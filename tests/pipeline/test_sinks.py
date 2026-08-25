@@ -1563,6 +1563,100 @@ def test_parquet_sink_packs_embedded_assets_into_blob_files(tmp_path) -> None:
     assert datatype.asset_storage(out.schema.field("image")) == "blob_reference"
 
 
+def test_blob_writer_coalesces_complete_source_blob_references(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "source.blob"
+    source.write_bytes(b"abcdef")
+    output = DataFolder.resolve(tmp_path / "coalesced-assets")
+    field = datatype.blob_reference("video").with_name("video")
+    table = pa.Table.from_arrays(
+        [
+            pa.array(
+                [
+                    {"path": str(source), "offset": 0, "size": 3},
+                    {"path": str(source), "offset": 3, "size": 3},
+                ],
+                type=field.type,
+            )
+        ],
+        schema=pa.schema([field]),
+    )
+    manager = BlobAssetManager(
+        output,
+        config=BlobAssetConfig(target_bytes=1024),
+        filename_template="{shard_id}.parquet",
+    )
+    manager.set_input_schema(table.schema)
+
+    def unexpected_range_copy(*_args, **_kwargs):
+        raise AssertionError("complete source blob should not use per-range copies")
+
+    monkeypatch.setattr(manager, "_append", unexpected_range_copy)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        rewritten = manager.rewrite_table("0123456789ab", table)
+        manager.close()
+
+    references = rewritten.column("video").to_pylist()
+    assert [read_blob(reference) for reference in references] == [b"abc", b"def"]
+    assert references[0]["path"] == references[1]["path"]
+    assert references[0]["offset"] == 0
+    assert references[1]["offset"] == 3
+
+
+def test_blob_writer_keeps_partial_source_blob_on_range_copy_path(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "source.blob"
+    source.write_bytes(b"abcdef")
+    output = DataFolder.resolve(tmp_path / "partial-assets")
+    field = datatype.blob_reference("video").with_name("video")
+    table = pa.Table.from_arrays(
+        [
+            pa.array(
+                [
+                    {"path": str(source), "offset": 0, "size": 3},
+                    {"path": str(source), "offset": 3, "size": 2},
+                ],
+                type=field.type,
+            )
+        ],
+        schema=pa.schema([field]),
+    )
+    manager = BlobAssetManager(
+        output,
+        config=BlobAssetConfig(target_bytes=1024),
+        filename_template="{shard_id}.parquet",
+    )
+    manager.set_input_schema(table.schema)
+    calls = 0
+    original_append = manager._append
+
+    def count_range_copy(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_append(*args, **kwargs)
+
+    monkeypatch.setattr(manager, "_append", count_range_copy)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        rewritten = manager.rewrite_table("0123456789ab", table)
+        manager.close()
+
+    assert calls == 2
+    assert [read_blob(reference) for reference in rewritten.column("video").to_pylist()] == [
+        b"abc",
+        b"de",
+    ]
+
+
 def test_file_asset_copy_removes_partial_output_when_source_disappears(
     tmp_path, monkeypatch
 ) -> None:
