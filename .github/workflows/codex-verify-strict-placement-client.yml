@@ -1,0 +1,98 @@
+name: Codex Verify Strict Placement Client
+
+on:
+  push:
+    branches:
+      - codex/strict-placement-client-verifier
+  workflow_dispatch:
+
+concurrency:
+  group: codex-strict-placement-client
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout verifier transport
+        uses: actions/checkout@v4
+        with:
+          ref: codex/strict-placement-client-verifier
+          fetch-depth: 0
+
+      - name: Apply strict placement client contract
+        shell: bash
+        run: |
+          cp .codex/apply-strict-placement-client.py /tmp/apply-strict-placement-client.py
+          git reset --hard 4e3b30ff05128a2a524d468a88012e61b420b5ea
+          python3 /tmp/apply-strict-placement-client.py
+          git diff --check
+          cat > /tmp/expected-files <<'EOF'
+          docs/running-pipelines/cloud-launcher.md
+          src/refiner/launchers/cloud.py
+          src/refiner/pipeline/pipeline.py
+          src/refiner/platform/client/__init__.py
+          src/refiner/platform/client/models.py
+          tests/launchers/test_cloud_launcher.py
+          tests/platform/test_cloud_client.py
+          EOF
+          sed -i 's/^          //' /tmp/expected-files
+          sort -o /tmp/expected-files /tmp/expected-files
+          git diff --name-only | sort > /tmp/actual-files
+          diff -u /tmp/expected-files /tmp/actual-files
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Format changed files
+        run: |
+          uv run ruff format \
+            src/refiner/launchers/cloud.py \
+            src/refiner/pipeline/pipeline.py \
+            src/refiner/platform/client/__init__.py \
+            src/refiner/platform/client/models.py \
+            tests/launchers/test_cloud_launcher.py \
+            tests/platform/test_cloud_client.py
+
+      - name: Verify repository
+        env:
+          PYTHONPATH: src
+        run: |
+          uv run ruff check --force-exclude .
+          uv run ruff format --force-exclude --check .
+          uv run ty check
+          uv run pytest
+
+      - name: Verify product scope and hygiene
+        shell: bash
+        run: |
+          git diff --check
+          git diff --name-only | sort > /tmp/actual-files
+          diff -u /tmp/expected-files /tmp/actual-files
+          test -z "$(find . -name '*.rej' -o -name '*.orig')"
+
+      - name: Publish clean client branch
+        shell: bash
+        run: |
+          git config user.name "Codex"
+          git config user.email "codex@openai.com"
+          git add -A
+          git commit \
+            -m "feat(cloud): expose strict placement mode" \
+            -m "Carry best-effort versus strict placement through the public launcher and serialized cloud runtime contract, with validation, tests, and user documentation." \
+            -m "Co-Authored-By: Codex <codex@openai.com>"
+          git push origin HEAD:codex/strict-placement-client
