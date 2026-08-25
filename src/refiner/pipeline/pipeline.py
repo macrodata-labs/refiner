@@ -704,6 +704,7 @@ class RefinerPipeline:
         self,
         *,
         name: str,
+        provider: str = "modal",
         num_workers: int = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
@@ -720,6 +721,8 @@ class RefinerPipeline:
 
         Args:
             name: Human-readable run name.
+            provider: Cloud compute provider. Supported values are ``"modal"`` and
+                ``"aws"``.
             num_workers: Requested logical worker count.
             cpus_per_worker: Optional requested CPU cores per worker.
             mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
@@ -749,6 +752,7 @@ class RefinerPipeline:
         launcher = CloudLauncher(
             pipeline=self,
             name=name,
+            provider=provider,
             num_workers=num_workers,
             cpus_per_worker=cpus_per_worker,
             mem_mb_per_worker=mem_mb_per_worker,

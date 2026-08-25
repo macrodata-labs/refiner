@@ -24,6 +24,25 @@ pipeline.launch_cloud(
 )
 ```
 
+## Compute provider
+
+Modal remains the default. For a CPU-only run on AWS Batch, pass `provider="aws"`:
+
+```python
+pipeline.launch_cloud(
+    name="aws-normalization",
+    provider="aws",
+    num_workers=8,
+    cpus_per_worker=2,
+    mem_mb_per_worker=4096,
+)
+```
+
+AWS Batch supports pip dependencies, secrets, environment variables, multiple
+workers, continuation, and multi-stage pipelines. It does not currently support
+GPUs, managed runtime services, apt packages, custom images, or arbitrary file
+and directory attachments.
+
 ## What gets submitted
 
 A cloud submission includes:

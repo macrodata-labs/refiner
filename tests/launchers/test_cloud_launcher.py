@@ -258,6 +258,35 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert captured["events"] == ["upload-urls", "upload", "complete", "submit"]
 
 
+def test_pipeline_launch_cloud_selects_aws_batch(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="aws cpu job",
+        provider="aws",
+        num_workers=3,
+        cpus_per_worker=2,
+        mem_mb_per_worker=4096,
+    )
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.provider == "aws_batch"
+    assert request.stage_payloads[0].runtime.gpu is None
+
+
+def test_pipeline_launch_cloud_rejects_gpu_for_aws() -> None:
+    with pytest.raises(ValueError, match="does not support GPU"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="invalid aws gpu job",
+            provider="aws",
+            gpu=GPU(count=1, type="h100", cuda_version="12.8"),
+        )
+
+
 def test_pipeline_launch_cloud_embeds_runtime_services(monkeypatch) -> None:
     captured = _stub_cloud_submit(monkeypatch)
     monkeypatch.setattr(

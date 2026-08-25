@@ -285,6 +285,7 @@ class CloudRunCreateRequest:
     name: str
     plan: dict[str, Any]
     stage_payloads: list[StagePayload]
+    provider: str = "modal"
     manifest: dict[str, Any] | None = None
     secrets: list[dict[str, Any]] | None = None
     env: dict[str, str] | None = None
@@ -294,6 +295,7 @@ class CloudRunCreateRequest:
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "name": self.name,
+            "provider": self.provider,
             "executor": {},
             "plan": self.plan,
             "stage_payloads": [payload.to_dict() for payload in self.stage_payloads],

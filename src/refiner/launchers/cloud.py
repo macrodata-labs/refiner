@@ -44,6 +44,7 @@ if TYPE_CHECKING:
 
 _FALLBACK_ENV_VAR = "MACRODATA_FALLBACK_TO_LATEST_PYPI"
 _CLOUD_FILE_BATCH_SIZE = 100
+_CLOUD_PROVIDER_KEYS = {"modal": "modal", "aws": "aws_batch"}
 _UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
@@ -97,6 +98,8 @@ class CloudLauncher(BaseLauncher):
     Args:
         pipeline: Pipeline to execute.
         name: Human-readable run name.
+        provider: Cloud compute provider. Supported values are ``"modal"`` and
+            ``"aws"``.
         num_workers: Requested logical worker count for cloud execution.
         cpus_per_worker: Optional requested CPU cores per worker.
         mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
@@ -117,6 +120,7 @@ class CloudLauncher(BaseLauncher):
         *,
         pipeline: "RefinerPipeline",
         name: str,
+        provider: str = "modal",
         num_workers: int = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
@@ -141,6 +145,12 @@ class CloudLauncher(BaseLauncher):
             raise ValueError("unsafe_continue requires continue_from_job")
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
+        normalized_provider = provider.strip().lower()
+        if normalized_provider not in _CLOUD_PROVIDER_KEYS:
+            raise ValueError("provider must be 'modal' or 'aws'")
+        if normalized_provider == "aws" and gpu is not None:
+            raise ValueError("provider='aws' does not support GPU workers")
+        self.provider = normalized_provider
         self.cpus_per_worker = cpus_per_worker
         self.mem_mb_per_worker = mem_mb_per_worker
         self.sync_local_dependencies = sync_local_dependencies
@@ -304,6 +314,7 @@ class CloudLauncher(BaseLauncher):
             request = CloudRunCreateRequest(
                 name=self.name,
                 plan=plan,
+                provider=_CLOUD_PROVIDER_KEYS[self.provider],
                 stage_payloads=[
                     StagePayload(
                         stage_index=stage.index,
