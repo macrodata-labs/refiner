@@ -4,6 +4,8 @@ from argparse import Namespace
 import json
 from pathlib import Path
 
+import pytest
+
 from refiner.cli import debug
 
 
@@ -163,6 +165,23 @@ def test_file_driven_parser_supports_create_sync_and_exec() -> None:
     assert execute.timeout == 10
 
 
+def test_debug_create_rejects_invalid_timeout_before_allocating(monkeypatch) -> None:
+    monkeypatch.setattr(
+        debug,
+        "MacrodataClient",
+        lambda: pytest.fail("client must not be created for an invalid timeout"),
+    )
+
+    with pytest.raises(SystemExit, match="--startup-timeout must be greater than zero"):
+        debug._cmd_create(
+            Namespace(
+                pipeline="pipeline.py",
+                script_args=[],
+                startup_timeout=0,
+            )
+        )
+
+
 def test_capture_requires_exactly_one_cloud_launch(monkeypatch) -> None:
     monkeypatch.setattr(debug, "cmd_run", lambda _args: 0)
 
@@ -203,7 +222,10 @@ def test_debug_sync_json_redirects_pipeline_stdout(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         debug,
         "_sync_launcher",
-        lambda **_kwargs: {"status": "ready", "shards": 2},
+        lambda **_kwargs: (
+            print("manifest diagnostic"),
+            {"status": "ready", "shards": 2},
+        )[1],
     )
 
     assert (
@@ -220,7 +242,7 @@ def test_debug_sync_json_redirects_pipeline_stdout(monkeypatch, capsys) -> None:
 
     captured = capsys.readouterr()
     assert json.loads(captured.out) == {"status": "ready", "shards": 2}
-    assert captured.err == "pipeline diagnostic\n"
+    assert captured.err == "pipeline diagnostic\nmanifest diagnostic\n"
 
 
 def test_debug_reports_expected_errors_without_traceback(monkeypatch, capsys) -> None:

@@ -254,6 +254,8 @@ def _wait_until_ready(
 
 
 def _cmd_create(args: argparse.Namespace) -> int:
+    if args.startup_timeout <= 0:
+        raise SystemExit("--startup-timeout must be greater than zero")
     client = MacrodataClient()
     script = Path(args.pipeline).expanduser().resolve()
     with session_creation_lock(script=script, client=client):
@@ -308,16 +310,18 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     output_context = redirect_stdout(sys.stderr) if args.json else nullcontext()
     with output_context:
         launcher = _capture_launcher(args.pipeline, script_args)
-    project_root = (
-        record.project_root if record is not None else find_project_root(args.pipeline)
-    )
-    payload = _sync_launcher(
-        launcher=launcher,
-        pipeline=args.pipeline,
-        job_id=job_id,
-        project_root=project_root,
-        client=client,
-    )
+        project_root = (
+            record.project_root
+            if record is not None
+            else find_project_root(args.pipeline)
+        )
+        payload = _sync_launcher(
+            launcher=launcher,
+            pipeline=args.pipeline,
+            job_id=job_id,
+            project_root=project_root,
+            client=client,
+        )
     if args.json:
         _print_json(payload)
     else:
