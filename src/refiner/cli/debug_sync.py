@@ -99,10 +99,10 @@ def _module_is_within(module: ModuleType, root: Path) -> bool:
     if not isinstance(module_file, str):
         return False
     try:
-        Path(module_file).resolve().relative_to(root)
+        relative = Path(module_file).resolve().relative_to(root)
     except (OSError, ValueError):
         return False
-    return True
+    return not any(part in EXCLUDED_PARTS for part in relative.parts)
 
 
 @contextmanager

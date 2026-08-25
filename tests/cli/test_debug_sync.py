@@ -6,6 +6,7 @@ import io
 import json
 import sys
 import tarfile
+from types import ModuleType
 
 import cloudpickle
 
@@ -90,3 +91,14 @@ def test_project_modules_are_pickled_without_remote_source_imports(tmp_path) -> 
     restored = cloudpickle.loads(payload)
     assert restored(2) == 3
     assert module.__name__ not in cloudpickle.list_registry_pickle_by_value()
+
+
+def test_project_virtualenv_modules_are_not_registered_by_value(tmp_path) -> None:
+    virtualenv_module = ModuleType("__main__")
+    virtualenv_module.__file__ = str(tmp_path / ".venv" / "bin" / "macrodata")
+    sys.modules["debug_virtualenv_main"] = virtualenv_module
+    try:
+        with pickle_project_modules_by_value(tmp_path):
+            pass
+    finally:
+        sys.modules.pop("debug_virtualenv_main", None)
