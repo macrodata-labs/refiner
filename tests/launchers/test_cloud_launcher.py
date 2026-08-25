@@ -230,6 +230,9 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     )
     assert request.stage_payloads[0].runtime is not None
     assert request.stage_payloads[0].runtime.num_workers == 3
+    assert request.stage_payloads[0].runtime.cloud == "aws"
+    assert request.stage_payloads[0].runtime.region == ("us", "eu", "ca")
+    assert request.stage_payloads[0].runtime.placement_mode == "best_effort"
     assert request.stage_payloads[0].runtime.cpus_per_worker == 2
     assert request.stage_payloads[0].runtime.mem_mb_per_worker == 4096
     assert request.stage_payloads[0].runtime.gpu == GPU(
@@ -1636,3 +1639,49 @@ def test_pipeline_launch_cloud_continue_rejects_non_uuid_selector(monkeypatch) -
             name="demo cloud",
             continue_from_job="job-previous",
         )
+
+
+def test_pipeline_launch_cloud_forwards_strict_placement(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="placed cloud",
+        cloud="gcp",
+        region=["uk", "us-west"],
+        placement_mode="strict",
+    )
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    runtime = request.stage_payloads[0].runtime
+    assert runtime is not None
+    assert runtime.cloud == "gcp"
+    assert runtime.region == ("uk", "us-west")
+    assert runtime.placement_mode == "strict"
+
+
+@pytest.mark.parametrize("placement_mode", ["native", "spill", "STRICT"])
+def test_pipeline_launch_cloud_rejects_invalid_placement_mode(
+    monkeypatch, placement_mode
+) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(ValueError, match="placement_mode must be one of"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud", placement_mode=placement_mode
+        )
+
+
+@pytest.mark.parametrize("cloud", ["auto", "azure", "AWS"])
+def test_pipeline_launch_cloud_rejects_invalid_cloud(monkeypatch, cloud) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(ValueError, match="cloud must be one of"):
+        read_jsonl("input.jsonl").launch_cloud(name="demo cloud", cloud=cloud)
+
+
+@pytest.mark.parametrize("region", [[], ["ap-south"], ["us", "moon"]])
+def test_pipeline_launch_cloud_rejects_invalid_regions(monkeypatch, region) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(ValueError, match="region"):
+        read_jsonl("input.jsonl").launch_cloud(name="demo cloud", region=region)
