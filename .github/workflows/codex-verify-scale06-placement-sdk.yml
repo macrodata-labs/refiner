@@ -1,0 +1,107 @@
+name: Codex Verify Scale 06 Placement SDK
+
+on:
+  push:
+    branches:
+      - codex/scale-06-placement-sdk-verifier
+  workflow_dispatch:
+
+concurrency:
+  group: codex-scale-06-placement-sdk-verifier
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout verifier transport
+        uses: actions/checkout@v4
+        with:
+          ref: codex/scale-06-placement-sdk-verifier
+          fetch-depth: 0
+
+      - name: Reconstruct strict-placement SDK patch
+        shell: bash
+        run: |
+          base64 --decode .codex/scale06-placement-sdk.patch.xz.b64 > /tmp/scale06-placement-sdk.patch.xz
+          test "$(sha256sum /tmp/scale06-placement-sdk.patch.xz | cut -d' ' -f1)" = "e6c114aba73f7253cb41f07a34c1b9027f5fcb61349af6b7c874ae7b347512ea"
+          xz --decompress --stdout /tmp/scale06-placement-sdk.patch.xz > /tmp/scale06-placement-sdk.patch
+          test "$(sha256sum /tmp/scale06-placement-sdk.patch | cut -d' ' -f1)" = "6cf5587b58248ac94b8c25134f9b1e15670213e94fafbf88a5ea23e66c9fc58d"
+          git reset --hard 2619b75c2cf1059e0a3bd7172c5610252d3d091b
+          git apply --check /tmp/scale06-placement-sdk.patch
+          git apply --whitespace=error-all /tmp/scale06-placement-sdk.patch
+          git diff --check
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Format changed Python
+        run: |
+          uv run ruff format \
+            src/refiner/launchers/cloud.py \
+            src/refiner/pipeline/pipeline.py \
+            src/refiner/platform/client/models.py \
+            tests/launchers/test_cloud_launcher.py \
+            tests/platform/test_cloud_client.py
+
+      - name: Verify SDK
+        env:
+          PYTHONPATH: src
+        run: |
+          uv run ruff check --force-exclude .
+          uv run ruff format --force-exclude --check .
+          uv run ty check
+          uv run pytest -q \
+            tests/launchers/test_cloud_launcher.py \
+            tests/platform/test_cloud_client.py
+          uv run pytest -q
+
+      - name: Verify exact product delta
+        shell: bash
+        run: |
+          cat > /tmp/expected-files <<'EOF'
+          docs/running-pipelines/cloud-launcher.md
+          src/refiner/launchers/cloud.py
+          src/refiner/pipeline/pipeline.py
+          src/refiner/platform/client/models.py
+          tests/launchers/test_cloud_launcher.py
+          tests/platform/test_cloud_client.py
+          EOF
+          git diff --name-only 2619b75c2cf1059e0a3bd7172c5610252d3d091b | sort > /tmp/actual-files
+          sort -o /tmp/expected-files /tmp/expected-files
+          diff -u /tmp/expected-files /tmp/actual-files
+          git diff --check
+          test -z "$(find . -name '*.rej' -print -quit)"
+
+      - name: Publish clean SDK branch
+        shell: bash
+        run: |
+          git config user.name "Codex"
+          git config user.email "codex@openai.com"
+          git add \
+            docs/running-pipelines/cloud-launcher.md \
+            src/refiner/launchers/cloud.py \
+            src/refiner/pipeline/pipeline.py \
+            src/refiner/platform/client/models.py \
+            tests/launchers/test_cloud_launcher.py \
+            tests/platform/test_cloud_client.py
+          git commit \
+            -m "feat(cloud): expose native placement controls" \
+            -m "Allow cloud launches to select native providers and regions, including strict no-fallback placement, while preserving omitted default wire fields." \
+            -m "Co-Authored-By: Codex <codex@openai.com>"
+          git push --force origin HEAD:codex/scale-06-placement-sdk
