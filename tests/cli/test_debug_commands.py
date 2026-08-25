@@ -4,10 +4,12 @@ from argparse import Namespace
 from contextlib import nullcontext
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from refiner.cli import debug
+from refiner.platform.client import MacrodataApiError, MacrodataClient
 
 
 class _FakeClient:
@@ -209,6 +211,70 @@ def test_debug_create_validates_sync_bundle_before_allocating(
                 startup_timeout=1200,
             )
         )
+
+
+def test_debug_create_discards_missing_remembered_session(
+    monkeypatch, tmp_path
+) -> None:
+    client = cast(MacrodataClient, _FakeClient())
+    record = debug.DebugSessionRecord(
+        script_path=str(tmp_path / "pipeline.py"),
+        project_root=str(tmp_path),
+        script_args=[],
+        job_id="missing-job",
+        base_url="https://example.test",
+        workspace="workspace",
+    )
+    removed: list[Path] = []
+    monkeypatch.setattr(debug, "find_session", lambda **_kwargs: record)
+    monkeypatch.setattr(
+        client,
+        "cloud_debug_status",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            MacrodataApiError(status=404, message="missing")
+        ),
+    )
+    monkeypatch.setattr(
+        debug,
+        "remove_session",
+        lambda *, script, client: removed.append(Path(script)),
+    )
+
+    debug._clear_existing_session(script=tmp_path / "pipeline.py", client=client)
+
+    assert removed == [tmp_path / "pipeline.py"]
+
+
+def test_debug_create_preserves_remembered_session_on_status_failure(
+    monkeypatch, tmp_path
+) -> None:
+    client = cast(MacrodataClient, _FakeClient())
+    record = debug.DebugSessionRecord(
+        script_path=str(tmp_path / "pipeline.py"),
+        project_root=str(tmp_path),
+        script_args=[],
+        job_id="unavailable-job",
+        base_url="https://example.test",
+        workspace="workspace",
+    )
+    monkeypatch.setattr(debug, "find_session", lambda **_kwargs: record)
+    monkeypatch.setattr(
+        client,
+        "cloud_debug_status",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            MacrodataApiError(status=503, message="unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        debug,
+        "remove_session",
+        lambda **_kwargs: pytest.fail("transient errors must preserve the session"),
+    )
+
+    with pytest.raises(MacrodataApiError) as error:
+        debug._clear_existing_session(script=tmp_path / "pipeline.py", client=client)
+
+    assert error.value.status == 503
 
 
 def test_capture_requires_exactly_one_cloud_launch(monkeypatch) -> None:

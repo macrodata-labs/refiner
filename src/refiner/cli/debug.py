@@ -268,21 +268,31 @@ def _wait_until_ready(
         time.sleep(2)
 
 
+def _clear_existing_session(*, script: Path, client: MacrodataClient) -> None:
+    existing = find_session(script=script, client=client)
+    if existing is None:
+        return
+    try:
+        status = client.cloud_debug_status(job_id=existing.job_id).get("status")
+    except MacrodataApiError as error:
+        if error.status != 404:
+            raise
+    else:
+        if status not in {"failed", "stopped"}:
+            raise SystemExit(
+                f"A debug session already exists for {script}: {existing.job_id}. "
+                f"Use `macrodata debug sync {script}` or stop it first."
+            )
+    remove_session(script=script, client=client)
+
+
 def _cmd_create(args: argparse.Namespace) -> int:
     if args.startup_timeout <= 0:
         raise SystemExit("--startup-timeout must be greater than zero")
     client = MacrodataClient()
     script = Path(args.pipeline).expanduser().resolve()
     with session_creation_lock(script=script, client=client):
-        existing = find_session(script=script, client=client)
-        if existing is not None:
-            status = client.cloud_debug_status(job_id=existing.job_id).get("status")
-            if status not in {"failed", "stopped"}:
-                raise SystemExit(
-                    f"A debug session already exists for {script}: {existing.job_id}. "
-                    f"Use `macrodata debug sync {args.pipeline}` or stop it first."
-                )
-            remove_session(script=script, client=client)
+        _clear_existing_session(script=script, client=client)
         script_args = _normalized_script_args(list(args.script_args))
         launcher = _capture_launcher(str(script), script_args)
         project_root = find_project_root(script)
