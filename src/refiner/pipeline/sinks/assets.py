@@ -5,10 +5,8 @@ from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 import posixpath
-import queue
 import re
 import tempfile
-import threading
 from typing import IO, Literal, TypeAlias, cast
 from urllib.parse import unquote, urlsplit
 
@@ -733,67 +731,6 @@ class BlobAssetManager:
             position = max(position, offset + size)
         return position == source_size
 
-    @staticmethod
-    def _stream_complete_blob(
-        source: DataFile,
-        *,
-        source_size: int,
-        destination: IO[bytes],
-    ) -> None:
-        """Copy a source blob with bounded source-read/upload overlap.
-
-        S3FS flushes multipart batches synchronously from ``write``. A small
-        reader thread keeps source chunks ready while such a flush is in
-        progress, without changing the writer contract or buffering a whole
-        source object.
-        """
-        chunk_bytes = 8 * 1024 * 1024
-        chunks: queue.Queue[bytes | BaseException | None] = queue.Queue(maxsize=16)
-        stopped = threading.Event()
-
-        def put(item: bytes | BaseException | None) -> bool:
-            while not stopped.is_set():
-                try:
-                    chunks.put(item, timeout=0.1)
-                    return True
-                except queue.Full:
-                    pass
-            return False
-
-        def read_chunks() -> None:
-            try:
-                remaining = source_size
-                with source.open("rb") as stream:
-                    while remaining and not stopped.is_set():
-                        chunk = stream.read(min(remaining, chunk_bytes))
-                        if not chunk:
-                            raise EOFError("asset ended before its declared size")
-                        remaining -= len(chunk)
-                        if not put(chunk):
-                            return
-            except BaseException as error:
-                put(error)
-            finally:
-                put(None)
-
-        reader = threading.Thread(
-            target=read_chunks,
-            name="refiner-blob-prefetch",
-            daemon=True,
-        )
-        reader.start()
-        try:
-            while True:
-                item = chunks.get()
-                if item is None:
-                    break
-                if isinstance(item, BaseException):
-                    raise item
-                destination.write(item)
-        finally:
-            stopped.set()
-            reader.join()
-
     def _coalesce_complete_blob_references(
         self,
         values: Sequence[object],
@@ -836,11 +773,14 @@ class BlobAssetManager:
                 continue
             block = self._block(shard_id, column_name, source_size)
             output_offset = block.size
-            self._stream_complete_blob(
-                source,
-                source_size=source_size,
-                destination=block.stream,
-            )
+            remaining = source_size
+            with source.open("rb") as stream:
+                while remaining:
+                    chunk = stream.read(min(remaining, 8 * 1024 * 1024))
+                    if not chunk:
+                        raise EOFError("asset ended before its declared size")
+                    block.stream.write(chunk)
+                    remaining -= len(chunk)
             block.size += source_size
             for index, offset, size in references:
                 rewritten[index] = {
