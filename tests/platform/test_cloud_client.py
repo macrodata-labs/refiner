@@ -186,6 +186,8 @@ def test_cloud_debug_client_uses_retained_session_routes(monkeypatch) -> None:
         "max_shards": 1,
         "profile": True,
     }
+    assert calls[1]["retry_attempts"] == 1
+    assert calls[2]["retry_attempts"] == 1
 
 
 def test_cloud_debug_sync_streams_bundle_bytes() -> None:

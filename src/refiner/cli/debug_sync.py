@@ -24,6 +24,7 @@ EXCLUDED_PARTS = frozenset(
         ".ruff_cache",
         ".tox",
         ".venv",
+        "venv",
         "__pycache__",
         "node_modules",
     }
@@ -66,6 +67,8 @@ def build_source_archive(path: str | Path) -> SourceArchive:
         (candidate for candidate in root.rglob("*") if _included_file(root, candidate)),
         key=lambda candidate: candidate.relative_to(root).as_posix(),
     )
+    if not files:
+        raise ValueError("source archive is empty")
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w:gz", compresslevel=6) as archive:
         for file_path in files:
@@ -75,8 +78,6 @@ def build_source_archive(path: str | Path) -> SourceArchive:
                 recursive=False,
             )
     payload = output.getvalue()
-    if not payload:
-        raise ValueError("source archive is empty")
     if len(payload) > MAX_SOURCE_ARCHIVE_BYTES:
         raise ValueError("compressed source archive exceeds 16 MiB")
     return SourceArchive(

@@ -432,6 +432,7 @@ class MacrodataClient:
             path=f"/api/cloud/debug/{quote(job_id, safe='')}/exec",
             json_payload=payload,
             timeout_s=float(timeout_secs + 30),
+            retry_attempts=1,
         )
 
     def cloud_debug_run(
@@ -452,6 +453,7 @@ class MacrodataClient:
             path=f"/api/cloud/debug/{quote(job_id, safe='')}/run",
             json_payload=payload,
             timeout_s=float(timeout_secs + 30),
+            retry_attempts=1,
         )
 
     def cloud_debug_profile(self, *, job_id: str) -> dict[str, Any]:

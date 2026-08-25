@@ -9,6 +9,7 @@ import tarfile
 from types import ModuleType
 
 import cloudpickle
+import pytest
 
 from refiner.cli.debug_sync import (
     build_debug_sync_bundle,
@@ -32,6 +33,24 @@ def test_source_archive_excludes_secrets_and_build_artifacts(tmp_path) -> None:
     assert names == ["src/pipeline.py"]
     assert archive.file_count == 1
     assert len(archive.sha256) == 64
+
+
+def test_source_archive_rejects_projects_with_no_included_files(tmp_path) -> None:
+    (tmp_path / ".env").write_text("SECRET=nope\n")
+
+    with pytest.raises(ValueError, match="source archive is empty"):
+        build_source_archive(tmp_path)
+
+
+def test_source_archive_excludes_conventional_virtualenv(tmp_path) -> None:
+    (tmp_path / "pipeline.py").write_text("PIPELINE = 1\n")
+    (tmp_path / "venv" / "lib").mkdir(parents=True)
+    (tmp_path / "venv" / "lib" / "dependency.py").write_text("SECRET = 1\n")
+
+    archive = build_source_archive(tmp_path)
+
+    with tarfile.open(fileobj=io.BytesIO(archive.payload), mode="r:gz") as tar:
+        assert tar.getnames() == ["pipeline.py"]
 
 
 def test_debug_sync_bundle_contains_one_complete_generation(tmp_path) -> None:
