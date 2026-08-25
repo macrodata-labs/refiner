@@ -137,8 +137,10 @@ def _parse_debug_args(raw_args: list[str]) -> argparse.Namespace:
         return _debug_parser().parse_args(raw_args)
     normalized = raw_args if raw_args[0] in _COMMANDS else ["create", *raw_args]
     script_args: list[str] = []
+    script_args_provided = False
     exec_command: list[str] | None = None
     if normalized[0] in {"create", "sync"} and "--" in normalized:
+        script_args_provided = True
         separator = normalized.index("--")
         script_args = normalized[separator + 1 :]
         normalized = normalized[:separator]
@@ -149,6 +151,7 @@ def _parse_debug_args(raw_args: list[str]) -> argparse.Namespace:
     parsed = _debug_parser().parse_args(normalized)
     if parsed.debug_command in {"create", "sync"}:
         parsed.script_args = script_args
+        parsed.script_args_provided = script_args_provided
     elif parsed.debug_command == "exec" and exec_command is not None:
         parsed.exec_command = exec_command
     return parsed
@@ -257,7 +260,7 @@ def _wait_until_ready(
             last_status = status
         if status == "ready":
             return payload
-        if status in {"failed", "stopped"}:
+        if status in {"failed", "stopped", "canceled"}:
             detail = payload.get("error") or payload.get("operation_status") or status
             raise RuntimeError(f"debug worker did not start: {detail}")
         if time.monotonic() >= deadline:
@@ -278,7 +281,7 @@ def _clear_existing_session(*, script: Path, client: MacrodataClient) -> None:
         if error.status != 404:
             raise
     else:
-        if status not in {"failed", "stopped"}:
+        if status not in {"failed", "stopped", "canceled"}:
             raise SystemExit(
                 f"A debug session already exists for {script}: {existing.job_id}. "
                 f"Use `macrodata debug sync {script}` or stop it first."
@@ -338,7 +341,7 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     client = MacrodataClient()
     job_id, record = _job_for_target(args, client)
     script_args = _normalized_script_args(list(args.script_args))
-    if not script_args and record is not None:
+    if not getattr(args, "script_args_provided", False) and record is not None:
         script_args = record.script_args
     output_context = redirect_stdout(sys.stderr) if args.json else nullcontext()
     with output_context:

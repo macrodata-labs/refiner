@@ -160,12 +160,29 @@ def test_file_driven_parser_supports_create_sync_and_exec() -> None:
     sync = debug._parse_debug_args(["sync", "pipeline.py"])
     assert sync.debug_command == "sync"
     assert sync.pipeline == "pipeline.py"
+    assert sync.script_args_provided is False
+
+    sync_without_args = debug._parse_debug_args(["sync", "pipeline.py", "--"])
+    assert sync_without_args.script_args == []
+    assert sync_without_args.script_args_provided is True
 
     execute = debug._parse_debug_args(
         ["exec", "pipeline.py", "--timeout", "10", "--", "python", "-V"]
     )
     assert execute.exec_command == ["python", "-V"]
     assert execute.timeout == 10
+
+
+def test_wait_until_ready_treats_canceled_as_terminal(monkeypatch) -> None:
+    client = cast(MacrodataClient, _FakeClient())
+    monkeypatch.setattr(
+        client,
+        "cloud_debug_status",
+        lambda **_kwargs: {"status": "canceled"},
+    )
+
+    with pytest.raises(RuntimeError, match="debug worker did not start: canceled"):
+        debug._wait_until_ready(client=client, job_id="job-1", timeout_secs=1200)
 
 
 def test_debug_create_rejects_invalid_timeout_before_allocating(monkeypatch) -> None:
@@ -277,6 +294,36 @@ def test_debug_create_preserves_remembered_session_on_status_failure(
     assert error.value.status == 503
 
 
+def test_debug_create_discards_canceled_remembered_session(
+    monkeypatch, tmp_path
+) -> None:
+    client = cast(MacrodataClient, _FakeClient())
+    record = debug.DebugSessionRecord(
+        script_path=str(tmp_path / "pipeline.py"),
+        project_root=str(tmp_path),
+        script_args=[],
+        job_id="canceled-job",
+        base_url="https://example.test",
+        workspace="workspace",
+    )
+    removed: list[Path] = []
+    monkeypatch.setattr(debug, "find_session", lambda **_kwargs: record)
+    monkeypatch.setattr(
+        client,
+        "cloud_debug_status",
+        lambda **_kwargs: {"status": "canceled"},
+    )
+    monkeypatch.setattr(
+        debug,
+        "remove_session",
+        lambda *, script, client: removed.append(Path(script)),
+    )
+
+    debug._clear_existing_session(script=tmp_path / "pipeline.py", client=client)
+
+    assert removed == [tmp_path / "pipeline.py"]
+
+
 def test_capture_requires_exactly_one_cloud_launch(monkeypatch) -> None:
     monkeypatch.setattr(debug, "cmd_run", lambda _args: 0)
 
@@ -338,6 +385,38 @@ def test_debug_sync_json_redirects_pipeline_stdout(monkeypatch, capsys) -> None:
     captured = capsys.readouterr()
     assert json.loads(captured.out) == {"status": "ready", "shards": 2}
     assert captured.err == "pipeline diagnostic\nmanifest diagnostic\n"
+
+
+def test_debug_sync_explicit_separator_clears_remembered_arguments(
+    monkeypatch, tmp_path
+) -> None:
+    client = object()
+    record = debug.DebugSessionRecord(
+        script_path=str(tmp_path / "pipeline.py"),
+        project_root=str(tmp_path),
+        script_args=["--rows", "10"],
+        job_id="job-1",
+        base_url="https://example.test",
+        workspace="workspace",
+    )
+    captured_args: list[list[str]] = []
+    monkeypatch.setattr(debug, "MacrodataClient", lambda: client)
+    monkeypatch.setattr(
+        debug,
+        "_job_for_target",
+        lambda _args, _client: ("job-1", record),
+    )
+    monkeypatch.setattr(
+        debug,
+        "_capture_launcher",
+        lambda _pipeline, script_args: captured_args.append(script_args) or object(),
+    )
+    monkeypatch.setattr(debug, "_sync_launcher", lambda **_kwargs: {})
+
+    args = debug._parse_debug_args(["sync", str(tmp_path / "pipeline.py"), "--"])
+    assert debug._cmd_sync(args) == 0
+
+    assert captured_args == [[]]
 
 
 def test_debug_reports_expected_errors_without_traceback(monkeypatch, capsys) -> None:
