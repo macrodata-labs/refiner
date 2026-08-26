@@ -315,6 +315,27 @@ def test_pipeline_launch_cloud_rejects_gpu_for_aws() -> None:
         )
 
 
+def test_pipeline_launch_cloud_rejects_runtime_services_for_aws_before_upload(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+    pipeline = read_jsonl("input.jsonl").map_async(
+        mdr.inference.generate_text(
+            fn=_noop_inference,
+            provider=mdr.inference.VLLMProvider(model="Qwen/Qwen3.5-9B"),
+        )
+    )
+
+    with pytest.raises(SystemExit, match="does not support managed runtime services"):
+        pipeline.launch_cloud(name="invalid aws service job", provider="aws")
+
+    assert captured["events"] == []
+
+
 def test_captured_pipeline_launch_submits_debug_and_does_not_attach(
     monkeypatch, capsys
 ) -> None:
