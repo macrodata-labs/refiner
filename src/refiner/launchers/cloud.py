@@ -479,6 +479,7 @@ class CloudLauncher(BaseLauncher):
             )
         allocation = {
             "schema_version": 1,
+            "provider": self.provider,
             "environment": manifest.get("environment"),
             "dependencies": manifest.get("dependencies"),
             "stages": stage_specs,

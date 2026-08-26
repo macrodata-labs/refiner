@@ -460,6 +460,25 @@ def test_debug_allocation_fingerprint_ignores_unselected_workspace_secret(
     assert first.allocation_fingerprint == second.allocation_fingerprint
 
 
+def test_debug_allocation_fingerprint_changes_with_provider() -> None:
+    modal = CloudLauncher(pipeline=read_jsonl("input.jsonl"), name="debug")
+    aws = CloudLauncher(
+        pipeline=read_jsonl("input.jsonl"), name="debug", provider="aws"
+    )
+
+    modal_preparation = modal.prepare_debug_sync(
+        client=cast(MacrodataClient, _SecretMetadataClient({}))
+    )
+    aws_preparation = aws.prepare_debug_sync(
+        client=cast(MacrodataClient, _SecretMetadataClient({}))
+    )
+
+    assert (
+        modal_preparation.allocation_fingerprint
+        != aws_preparation.allocation_fingerprint
+    )
+
+
 def test_debug_launch_fingerprint_changes_with_workspace_secret_version(
     monkeypatch,
 ) -> None:
