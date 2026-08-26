@@ -76,17 +76,43 @@ def _save_profile(payload: dict[str, Any], output: str) -> Path:
 
 
 def _add_target(parser: argparse.ArgumentParser, *, required: bool = False) -> None:
-    parser.add_argument("pipeline", nargs=None if required else "?")
-    parser.add_argument("--job", dest="job_id")
+    parser.add_argument(
+        "pipeline",
+        nargs=None if required else "?",
+        help="Pipeline script path used to identify the debug session",
+    )
+    parser.add_argument(
+        "--job",
+        dest="job_id",
+        help="Use an explicit debug job ID instead of remembered local state",
+    )
 
 
 def _debug_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="macrodata debug")
     subparsers = parser.add_subparsers(dest="debug_command", required=True)
 
-    create = subparsers.add_parser("create", help="Create a retained debug session")
-    create.add_argument("pipeline")
-    create.add_argument("--startup-timeout", type=int, default=1200)
+    create = subparsers.add_parser(
+        "create",
+        help="Create a retained debug session",
+        usage=(
+            "macrodata debug create [-h] [--startup-timeout SECONDS] "
+            "pipeline [-- PIPELINE_ARG ...]"
+        ),
+        epilog=(
+            "Pipeline arguments must follow `--`. Example:\n"
+            "  macrodata debug create pipeline.py -- --limit 10"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    create.add_argument("pipeline", help="Pipeline script to execute and retain")
+    create.add_argument(
+        "--startup-timeout",
+        type=int,
+        default=1200,
+        metavar="SECONDS",
+        help="Maximum time to wait for the worker (default: 1200)",
+    )
 
     status = subparsers.add_parser("status", help="Show debug worker status")
     _add_target(status)
@@ -105,10 +131,28 @@ def _debug_parser() -> argparse.ArgumentParser:
     _add_target(profile)
     profile.add_argument("--output", default="refiner-debug-profile.svg")
 
-    execute = subparsers.add_parser("exec", help="Execute argv in the debug worker")
+    execute = subparsers.add_parser(
+        "exec",
+        help="Execute argv in the debug worker",
+        usage=(
+            "macrodata debug exec [-h] [--job JOB_ID] [--workdir PATH] "
+            "[--timeout SECONDS] [pipeline] -- COMMAND [ARG ...]"
+        ),
+        epilog=(
+            "The command and its arguments must follow `--`. Example:\n"
+            "  macrodata debug exec pipeline.py -- python -m pip freeze"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     _add_target(execute)
-    execute.add_argument("--workdir")
-    execute.add_argument("--timeout", type=int, default=1200)
+    execute.add_argument("--workdir", metavar="PATH", help="Worker working directory")
+    execute.add_argument(
+        "--timeout",
+        type=int,
+        default=1200,
+        metavar="SECONDS",
+        help="Maximum command runtime (default: 1200)",
+    )
     execute.set_defaults(exec_command=[])
 
     stop = subparsers.add_parser("stop", help="Close the debug session")
@@ -116,7 +160,18 @@ def _debug_parser() -> argparse.ArgumentParser:
     stop.add_argument("--json", action="store_true")
 
     sync = subparsers.add_parser(
-        "sync", help="Synchronize source, pipeline, and private shards"
+        "sync",
+        help="Synchronize source, pipeline, and private shards",
+        usage=(
+            "macrodata debug sync [-h] [--job JOB_ID] [--json] "
+            "pipeline [-- PIPELINE_ARG ...]"
+        ),
+        epilog=(
+            "Arguments after `--` replace the remembered pipeline arguments for this sync. "
+            "Omit them to reuse the remembered arguments. Example:\n"
+            "  macrodata debug sync pipeline.py -- --limit 10"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_target(sync, required=True)
     sync.add_argument("--json", action="store_true")
@@ -256,7 +311,7 @@ def _wait_until_ready(
         payload = client.cloud_debug_status(job_id=job_id)
         status = str(payload.get("status", "unknown"))
         if status != last_status:
-            print(f"Debug worker: {status}")
+            print(f"Debug worker: {status}", flush=True)
             last_status = status
         if status == "ready":
             return payload
@@ -317,7 +372,7 @@ def _cmd_create(args: argparse.Namespace) -> int:
             client=client,
         )
         save_session(record)
-    print(f"Debug session {result.job_id} remembered for {script}")
+    print(f"Debug session {result.job_id} remembered for {script}", flush=True)
     _wait_until_ready(
         client=client,
         job_id=result.job_id,
@@ -332,7 +387,8 @@ def _cmd_create(args: argparse.Namespace) -> int:
     )
     print(
         f"Ready: synchronized {payload.get('files', 0)} files and "
-        f"{payload.get('shards', 0)} private shards"
+        f"{payload.get('shards', 0)} private shards",
+        flush=True,
     )
     return 0
 
