@@ -33,6 +33,7 @@ from refiner.platform.client import MacrodataApiError, MacrodataClient
 _COMMANDS = frozenset(
     {"create", "status", "run", "profile", "exec", "stop", "sync", "doctor"}
 )
+_STATUS_HEARTBEAT_SECS = 30.0
 
 
 def _print_json(payload: dict[str, Any]) -> None:
@@ -89,7 +90,16 @@ def _add_target(parser: argparse.ArgumentParser, *, required: bool = False) -> N
 
 
 def _debug_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="macrodata debug")
+    parser = argparse.ArgumentParser(
+        prog="macrodata debug",
+        epilog=(
+            "Create a session directly from a pipeline script:\n"
+            "  macrodata debug pipeline.py -- --limit 10\n\n"
+            "The equivalent explicit form is:\n"
+            "  macrodata debug create pipeline.py -- --limit 10"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     subparsers = parser.add_subparsers(dest="debug_command", required=True)
 
     create = subparsers.add_parser(
@@ -305,20 +315,31 @@ def _wait_until_ready(
 ) -> dict[str, Any]:
     if timeout_secs <= 0:
         raise SystemExit("--startup-timeout must be greater than zero")
-    deadline = time.monotonic() + timeout_secs
+    started_at = time.monotonic()
+    deadline = started_at + timeout_secs
+    last_progress_at = started_at
     last_status = ""
     while True:
         payload = client.cloud_debug_status(job_id=job_id)
         status = str(payload.get("status", "unknown"))
+        now = time.monotonic()
         if status != last_status:
             print(f"Debug worker: {status}", flush=True)
             last_status = status
+            last_progress_at = now
+        elif now - last_progress_at >= _STATUS_HEARTBEAT_SECS:
+            elapsed_secs = int(now - started_at)
+            print(
+                f"Debug worker: {status} (still waiting; {elapsed_secs}s elapsed)",
+                flush=True,
+            )
+            last_progress_at = now
         if status == "ready":
             return payload
         if status in {"failed", "stopped", "canceled"}:
             detail = payload.get("error") or payload.get("operation_status") or status
             raise RuntimeError(f"debug worker did not start: {detail}")
-        if time.monotonic() >= deadline:
+        if now >= deadline:
             raise RuntimeError(
                 f"debug worker was not ready within {timeout_secs} seconds; "
                 f"continue with `macrodata debug status --job {job_id}`"
