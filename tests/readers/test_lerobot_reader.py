@@ -49,7 +49,7 @@ def test_lerobot_rejects_explicit_shard_count_above_limit(tmp_path: Path) -> Non
     root = tmp_path / "dataset"
     root.mkdir()
 
-    with pytest.raises(ValueError, match=r"10,000-shard limit"):
+    with pytest.raises(ValueError, match=r"num_shards must be <= 10,000"):
         LeRobotEpisodeReader(root, num_shards=10_001)
 
 
