@@ -51,7 +51,8 @@ pipeline.launch_cloud(
 AWS Batch supports pip dependencies, secrets, environment variables, multiple
 workers, continuation, and multi-stage pipelines. It does not currently support
 GPUs, managed runtime services, apt packages, custom images, or arbitrary file
-and directory attachments.
+and directory attachments. Retained cloud debugging uses the same
+`provider="aws"` selection; see [Cloud debug sessions](cloud-debug-sessions.md).
 
 ## Cloud and region placement
 

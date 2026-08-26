@@ -342,6 +342,25 @@ def test_captured_pipeline_launch_submits_debug_and_does_not_attach(
     assert "Cloud job launched" in capsys.readouterr().out
 
 
+def test_debug_launch_preserves_aws_batch_provider(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda _ref: True,
+    )
+
+    launcher = CloudLauncher(
+        pipeline=read_jsonl("input.jsonl"),
+        name="aws debug",
+        provider="aws",
+    )
+    launcher.launch_debug()
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.provider == "aws_batch"
+    assert request.debug is True
+
+
 def test_debug_launch_rejects_continue() -> None:
     launcher = CloudLauncher(
         pipeline=read_jsonl("input.jsonl"),
