@@ -21,6 +21,12 @@ Create a retained session by passing that script to the CLI:
 macrodata debug pipeline.py
 ```
 
+If the script accepts arguments, put them after `--`:
+
+```bash
+macrodata debug pipeline.py -- --limit 10
+```
+
 The command executes the script locally, requires exactly one
 `launch_cloud(...)` call, and creates a normal cloud job from that launch. The
 job registers its real stage-0 shards and allocates one retained worker.
@@ -57,12 +63,38 @@ macrodata debug sync pipeline.py
 macrodata debug run pipeline.py --max-shards 1
 ```
 
+To replace the remembered script arguments for a sync, put the new arguments
+after `--`. A later sync without `--` reuses the last remembered arguments:
+
+```bash
+macrodata debug sync pipeline.py -- --limit 20
+```
+
 Sync executes the script again, captures its current cloud launch, uploads the
 project source and serialized stage-0 pipeline together, derives fresh shards
 inside the retained environment, and activates all three as one generation.
 An interrupted or invalid sync leaves the previous generation runnable. Version
 control data, virtual environments, caches, `node_modules`, and dotenv files are
 excluded.
+
+When local session state is available, sync reuses the script arguments
+remembered when the session was created. Pass new arguments after `--` to
+replace them, or end the command with `--` to clear them and run the script with
+its default arguments for that sync. These overrides do not change the
+remembered creation arguments, so a later bare sync reuses the original values:
+
+```bash
+macrodata debug sync pipeline.py -- --rows 20
+macrodata debug sync pipeline.py --
+```
+
+If local session state is unavailable and you select the session with `--job`,
+repeat any required script arguments after `--`. Without them, the script runs
+with its default arguments:
+
+```bash
+macrodata debug sync pipeline.py --job JOB_ID -- --rows 20
+```
 
 Dependencies, Python and Refiner versions, CPU, memory, GPU, cloud placement,
 runtime services, secrets, and plain environment variables are fixed when the
@@ -82,6 +114,9 @@ macrodata debug doctor pipeline.py
 macrodata debug exec pipeline.py -- python -V
 macrodata debug exec pipeline.py -- bash -lc 'nvidia-smi && pip freeze | head'
 ```
+
+`doctor` includes both a small `packages` summary for important runtime tools
+and the complete installed distribution map in `installed_packages`.
 
 Exec commands time out after 20 minutes by default. Use `--timeout SECONDS` for
 a different limit.

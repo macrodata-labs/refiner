@@ -173,6 +173,80 @@ def test_file_driven_parser_supports_create_sync_and_exec() -> None:
     assert execute.timeout == 10
 
 
+def _command_help(command: str, capsys) -> str:
+    with pytest.raises(SystemExit) as error:
+        debug._parse_debug_args([command, "--help"])
+    assert error.value.code == 0
+    return capsys.readouterr().out
+
+
+def test_debug_help_documents_passthrough_arguments(capsys) -> None:
+    top_level_help = debug._debug_parser().format_help()
+    assert "macrodata debug pipeline.py -- --limit 10" in top_level_help
+    assert "macrodata debug create pipeline.py -- --limit 10" in top_level_help
+
+    create_help = _command_help("create", capsys)
+    assert "pipeline [-- PIPELINE_ARG ...]" in create_help
+    assert "macrodata debug create pipeline.py -- --limit 10" in create_help
+
+    sync_help = _command_help("sync", capsys)
+    assert "pipeline [-- PIPELINE_ARG ...]" in sync_help
+    assert "replace the remembered pipeline arguments" in sync_help
+
+    exec_help = _command_help("exec", capsys)
+    assert "[pipeline] -- COMMAND [ARG ...]" in exec_help
+    assert "macrodata debug exec pipeline.py -- python -m pip freeze" in exec_help
+
+
+def test_wait_until_ready_flushes_progress(monkeypatch) -> None:
+    client = cast(MacrodataClient, _FakeClient())
+    printed: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    monkeypatch.setattr(
+        "builtins.print",
+        lambda *args, **kwargs: printed.append((args, kwargs)),
+    )
+
+    payload = debug._wait_until_ready(
+        client=client,
+        job_id="job-1",
+        timeout_secs=1200,
+    )
+
+    assert payload == {"status": "ready"}
+    assert printed == [(("Debug worker: ready",), {"flush": True})]
+
+
+def test_wait_until_ready_emits_heartbeat_for_unchanged_status(monkeypatch) -> None:
+    client = cast(MacrodataClient, _FakeClient())
+    statuses = iter(("allocating", "allocating", "ready"))
+    timestamps = iter((0.0, 0.0, 31.0, 32.0))
+    printed: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    monkeypatch.setattr(
+        client,
+        "cloud_debug_status",
+        lambda **_kwargs: {"status": next(statuses)},
+    )
+    monkeypatch.setattr(debug.time, "monotonic", lambda: next(timestamps))
+    monkeypatch.setattr(debug.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        "builtins.print",
+        lambda *args, **kwargs: printed.append((args, kwargs)),
+    )
+
+    payload = debug._wait_until_ready(
+        client=client,
+        job_id="job-1",
+        timeout_secs=1200,
+    )
+
+    assert payload == {"status": "ready"}
+    assert printed == [
+        (("Debug worker: allocating",), {"flush": True}),
+        (("Debug worker: allocating (still waiting; 31s elapsed)",), {"flush": True}),
+        (("Debug worker: ready",), {"flush": True}),
+    ]
+
+
 def test_wait_until_ready_treats_canceled_as_terminal(monkeypatch) -> None:
     client = cast(MacrodataClient, _FakeClient())
     monkeypatch.setattr(

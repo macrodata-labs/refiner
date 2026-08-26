@@ -618,7 +618,7 @@ class CloudLauncher(BaseLauncher):
             tracking_url=tracking_url,
             stage_index=resp.stage_index,
         )
-        print(f"Cloud job launched. View job:\n  {tracking_url}")
+        print(f"Cloud job launched. View job:\n  {tracking_url}", flush=True)
         if debug:
             return CloudLaunchResult(
                 job_id=resp.job_id,
