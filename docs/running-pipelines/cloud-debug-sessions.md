@@ -21,6 +21,12 @@ Create a retained session by passing that script to the CLI:
 macrodata debug pipeline.py
 ```
 
+If the script accepts arguments, put them after `--`:
+
+```bash
+macrodata debug pipeline.py -- --limit 10
+```
+
 The command executes the script locally, requires exactly one
 `launch_cloud(...)` call, and creates a normal cloud job from that launch. The
 job registers its real stage-0 shards and allocates one non-preemptible worker.
@@ -42,6 +48,13 @@ After editing source or the pipeline graph, perform a complete sync and rerun:
 ```bash
 macrodata debug sync pipeline.py
 macrodata debug run pipeline.py --max-shards 1
+```
+
+To replace the remembered script arguments for a sync, put the new arguments
+after `--`. A later sync without `--` reuses the last remembered arguments:
+
+```bash
+macrodata debug sync pipeline.py -- --limit 20
 ```
 
 Sync executes the script again, captures its current cloud launch, uploads the
@@ -89,6 +102,9 @@ macrodata debug exec pipeline.py -- python -V
 macrodata debug exec pipeline.py -- bash -lc 'nvidia-smi && pip freeze | head'
 ```
 
+`doctor` includes both a small `packages` summary for important runtime tools
+and the complete installed distribution map in `installed_packages`.
+
 Exec commands time out after 20 minutes by default. Use `--timeout SECONDS` for
 a different limit.
 
@@ -123,10 +139,3 @@ If the retained worker crashes or Modal replaces it, the job and debug session
 fail rather than silently continuing in a new container. Start a new session to
 continue. Synchronized files, profiles, and changes made through exec are
 ephemeral.
-
-## Internal Notes
-
-Shard claims and completions are written to an atomic, private SQLite ledger in
-the retained worker rather than the job's canonical shard ledger. Each attempt
-resets that private ledger and passes it explicitly to the normal cloud worker
-entrypoint.
