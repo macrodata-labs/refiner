@@ -359,5 +359,7 @@ def test_tfds_reader_caps_oversized_automatic_plan(monkeypatch) -> None:
     shards = reader.list_shards()
 
     assert len(shards) == 1_000
-    assert shards[0].descriptor.start == 0
-    assert shards[-1].descriptor.end == 10_001
+    first = cast(RowRangeDescriptor, shards[0].descriptor)
+    last = cast(RowRangeDescriptor, shards[-1].descriptor)
+    assert first.start == 0
+    assert last.end == 10_001
