@@ -42,6 +42,15 @@ GPU requests apply per worker. If your transform uses a model directly inside
 the worker, make sure the worker count and GPU count match the model loading
 pattern you want.
 
+Macrodata Cloud supports these GPU types:
+
+- `h100`
+- `l40s`
+- `a100`
+- `a10`
+- `l4`
+- `t4`
+
 ## Runtime services
 
 Some inference workloads are better served by a runtime service, such as vLLM,

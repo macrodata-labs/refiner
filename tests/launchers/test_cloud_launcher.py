@@ -8,7 +8,7 @@ from typing import cast
 
 import refiner as mdr
 from refiner.pipeline import read_jsonl
-from refiner.pipeline.resources import GPU
+from refiner.pipeline.resources import GPU, GPUType, SUPPORTED_GPU_TYPES
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
 from refiner.launchers.cloud import CloudLauncher
 from refiner.platform.auth import MacrodataCredentialsError
@@ -587,7 +587,10 @@ def test_pipeline_launch_cloud_embeds_runtime_services(monkeypatch) -> None:
     assert request.stage_payloads[0].runtime_services[0].to_dict() == expected_service
 
 
-def test_pipeline_launch_cloud_accepts_structured_gpu(monkeypatch) -> None:
+@pytest.mark.parametrize("gpu_type", SUPPORTED_GPU_TYPES)
+def test_pipeline_launch_cloud_accepts_structured_gpu(
+    monkeypatch, gpu_type: GPUType
+) -> None:
     captured = _stub_cloud_submit(monkeypatch)
     monkeypatch.setattr(
         "refiner.launchers.cloud.refiner_ref_exists_on_remote",
@@ -596,24 +599,24 @@ def test_pipeline_launch_cloud_accepts_structured_gpu(monkeypatch) -> None:
 
     read_jsonl("input.jsonl").launch_cloud(
         name="demo cloud",
-        gpu=GPU(count=1, type="h100", cuda_version="12.4"),
+        gpu=GPU(count=1, type=gpu_type, cuda_version="12.4"),
     )
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.plan["stages"][0]["gpu"] == {
         "count": 1,
-        "type": "h100",
+        "type": gpu_type,
         "cuda_version": "12.4",
     }
     runtime = request.stage_payloads[0].runtime
-    assert runtime.gpu == GPU(count=1, type="h100", cuda_version="12.4")
+    assert runtime.gpu == GPU(count=1, type=gpu_type, cuda_version="12.4")
 
 
 def test_gpu_rejects_unsupported_values() -> None:
     with pytest.raises(ValueError, match="gpu.count must be > 0"):
         GPU(count=0, type="h100")
-    with pytest.raises(ValueError, match="gpu.type must be one of: h100"):
-        GPU(count=1, type="a100")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="gpu.type must be one of"):
+        GPU(count=1, type="v100")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="gpu.cuda_version must be one of"):
         GPU(count=1, type="h100", cuda_version="13.0")  # type: ignore[arg-type]
 

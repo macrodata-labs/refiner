@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
-GPUType = Literal["h100"]
+GPUType = Literal["h100", "l40s", "a100", "a10", "l4", "t4"]
 CUDAVersion = Literal["12.4", "12.6", "12.8"]
 
 SUPPORTED_GPU_TYPES: tuple[str, ...] = get_args(GPUType)
