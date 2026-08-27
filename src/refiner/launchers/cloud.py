@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 
 _FALLBACK_ENV_VAR = "MACRODATA_FALLBACK_TO_LATEST_PYPI"
 _CLOUD_FILE_BATCH_SIZE = 100
+_CLOUD_PROVIDER_KEYS = {"modal": "modal", "aws": "aws_batch"}
 _SUPPORTED_CLOUDS = frozenset({"aws", "oci", "gcp"})
 _SUPPORTED_REGIONS = frozenset(
     {
@@ -145,6 +146,8 @@ class CloudLauncher(BaseLauncher):
     Args:
         pipeline: Pipeline to execute.
         name: Human-readable run name.
+        provider: Cloud compute provider. Supported values are ``"modal"`` and
+            ``"aws"``.
         num_workers: Requested logical worker count for cloud execution, or
             ``"auto"`` to launch one worker per stage shard.
         cpus_per_worker: Optional requested CPU cores per worker.
@@ -166,6 +169,7 @@ class CloudLauncher(BaseLauncher):
         *,
         pipeline: "RefinerPipeline",
         name: str,
+        provider: str = "modal",
         num_workers: int | Literal["auto"] = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
@@ -192,6 +196,12 @@ class CloudLauncher(BaseLauncher):
             raise ValueError("unsafe_continue requires continue_from_job")
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
+        normalized_provider = provider.strip().lower()
+        if normalized_provider not in _CLOUD_PROVIDER_KEYS:
+            raise ValueError("provider must be 'modal' or 'aws'")
+        if normalized_provider == "aws" and gpu is not None:
+            raise ValueError("provider='aws' does not support GPU workers")
+        self.provider = normalized_provider
         self.cpus_per_worker = cpus_per_worker
         self.mem_mb_per_worker = mem_mb_per_worker
         self.cloud = _normalize_cloud(cloud)
@@ -469,6 +479,7 @@ class CloudLauncher(BaseLauncher):
             )
         allocation = {
             "schema_version": 1,
+            "provider": self.provider,
             "environment": manifest.get("environment"),
             "dependencies": manifest.get("dependencies"),
             "stages": stage_specs,
@@ -554,12 +565,19 @@ class CloudLauncher(BaseLauncher):
                 )
             )
         try:
+            if self.provider == "aws" and any(
+                collect_pipeline_services(stage.pipeline) for stage in stages
+            ):
+                raise ValueError(
+                    "provider='aws' does not support managed runtime services"
+                )
             pipeline_payloads = self._upload_stage_payloads(
                 client=client, stages=stages
             )
             request = CloudRunCreateRequest(
                 name=self.name,
                 plan=plan,
+                provider=_CLOUD_PROVIDER_KEYS[self.provider],
                 stage_payloads=[
                     StagePayload(
                         stage_index=stage.index,

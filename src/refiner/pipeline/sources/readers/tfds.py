@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 from collections.abc import Iterator, Mapping, Sequence
 from functools import reduce
+from math import ceil
 from operator import getitem
 from pathlib import Path
 import tempfile
@@ -13,15 +14,13 @@ from refiner.pipeline.data.row import DictRow
 from refiner.pipeline.data.shard import RowRangeDescriptor, Shard
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
-from refiner.pipeline.sources.shard_limit import (
-    validate_num_shards,
-    validate_shard_count,
-)
 from refiner.pipeline.sources.readers.utils import (
+    DEFAULT_MAX_AUTOMATIC_SHARDS,
     PathSelection,
     path_selection_map,
     tensorflow_batch_to_table,
     tensorflow_value_to_python,
+    validate_explicit_num_shards,
 )
 from refiner.utils import check_required_dependencies
 from refiner.video import VideoFrameSequence
@@ -85,7 +84,7 @@ class TfdsReader(BaseSource):
             raise ValueError("examples_per_shard must be > 0")
         if num_shards is not None and num_shards <= 0:
             raise ValueError("num_shards must be > 0 when provided")
-        validate_num_shards(num_shards)
+        validate_explicit_num_shards(num_shards)
         self.inputs = (input,) if isinstance(input, str) else tuple(input)
         if not self.inputs:
             raise ValueError("read_tfds input sequence cannot be empty")
@@ -262,13 +261,15 @@ class TfdsReader(BaseSource):
         counts = [int(count or 0) for count in self.num_examples_by_input]
         total_examples = sum(counts)
         shards: list[Shard] = []
-        if self.num_shards is None:
-            planned_count = sum(
-                (count + self.examples_per_shard - 1) // self.examples_per_shard
-                for count in counts
-                if count > 0
+        num_shards = self.num_shards
+        if num_shards is None:
+            automatic_shards = sum(
+                ceil(count / self.examples_per_shard) for count in counts if count > 0
             )
-            validate_shard_count(planned_count, source="TFDS automatic")
+            if automatic_shards > DEFAULT_MAX_AUTOMATIC_SHARDS:
+                num_shards = DEFAULT_MAX_AUTOMATIC_SHARDS
+
+        if num_shards is None:
             offset = 0
             for count in counts:
                 for start in range(offset, offset + count, self.examples_per_shard):
@@ -281,9 +282,9 @@ class TfdsReader(BaseSource):
                     )
                 offset += count
             return shards
-        for ordinal in range(self.num_shards):
-            start = ordinal * total_examples // self.num_shards
-            end = (ordinal + 1) * total_examples // self.num_shards
+        for ordinal in range(num_shards):
+            start = ordinal * total_examples // num_shards
+            end = (ordinal + 1) * total_examples // num_shards
             if start != end:
                 shards.append(
                     Shard.from_row_range(

@@ -167,6 +167,19 @@ def test_tfds_reader_shards_by_example_range(tmp_path: Path, monkeypatch) -> Non
     }
 
 
+def test_tfds_automatic_shard_planning_is_capped(monkeypatch) -> None:
+    reader = TfdsReader("tiny_dataset", examples_per_shard=1)
+    reader.num_examples_by_input = [1001]
+    monkeypatch.setattr(reader, "_ensure_builders", lambda: None)
+
+    shards = reader.list_shards()
+
+    assert len(shards) == 1000
+    ranges = [cast(RowRangeDescriptor, shard.descriptor) for shard in shards]
+    assert ranges[0].start == 0
+    assert ranges[-1].end == 1001
+
+
 def test_read_tfds_pipeline_entrypoint(tmp_path: Path, monkeypatch) -> None:
     builder = TinyDataset(data_dir=str(tmp_path))
     builder.download_and_prepare()
@@ -338,10 +351,15 @@ def test_tfds_reader_rejects_non_positive_num_shards(
         TfdsReader("tiny_dataset", num_shards=0)
 
 
-def test_tfds_reader_rejects_oversized_automatic_plan(monkeypatch) -> None:
+def test_tfds_reader_caps_oversized_automatic_plan(monkeypatch) -> None:
     reader = TfdsReader("tiny_dataset", examples_per_shard=1)
     reader.num_examples_by_input = [10_001]
     monkeypatch.setattr(reader, "_ensure_builders", lambda: None)
 
-    with pytest.raises(ValueError, match=r"10,000-shard limit"):
-        reader.list_shards()
+    shards = reader.list_shards()
+
+    assert len(shards) == 1_000
+    first = cast(RowRangeDescriptor, shards[0].descriptor)
+    last = cast(RowRangeDescriptor, shards[-1].descriptor)
+    assert first.start == 0
+    assert last.end == 10_001

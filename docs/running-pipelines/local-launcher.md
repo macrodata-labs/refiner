@@ -67,3 +67,13 @@ Use [Cloud Launcher](cloud-launcher.md) when you need:
 - workspace secrets
 - resumable cloud jobs
 - hosted runtime services such as vLLM
+
+## Internal Notes
+
+Spark and Beam/Dataflow schedule partitions through distributed executors;
+Daft and Ray/Ray Data schedule partition tasks through their own runtimes; and
+Hugging Face Datasets exposes explicit process counts for local transforms.
+Refiner instead uses ledger-backed shard claims as its scheduling unit, so
+`num_workers` sets fixed local process concurrency while each worker repeatedly
+claims available shards. Shard count controls work granularity, not the number
+of local worker processes.

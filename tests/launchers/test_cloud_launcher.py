@@ -286,6 +286,56 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert captured["events"] == ["upload-urls", "upload", "complete", "submit"]
 
 
+def test_pipeline_launch_cloud_selects_aws_batch(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="aws cpu job",
+        provider="aws",
+        num_workers=3,
+        cpus_per_worker=2,
+        mem_mb_per_worker=4096,
+    )
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.provider == "aws_batch"
+    assert request.stage_payloads[0].runtime.gpu is None
+
+
+def test_pipeline_launch_cloud_rejects_gpu_for_aws() -> None:
+    with pytest.raises(ValueError, match="does not support GPU"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="invalid aws gpu job",
+            provider="aws",
+            gpu=GPU(count=1, type="h100", cuda_version="12.8"),
+        )
+
+
+def test_pipeline_launch_cloud_rejects_runtime_services_for_aws_before_upload(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+    pipeline = read_jsonl("input.jsonl").map_async(
+        mdr.inference.generate_text(
+            fn=_noop_inference,
+            provider=mdr.inference.VLLMProvider(model="Qwen/Qwen3.5-9B"),
+        )
+    )
+
+    with pytest.raises(SystemExit, match="does not support managed runtime services"):
+        pipeline.launch_cloud(name="invalid aws service job", provider="aws")
+
+    assert captured["events"] == []
+
+
 def test_captured_pipeline_launch_submits_debug_and_does_not_attach(
     monkeypatch, capsys
 ) -> None:
@@ -311,6 +361,25 @@ def test_captured_pipeline_launch_submits_debug_and_does_not_attach(
     assert request.stage_payloads[0].runtime.num_workers == 16
     assert result.job_id == "job-123"
     assert "Cloud job launched" in capsys.readouterr().out
+
+
+def test_debug_launch_preserves_aws_batch_provider(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda _ref: True,
+    )
+
+    launcher = CloudLauncher(
+        pipeline=read_jsonl("input.jsonl"),
+        name="aws debug",
+        provider="aws",
+    )
+    launcher.launch_debug()
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.provider == "aws_batch"
+    assert request.debug is True
 
 
 def test_debug_launch_rejects_continue() -> None:
@@ -410,6 +479,25 @@ def test_debug_allocation_fingerprint_ignores_unselected_workspace_secret(
     second = launcher.prepare_debug_sync(client=cast(MacrodataClient, client))
 
     assert first.allocation_fingerprint == second.allocation_fingerprint
+
+
+def test_debug_allocation_fingerprint_changes_with_provider() -> None:
+    modal = CloudLauncher(pipeline=read_jsonl("input.jsonl"), name="debug")
+    aws = CloudLauncher(
+        pipeline=read_jsonl("input.jsonl"), name="debug", provider="aws"
+    )
+
+    modal_preparation = modal.prepare_debug_sync(
+        client=cast(MacrodataClient, _SecretMetadataClient({}))
+    )
+    aws_preparation = aws.prepare_debug_sync(
+        client=cast(MacrodataClient, _SecretMetadataClient({}))
+    )
+
+    assert (
+        modal_preparation.allocation_fingerprint
+        != aws_preparation.allocation_fingerprint
+    )
 
 
 def test_debug_launch_fingerprint_changes_with_workspace_secret_version(

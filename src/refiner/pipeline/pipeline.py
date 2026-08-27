@@ -792,6 +792,7 @@ class RefinerPipeline:
         self,
         *,
         name: str,
+        provider: str = "modal",
         num_workers: int | Literal["auto"] = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
@@ -810,6 +811,8 @@ class RefinerPipeline:
 
         Args:
             name: Human-readable run name.
+            provider: Cloud compute provider. Supported values are ``"modal"`` and
+                ``"aws"``.
             num_workers: Requested logical worker count, or ``"auto"`` to
                 launch one worker per stage shard.
             cpus_per_worker: Optional requested CPU cores per worker.
@@ -845,6 +848,7 @@ class RefinerPipeline:
         launcher = CloudLauncher(
             pipeline=self,
             name=name,
+            provider=provider,
             num_workers=num_workers,
             cpus_per_worker=cpus_per_worker,
             mem_mb_per_worker=mem_mb_per_worker,

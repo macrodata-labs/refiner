@@ -29,9 +29,22 @@ macrodata debug pipeline.py -- --limit 10
 
 The command executes the script locally, requires exactly one
 `launch_cloud(...)` call, and creates a normal cloud job from that launch. The
-job registers its real stage-0 shards and allocates one non-preemptible worker.
+job registers its real stage-0 shards and allocates one retained worker.
 The CLI remembers the session for the pipeline path, waits for the worker, and
 synchronizes the current project before returning.
+
+The session uses the provider selected by `launch_cloud`. To retain an on-demand
+AWS Batch CPU worker instead of the default Modal worker, set `provider="aws"`
+in the pipeline script:
+
+```python
+pipeline.launch_cloud(
+    name="debug-reader",
+    provider="aws",
+    cpus_per_worker=4,
+    mem_mb_per_worker=8192,
+)
+```
 
 Run a small attempt:
 
@@ -135,7 +148,15 @@ Close the session when finished:
 macrodata debug stop pipeline.py
 ```
 
-If the retained worker crashes or Modal replaces it, the job and debug session
-fail rather than silently continuing in a new container. Start a new session to
-continue. Synchronized files, profiles, and changes made through exec are
-ephemeral.
+If the retained worker crashes or its provider replaces it, the job and debug
+session fail rather than silently continuing in a new container. Start a new
+session to continue. Synchronized files, profiles, and changes made through
+exec are ephemeral. AWS debug sessions remain CPU-only and do not support
+runtime services.
+
+## Internal Notes
+
+Shard claims and completions are written to an atomic, private SQLite ledger in
+the retained worker rather than the job's canonical shard ledger. Each attempt
+resets that private ledger and passes it explicitly to the normal cloud worker
+entrypoint.
