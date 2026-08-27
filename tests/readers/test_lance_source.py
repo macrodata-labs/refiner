@@ -19,6 +19,8 @@ def test_load_lance_rejects_explicit_shard_count_above_limit() -> None:
 def test_load_lance_caps_automatic_shards_without_dropping_fragments() -> None:
     source = object.__new__(LanceSource)
     source.num_shards = None
+    source.row_limit = None
+    source._fragment_row_limits = None
     source._dataset_cache = type(
         "Dataset",
         (),
@@ -143,6 +145,56 @@ def test_load_lance_groups_fragments_into_requested_shards(tmp_path) -> None:
     ]
     assert [int(row["x"]) for row in pipeline.iter_rows()] == list(range(5))
     assert len(load_lance(dataset_uri, num_shards=100).list_shards()) == fragment_count
+
+
+def test_load_lance_limits_leading_rows_across_fragments(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "limited.lance"
+    lance.write_dataset(
+        pa.table({"x": list(range(10))}),
+        str(dataset_uri),
+        max_rows_per_file=3,
+    )
+
+    pipeline = load_lance(
+        dataset_uri,
+        batch_size=2,
+        num_shards=2,
+        row_limit=5,
+    )
+
+    assert [int(row["x"]) for row in pipeline.iter_rows()] == list(range(5))
+    assert len(pipeline.list_shards()) == 2
+    assert pipeline.source.describe()["row_limit"] == 5
+
+
+def test_load_lance_row_limit_allows_short_dataset(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "short.lance"
+    lance.write_dataset(pa.table({"x": [1, 2]}), str(dataset_uri))
+
+    assert [
+        int(row["x"]) for row in load_lance(dataset_uri, row_limit=10).iter_rows()
+    ] == [1, 2]
+
+
+@pytest.mark.parametrize("row_limit", [0, -1])
+def test_load_lance_rejects_nonpositive_row_limit(row_limit: int) -> None:
+    with pytest.raises(ValueError, match="row_limit must be > 0"):
+        LanceSource("unused.lance", row_limit=row_limit)
+
+
+def test_limited_lance_source_rejects_add_columns(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "limited-add-columns.lance"
+    lance.write_dataset(pa.table({"x": [1, 2]}), str(dataset_uri))
+
+    with pytest.raises(ValueError, match="limited Lance source"):
+        load_lance(dataset_uri, row_limit=1).write_lance_dataset(
+            dataset_uri,
+            mode="add_columns",
+            columns=["y"],
+        )
 
 
 def test_load_lance_uses_physical_row_addresses_as_source_row_ids(tmp_path) -> None:
