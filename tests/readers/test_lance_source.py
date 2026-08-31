@@ -168,6 +168,123 @@ def test_load_lance_limits_leading_rows_across_fragments(tmp_path) -> None:
     assert pipeline.source.describe()["row_limit"] == 5
 
 
+def test_load_lance_uses_indexed_reads_for_partial_fragment(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "indexed-limit.lance"
+    dataset = lance.write_dataset(
+        pa.table(
+            {
+                "id": list(range(6)),
+                "payload": [bytes([value]) * 1_024 for value in range(6)],
+            }
+        ),
+        str(dataset_uri),
+    )
+    fragment = dataset.get_fragments()[0]
+    take_calls: list[tuple[list[int], list[str]]] = []
+    scan_columns: list[list[str]] = []
+
+    class TrackingFragment:
+        fragment_id = fragment.fragment_id
+
+        def count_rows(self):
+            return fragment.count_rows()
+
+        def take(self, indices, columns=None):
+            take_calls.append((indices.to_pylist(), list(columns or [])))
+            return fragment.take(indices, columns=columns)
+
+        def to_batches(self, **kwargs):
+            scan_columns.append(list(kwargs.get("columns") or []))
+            return fragment.to_batches(**kwargs)
+
+    class TrackingDataset:
+        def get_fragments(self):
+            return [TrackingFragment()]
+
+    pipeline = load_lance(dataset_uri, batch_size=2, row_limit=3)
+    source = pipeline.source
+    assert isinstance(source, LanceSource)
+    source._dataset_cache = TrackingDataset()
+    source._fragment_row_limits = None
+
+    assert [int(row["id"]) for row in pipeline.iter_rows()] == [0, 1, 2]
+    assert take_calls == [
+        ([0, 1], ["id", "payload"]),
+        ([2], ["id", "payload"]),
+    ]
+    assert scan_columns == [[]]
+
+
+def test_load_lance_indexed_limit_preserves_deleted_row_addresses(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "deleted-limit.lance"
+    dataset = lance.write_dataset(
+        pa.table({"id": list(range(6)), "payload": [b"value"] * 6}),
+        str(dataset_uri),
+    )
+    dataset.delete("id = 1 OR id = 3")
+
+    pipeline = load_lance(dataset_uri, row_limit=3)
+    shard = pipeline.list_shards()[0]
+    units = list(pipeline.source.read_shard(shard))
+    tabular_units = [unit for unit in units if isinstance(unit, Tabular)]
+    assert len(tabular_units) == len(units)
+
+    assert [
+        int(value.as_py())
+        for unit in tabular_units
+        for value in unit.table.column("id")
+    ] == [0, 2, 4]
+    assert [
+        int(value.as_py())
+        for unit in tabular_units
+        for value in unit.table.column(SOURCE_ROW_ID_COLUMN)
+    ] == [0, 2, 4]
+
+
+def test_load_lance_indexed_limit_preserves_classic_blob_references(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "limited-blobs.lance"
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int64()),
+            pa.field(
+                "image",
+                pa.large_binary(),
+                metadata={b"lance-encoding:blob": b"true"},
+            ),
+        ]
+    )
+    lance.write_dataset(
+        pa.Table.from_arrays(
+            [
+                pa.array([1, 2, 3]),
+                pa.array([b"first", None, b"second"], type=pa.large_binary()),
+            ],
+            schema=schema,
+        ),
+        str(dataset_uri),
+    )
+
+    rows = list(load_lance(dataset_uri, row_limit=2).iter_rows())
+
+    assert [int(row["id"]) for row in rows] == [1, 2]
+    assert read_blob(rows[0]["image"]) == b"first"
+    assert rows[1]["image"] is None
+
+
+def test_load_lance_indexed_limit_supports_empty_projection(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "empty-projection.lance"
+    lance.write_dataset(pa.table({"id": [1, 2, 3]}), str(dataset_uri))
+
+    assert [
+        row.to_dict()
+        for row in load_lance(dataset_uri, columns=[], row_limit=2).iter_rows()
+    ] == [{}, {}]
+
+
 def test_load_lance_row_limit_allows_short_dataset(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "short.lance"

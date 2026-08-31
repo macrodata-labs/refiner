@@ -32,6 +32,9 @@ controls the streamed Arrow batch size.
 Set `row_limit` to a positive integer to read only that many leading rows from
 the pinned dataset version. Refiner stops scanning inside the final fragment;
 datasets with fewer rows simply yield all available rows.
+For a partial final fragment, Refiner uses indexed reads for projected values
+instead of decoding the rest of the fragment. This keeps quick tests bounded
+even when projected binary columns contain large values.
 
 Classic Lance blob columns are returned as lazy Refiner blob references:
 
