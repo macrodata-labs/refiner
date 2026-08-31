@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
+from refiner.execution.operators.row import close_async_steps
 from refiner.pipeline.steps import (
     FnAsyncBatchStep,
     FnAsyncRowStep,
@@ -12,7 +13,7 @@ from refiner.pipeline.steps import (
     RefinerStep,
     VectorizedSegmentStep,
 )
-from refiner.worker.context import set_active_step_index
+from refiner.worker.context import logger, set_active_step_index
 
 FactoryStep = FnAsyncRowStep | FnAsyncBatchStep | FnBatchStep | FnTableStep
 
@@ -54,24 +55,43 @@ def initialize_worker_steps(
 ) -> tuple[RefinerStep, ...]:
     """Instantiate each configured factory once for one worker execution."""
     initialized: list[RefinerStep] = []
-    for step in steps:
-        if isinstance(step, VectorizedSegmentStep):
-            initialized.append(
-                replace(
-                    step,
-                    ops=tuple(
-                        _initialize_factory_step(op)
-                        if isinstance(op, FnTableStep)
-                        else op
-                        for op in step.ops
-                    ),
+    try:
+        for step in steps:
+            if isinstance(step, VectorizedSegmentStep):
+                initialized.append(
+                    replace(
+                        step,
+                        ops=tuple(
+                            _initialize_factory_step(op)
+                            if isinstance(op, FnTableStep)
+                            else op
+                            for op in step.ops
+                        ),
+                    )
                 )
+                continue
+            factory_step = _factory_step(step)
+            initialized.append(
+                _initialize_factory_step(factory_step)
+                if factory_step is not None
+                else step
             )
-            continue
-        factory_step = _factory_step(step)
-        initialized.append(
-            _initialize_factory_step(factory_step) if factory_step is not None else step
-        )
+    except BaseException as initialization_error:
+        try:
+            close_async_steps(initialized)
+        except Exception as teardown_error:  # noqa: BLE001
+            logger.warning(
+                "factory cleanup failed after initialization error: {}: {}",
+                type(teardown_error).__name__,
+                teardown_error,
+            )
+            add_note = getattr(initialization_error, "add_note", None)
+            if callable(add_note):
+                add_note(
+                    "Factory cleanup also failed: "
+                    f"{type(teardown_error).__name__}: {teardown_error}"
+                )
+        raise
     return tuple(initialized)
 
 

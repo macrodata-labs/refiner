@@ -42,11 +42,15 @@ def close_async_steps(steps: Sequence[RefinerStep]) -> None:
         close = getattr(fn, "aclose", None)
         if close is not None:
             close_fns.append(cast(AsyncCloseFn, close))
+    first_error: Exception | None = None
     for close in close_fns:
         try:
             submit(close()).result()
         except Exception as e:
-            raise AsyncStepTeardownError(str(e)) from e
+            if first_error is None:
+                first_error = e
+    if first_error is not None:
+        raise AsyncStepTeardownError(str(first_error)) from first_error
 
 
 def execute_row_steps(

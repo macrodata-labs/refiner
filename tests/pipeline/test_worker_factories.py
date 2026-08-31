@@ -116,6 +116,37 @@ def test_map_async_factory_is_reused_and_closed() -> None:
     assert instances[0].close_calls == 1
 
 
+def test_factory_initialization_failure_closes_earlier_async_callable() -> None:
+    instances: list[AsyncMapper] = []
+
+    class AsyncMapper:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def __call__(self, row: Row) -> Row:
+            return row
+
+        async def aclose(self) -> None:
+            self.close_calls += 1
+
+    def create_mapper() -> AsyncMapper:
+        mapper = AsyncMapper()
+        instances.append(mapper)
+        return mapper
+
+    pipeline = (
+        from_items([{"x": 1}])
+        .map_async(factory=create_mapper)
+        .map_async(factory=lambda: object())
+    )
+
+    with pytest.raises(TypeError, match="factory must return a callable"):
+        list(pipeline.iter_rows())
+
+    assert len(instances) == 1
+    assert instances[0].close_calls == 1
+
+
 @pytest.mark.parametrize(
     "operation", ["map_table", "batch_map", "batch_map_async", "map_async"]
 )
