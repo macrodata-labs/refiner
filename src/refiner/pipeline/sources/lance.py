@@ -271,6 +271,90 @@ class LanceSource(BaseSource):
             out = out.set_column(index, field, reference)
         return out
 
+    def _source_unit(
+        self,
+        table: pa.Table,
+        row_addresses: pa.ChunkedArray | pa.Array,
+        blob_paths: dict[str, str],
+    ) -> SourceUnit:
+        if table.num_columns == 0:
+            return Tabular(pa.table({SOURCE_ROW_ID_COLUMN: row_addresses}))
+        return Tabular(
+            set_or_append_column(
+                self._normalize_blob_columns(table, blob_paths),
+                SOURCE_ROW_ID_COLUMN,
+                row_addresses,
+            )
+        )
+
+    def _read_fragment_prefix(
+        self,
+        fragment: Any,
+        row_count: int,
+        blob_paths: dict[str, str],
+    ) -> Iterator[SourceUnit]:
+        """Read a fragment prefix without scanning projected value columns."""
+        selected_columns = (
+            list(self.columns) if self.columns is not None else list(self._schema.names)
+        )
+        blob_columns = [
+            name for name in selected_columns if name in self._blob_field_ids
+        ]
+        value_columns = [
+            name for name in selected_columns if name not in self._blob_field_ids
+        ]
+        rows_read = 0
+        for address_batch in fragment.to_batches(
+            columns=blob_columns,
+            batch_size=self.batch_size,
+            batch_readahead=1,
+            limit=row_count,
+            with_row_address=True,
+            blob_handling="blobs_descriptions",
+        ):
+            batch_rows = address_batch.num_rows
+            if batch_rows == 0:
+                continue
+            value_table = (
+                fragment.take(
+                    pa.array(
+                        range(rows_read, rows_read + batch_rows),
+                        type=pa.uint64(),
+                    ),
+                    columns=value_columns,
+                )
+                if value_columns
+                else None
+            )
+            if value_table is not None and value_table.num_rows != batch_rows:
+                raise ValueError(
+                    f"Lance fragment {fragment.fragment_id} indexed read yielded "
+                    f"{value_table.num_rows} rows; expected {batch_rows}"
+                )
+
+            address_table = pa.Table.from_batches([address_batch])
+            arrays: list[pa.ChunkedArray] = []
+            fields: list[pa.Field] = []
+            for name in selected_columns:
+                source = address_table if name in self._blob_field_ids else value_table
+                if source is None:
+                    raise AssertionError(f"Missing Lance source column {name!r}")
+                arrays.append(source.column(name))
+                fields.append(source.schema.field(name))
+            table = pa.Table.from_arrays(
+                arrays,
+                schema=pa.schema(fields, metadata=self._schema.metadata),
+            )
+            row_addresses = address_table.column(_LANCE_ROW_ADDRESS_COLUMN)
+            rows_read += batch_rows
+            yield self._source_unit(table, row_addresses, blob_paths)
+
+        if rows_read != row_count:
+            raise ValueError(
+                f"Lance fragment {fragment.fragment_id} yielded {rows_read} rows; "
+                f"expected {row_count}"
+            )
+
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         descriptor = shard.descriptor
         if not isinstance(descriptor, RowRangeDescriptor):
@@ -286,12 +370,18 @@ class LanceSource(BaseSource):
         for fragment_index in range(descriptor.start, descriptor.end):
             fragment = fragments[fragment_index]
             planned_rows = planned_fragment_rows[fragment_index]
-            expected_rows = (
-                int(fragment.count_rows()) if planned_rows < 0 else planned_rows
-            )
+            fragment_rows = int(fragment.count_rows())
+            expected_rows = fragment_rows if planned_rows < 0 else planned_rows
             if expected_rows == 0:
                 continue
             blob_paths = self._fragment_blob_paths(fragment)
+            if expected_rows < fragment_rows:
+                yield from self._read_fragment_prefix(
+                    fragment,
+                    expected_rows,
+                    blob_paths,
+                )
+                continue
             rows_read = 0
             for batch in fragment.to_batches(
                 columns=list(self.columns) if self.columns is not None else None,
@@ -299,8 +389,6 @@ class LanceSource(BaseSource):
                 with_row_address=True,
                 blob_handling="blobs_descriptions",
             ):
-                if rows_read + batch.num_rows > expected_rows:
-                    batch = batch.slice(0, expected_rows - rows_read)
                 table = self._normalize_blob_columns(
                     pa.Table.from_batches([batch]),
                     blob_paths,
@@ -314,8 +402,6 @@ class LanceSource(BaseSource):
                         row_addresses,
                     )
                 )
-                if rows_read >= expected_rows:
-                    break
             if rows_read != expected_rows:
                 raise ValueError(
                     f"Lance fragment {fragment.fragment_id} yielded {rows_read} rows; "

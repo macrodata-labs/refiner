@@ -35,6 +35,9 @@ controls the streamed Arrow batch size.
 Set `max_rows` to a non-negative integer to read only that many leading rows from
 the pinned dataset version. Refiner stops scanning inside the final fragment;
 datasets with fewer rows simply yield all available rows.
+For a partial final fragment, Refiner uses indexed reads for projected values
+instead of decoding the rest of the fragment. This keeps quick tests bounded
+even when projected binary columns contain large values.
 
 The limit is applied before pipeline transforms. Omit `max_rows` to read the
 entire pinned version, or use `max_rows=0` to produce no source rows. For
