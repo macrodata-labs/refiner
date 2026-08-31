@@ -777,16 +777,26 @@ class BlobAssetManager:
                 [(offset, size) for _, offset, size in references], source_size
             ):
                 continue
-            block = self._block(shard_id, column_name, source_size)
-            output_offset = block.size
-            remaining = source_size
-            with source.open("rb") as stream:
-                while remaining:
-                    chunk = stream.read(min(remaining, 8 * 1024 * 1024))
-                    if not chunk:
-                        raise EOFError("asset ended before its declared size")
+            staged = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
+            try:
+                remaining = source_size
+                with source.open("rb") as stream:
+                    while remaining:
+                        chunk = stream.read(min(remaining, 8 * 1024 * 1024))
+                        if not chunk:
+                            raise EOFError("asset ended before its declared size")
+                        staged.write(chunk)
+                        remaining -= len(chunk)
+                staged.seek(0)
+
+                # Opening a deterministic retry destination can truncate the
+                # source itself. Fully stage it before _block() mutates output.
+                block = self._block(shard_id, column_name, source_size)
+                output_offset = block.size
+                while chunk := staged.read(8 * 1024 * 1024):
                     block.stream.write(chunk)
-                    remaining -= len(chunk)
+            finally:
+                staged.close()
             block.size += source_size
             for index, offset, size in references:
                 rewritten[index] = {

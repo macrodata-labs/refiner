@@ -1757,6 +1757,52 @@ def test_blob_writer_coalesces_complete_source_blob_references(
     assert references[1]["offset"] == 3
 
 
+def test_blob_writer_stages_complete_source_before_retry_destination_is_opened(
+    tmp_path,
+) -> None:
+    output_path = tmp_path / "retry-assets"
+    output = DataFolder.resolve(output_path)
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    worker = worker_token_for(worker_id)
+    source = output_path / "assets" / f"{shard_id}__w{worker}" / "video" / "00000.blob"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"abcdef")
+    field = datatype.blob_reference("video").with_name("video")
+    table = pa.Table.from_arrays(
+        [
+            pa.array(
+                [
+                    {"path": str(source), "offset": 0, "size": 3},
+                    {"path": str(source), "offset": 3, "size": 3},
+                ],
+                type=field.type,
+            )
+        ],
+        schema=pa.schema([field]),
+    )
+    manager = BlobAssetManager(
+        output,
+        config=BlobAssetConfig(target_bytes=1024),
+        filename_template="{shard_id}.parquet",
+    )
+    manager.set_input_schema(table.schema)
+
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id=worker_id,
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        rewritten = manager.rewrite_table(shard_id, table)
+        manager.close()
+
+    references = rewritten.column("video").to_pylist()
+    assert [read_blob(reference) for reference in references] == [b"abc", b"def"]
+    assert source.read_bytes() == b"abcdef"
+
+
 def test_blob_writer_keeps_partial_source_blob_on_range_copy_path(
     tmp_path, monkeypatch
 ) -> None:
