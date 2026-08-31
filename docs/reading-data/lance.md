@@ -22,14 +22,14 @@ pipeline = mdr.load_lance(
     columns=["image", "frame_id"],
     batch_size=128,
     num_shards=32,
-    row_limit=2_000,
+    max_rows=2_000,
 )
 ```
 
 When `version` is omitted, Refiner resolves the latest version once and pins it
 for the pipeline. Column projection is pushed into Lance, and `batch_size`
 controls the streamed Arrow batch size.
-Set `row_limit` to a positive integer to read only that many leading rows from
+Set `max_rows` to a non-negative integer to read only that many leading rows from
 the pinned dataset version. Refiner stops scanning inside the final fragment;
 datasets with fewer rows simply yield all available rows.
 

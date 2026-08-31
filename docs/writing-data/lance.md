@@ -133,7 +133,7 @@ pipeline = (
     mdr.load_lance(
         "s3://my-bucket/hands.lance",
         columns=["image"],
-        row_limit=200_000,
+        max_rows=200_000,
     )
     .map(
         embed_hand,
@@ -147,7 +147,7 @@ pipeline = (
 )
 ```
 
-Processed rows receive their computed values. Rows beyond `row_limit`, or rows
+Processed rows receive their computed values. Rows beyond `max_rows`, or rows
 removed by a filter, receive null. Supply one Arrow-compatible scalar for every
 column or a mapping for per-column defaults:
 

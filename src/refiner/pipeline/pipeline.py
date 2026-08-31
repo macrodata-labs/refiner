@@ -701,7 +701,7 @@ class RefinerPipeline:
                 raise ValueError(
                     "add_columns requires a pipeline created by load_lance"
                 )
-            if self.source.row_limit is not None and not isinstance(mode, AddColumns):
+            if self.source.max_rows is not None and not isinstance(mode, AddColumns):
                 raise ValueError("add_columns does not support a limited Lance source")
             source_uri = self.source.dataset_uri
             source_version = self.source.version
@@ -1378,15 +1378,13 @@ def load_lance(
     columns: Sequence[str] | None = None,
     batch_size: int = 65_536,
     num_shards: int | None = None,
-    row_limit: int | None = None,
     max_rows: int | None = None,
 ) -> RefinerPipeline:
     """Create a pipeline over one immutable version of a Lance dataset.
 
     ``num_shards`` groups whole, adjacent Lance fragments into the requested
     number of scheduling shards without splitting individual fragments.
-    ``row_limit`` reads at most that many leading rows from the pinned version.
-    ``max_rows`` is a backward-compatible alias that additionally permits zero.
+    ``max_rows`` reads at most that many leading rows from the pinned version.
     """
     return RefinerPipeline(
         source=LanceSource(
@@ -1395,7 +1393,6 @@ def load_lance(
             columns=columns,
             batch_size=batch_size,
             num_shards=num_shards,
-            row_limit=row_limit,
             max_rows=max_rows,
         )
     )
