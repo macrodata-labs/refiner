@@ -4,7 +4,7 @@ import pyarrow as pa
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
 
-from refiner import load_lance, read_blob
+from refiner import AddColumns, load_lance, read_blob
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.shard import SOURCE_ROW_ID_COLUMN, RowRangeDescriptor
 from refiner.pipeline.sources.lance import LanceSource
@@ -195,6 +195,36 @@ def test_limited_lance_source_rejects_add_columns(tmp_path) -> None:
             mode="add_columns",
             columns=["y"],
         )
+
+
+def test_limited_lance_source_adds_columns_with_null_fill(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "limited-add-columns-fill.lance"
+    base = lance.write_dataset(
+        pa.table({"x": list(range(8))}),
+        str(dataset_uri),
+        max_rows_per_file=3,
+    )
+
+    (
+        load_lance(dataset_uri, version=base.version, row_limit=4, batch_size=2)
+        .map(lambda row: {"y": int(row["x"]) * 10}, dtypes={"y": datatype.int64()})
+        .write_lance_dataset(
+            dataset_uri,
+            mode=AddColumns(),
+            columns=["y"],
+        )
+        .launch_local(
+            name="limited-add-columns-fill",
+            num_workers=1,
+            rundir=str(tmp_path / "limited-add-columns-fill-run"),
+        )
+    )
+
+    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
+        "x": list(range(8)),
+        "y": [0, 10, 20, 30, None, None, None, None],
+    }
 
 
 def test_load_lance_uses_physical_row_addresses_as_source_row_ids(tmp_path) -> None:

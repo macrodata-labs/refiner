@@ -11,7 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
 
-from refiner import col, read_blob
+from refiner import AddColumns, Append, Create, Overwrite, col, read_blob
 from refiner.io import DataFolder
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.row import DictRow, Row
@@ -48,6 +48,14 @@ class _FinalizedWorkersRuntime:
     ) -> list[FinalizedShardWorker]:
         assert stage_index == 0
         return self._rows
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [(Create(), "create"), (Append(), "append"), (Overwrite(), "overwrite")],
+)
+def test_lance_write_mode_dataclasses_normalize(mode, expected, tmp_path) -> None:
+    assert LanceDatasetSink(tmp_path / "output.lance", mode=mode).mode == expected
 
 
 class _PartialMissingStream:
@@ -483,6 +491,83 @@ def test_lance_add_columns_handles_more_fragments_than_io_threads(tmp_path) -> N
         "x": list(range(12)),
         "y": [value * 10 for value in range(12)],
     }
+
+
+def test_lance_add_columns_fills_filtered_rows(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "filtered-column-fill.lance"
+    base = lance.write_dataset(
+        pa.table({"x": list(range(6))}),
+        str(dataset_uri),
+        max_rows_per_file=2,
+    )
+
+    (
+        load_lance(dataset_uri, version=base.version)
+        .filter(lambda row: int(row["x"]) % 2 == 0)
+        .map(lambda row: {"y": int(row["x"]) * 10}, dtypes={"y": datatype.int64()})
+        .write_lance_dataset(
+            dataset_uri,
+            mode=AddColumns(fill={"y": -1}),
+            columns=["y"],
+        )
+        .launch_local(
+            name="lance-filtered-column-fill",
+            num_workers=1,
+            rundir=str(tmp_path / "filtered-column-fill-run"),
+        )
+    )
+
+    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
+        "x": list(range(6)),
+        "y": [0, -1, 20, -1, 40, -1],
+    }
+
+
+def test_lance_add_columns_fills_when_every_row_is_filtered(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "all-filtered-column-fill.lance"
+    base = lance.write_dataset(
+        pa.table({"x": list(range(4))}),
+        str(dataset_uri),
+        max_rows_per_file=2,
+    )
+
+    (
+        load_lance(dataset_uri, version=base.version)
+        .map(lambda _row: {"y": 0}, dtypes={"y": datatype.int64()})
+        .filter(lambda _row: False)
+        .write_lance_dataset(
+            dataset_uri,
+            mode=AddColumns(fill={"y": -1}),
+            columns=["y"],
+        )
+        .launch_local(
+            name="lance-all-filtered-column-fill",
+            num_workers=1,
+            rundir=str(tmp_path / "all-filtered-column-fill-run"),
+        )
+    )
+
+    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
+        "x": list(range(4)),
+        "y": [-1, -1, -1, -1],
+    }
+
+
+def test_lance_add_columns_rejects_unknown_fill_column(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "unknown-fill-column.lance"
+    base = lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+
+    with pytest.raises(ValueError, match="unknown columns: z"):
+        LanceDatasetSink(
+            dataset_uri,
+            mode=AddColumns(fill={"z": 0}),
+            columns=["y"],
+            source_uri=str(dataset_uri),
+            source_version=base.version,
+        )
 
 
 def test_lance_add_columns_accepts_equivalent_nested_metadata_order(tmp_path) -> None:

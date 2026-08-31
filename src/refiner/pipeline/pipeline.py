@@ -31,11 +31,13 @@ from refiner.pipeline.steps import (
     WithColumnsStep,
 )
 from refiner.pipeline.sinks import (
+    AddColumns,
     BaseSink,
+    Create,
     JsonlSink,
     LanceDatasetSink,
     LanceSink,
-    LanceWriteMode,
+    LanceWriteConfig,
     ParquetSink,
     ZarrSink,
 )
@@ -679,19 +681,27 @@ class RefinerPipeline:
         self,
         output: DataFolderLike,
         *,
-        mode: LanceWriteMode = "create",
+        mode: LanceWriteConfig = Create(),
         columns: Sequence[str] | None = None,
         assets: AssetWriteConfig | None = None,
     ) -> "RefinerPipeline":
-        """Attach a distributed Lance dataset writer or schema-evolution sink."""
+        """Attach a distributed Lance dataset writer or schema-evolution sink.
+
+        Use ``mode=AddColumns(fill=...)`` with a bounded or filtered
+        ``load_lance`` source. Computed rows receive the pipeline output and
+        omitted rows receive the configured scalar or per-column fill value.
+        The legacy ``mode="add_columns"`` remains strict and requires exactly
+        one output for every source row.
+        """
         source_uri: str | None = None
         source_version: int | None = None
-        if mode == "add_columns":
+        is_add_columns = mode == "add_columns" or isinstance(mode, AddColumns)
+        if is_add_columns:
             if not isinstance(self.source, LanceSource):
                 raise ValueError(
                     "add_columns requires a pipeline created by load_lance"
                 )
-            if self.source.row_limit is not None:
+            if self.source.row_limit is not None and not isinstance(mode, AddColumns):
                 raise ValueError("add_columns does not support a limited Lance source")
             source_uri = self.source.dataset_uri
             source_version = self.source.version
