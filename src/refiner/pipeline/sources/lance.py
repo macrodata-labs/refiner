@@ -69,15 +69,15 @@ class LanceSource(BaseSource):
         columns: Sequence[str] | None = None,
         batch_size: int = 65_536,
         num_shards: int | None = None,
-        row_limit: int | None = None,
+        max_rows: int | None = None,
     ) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be > 0")
         if columns is not None and len(set(columns)) != len(columns):
             raise ValueError("Lance columns must be unique")
         validate_explicit_num_shards(num_shards)
-        if row_limit is not None and row_limit <= 0:
-            raise ValueError("row_limit must be > 0")
+        if max_rows is not None and max_rows < 0:
+            raise ValueError("max_rows must be >= 0")
 
         self.input = DataFolder.resolve(input)
         if self.input.has_explicit_filesystem_configuration:
@@ -90,9 +90,9 @@ class LanceSource(BaseSource):
         self.columns = tuple(columns) if columns is not None else None
         self.batch_size = int(batch_size)
         self.num_shards = num_shards
-        self.row_limit = int(row_limit) if row_limit is not None else None
+        self.max_rows = int(max_rows) if max_rows is not None else None
         self._dataset_cache: Any | None = None
-        self._fragment_row_limits: tuple[int, ...] | None = None
+        self._planned_rows_by_fragment: tuple[int, ...] | None = None
 
         dataset = _import_lance().dataset(self.dataset_uri, version=version)
         self.version = int(dataset.version)
@@ -164,14 +164,14 @@ class LanceSource(BaseSource):
         state["_dataset_cache"] = None
         return state
 
-    def _planned_fragment_row_limits(self) -> tuple[int, ...]:
-        if self._fragment_row_limits is not None:
-            return self._fragment_row_limits
+    def _planned_fragment_rows(self) -> tuple[int, ...]:
+        if self._planned_rows_by_fragment is not None:
+            return self._planned_rows_by_fragment
         fragments = self._dataset().get_fragments()
-        if self.row_limit is None:
+        if self.max_rows is None:
             limits = tuple(-1 for _ in fragments)
         else:
-            remaining = self.row_limit
+            remaining = self.max_rows
             planned: list[int] = []
             for fragment in fragments:
                 if remaining <= 0:
@@ -184,11 +184,11 @@ class LanceSource(BaseSource):
                 planned.append(take_rows)
                 remaining -= take_rows
             limits = tuple(planned)
-        self._fragment_row_limits = limits
+        self._planned_rows_by_fragment = limits
         return limits
 
     def list_shards(self) -> list[Shard]:
-        fragment_count = len(self._planned_fragment_row_limits())
+        fragment_count = len(self._planned_fragment_rows())
         if fragment_count == 0:
             return []
         shard_count = (
@@ -282,10 +282,10 @@ class LanceSource(BaseSource):
             or descriptor.end > len(fragments)
         ):
             raise ValueError("Lance shard fragment range is invalid")
-        fragment_row_limits = self._planned_fragment_row_limits()
+        planned_fragment_rows = self._planned_fragment_rows()
         for fragment_index in range(descriptor.start, descriptor.end):
             fragment = fragments[fragment_index]
-            planned_rows = fragment_row_limits[fragment_index]
+            planned_rows = planned_fragment_rows[fragment_index]
             expected_rows = (
                 int(fragment.count_rows()) if planned_rows < 0 else planned_rows
             )
@@ -329,7 +329,7 @@ class LanceSource(BaseSource):
             "columns": list(self.columns) if self.columns is not None else None,
             "batch_size": self.batch_size,
             "num_shards": self.num_shards,
-            "row_limit": self.row_limit,
+            "max_rows": self.max_rows,
         }
 
 

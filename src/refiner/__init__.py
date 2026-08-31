@@ -15,6 +15,10 @@ _LAZY_MODULES = {
 }
 
 _LAZY_ATTRS = {
+    "AddColumns": "refiner.pipeline.sinks.lance",
+    "Append": "refiner.pipeline.sinks.lance",
+    "Create": "refiner.pipeline.sinks.lance",
+    "Overwrite": "refiner.pipeline.sinks.lance",
     "CUDAVersion": "refiner.pipeline",
     "BlobAssetConfig": "refiner.pipeline.sinks.assets",
     "FileAssetConfig": "refiner.pipeline.sinks.assets",
@@ -55,6 +59,10 @@ _LAZY_ATTRS = {
 
 __all__ = [
     # sources
+    "AddColumns",
+    "Append",
+    "Create",
+    "Overwrite",
     "CUDAVersion",
     "BlobAssetConfig",
     "FileAssetConfig",
@@ -131,6 +139,7 @@ if TYPE_CHECKING:
     import refiner.text as text
     import refiner.video as video
     from refiner.launchers.secrets import Secrets
+    from refiner.pipeline.sinks.lance import AddColumns, Append, Create, Overwrite
     from refiner.io import read_blob
     from refiner.pipeline import (
         CUDAVersion,

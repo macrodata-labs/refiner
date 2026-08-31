@@ -4,6 +4,10 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 _LAZY_ATTRS = {
+    "AddColumns": "refiner.pipeline.sinks.lance",
+    "Append": "refiner.pipeline.sinks.lance",
+    "Create": "refiner.pipeline.sinks.lance",
+    "Overwrite": "refiner.pipeline.sinks.lance",
     "Row": "refiner.pipeline.data.row",
     "Shard": "refiner.pipeline.data.shard",
     "RefinerPipeline": "refiner.pipeline.pipeline",
@@ -32,6 +36,10 @@ _LAZY_ATTRS = {
 }
 
 __all__ = [
+    "AddColumns",
+    "Append",
+    "Create",
+    "Overwrite",
     "CUDAVersion",
     "GPU",
     "GPUType",
@@ -75,6 +83,7 @@ def __dir__() -> list[str]:
 
 
 if TYPE_CHECKING:
+    from refiner.pipeline.sinks.lance import AddColumns, Append, Create, Overwrite
     from refiner.pipeline.data.row import Row
     from refiner.pipeline.data.shard import Shard
     from refiner.pipeline.pipeline import (

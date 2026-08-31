@@ -10,7 +10,11 @@ from refiner.pipeline.expressions import Expr, lit
 from refiner.io.fileset import DataFileSetLike
 from refiner.pipeline.resources import GPU
 from refiner.pipeline.steps import (
+    AsyncBatchFactory,
+    AsyncBatchFn,
+    AsyncMapFactory,
     AsyncMapFn,
+    BatchFactory,
     BatchFn,
     CastStep,
     DropStep,
@@ -18,6 +22,7 @@ from refiner.pipeline.steps import (
     FilterRowStep,
     FlatMapFn,
     FnAsyncRowStep,
+    FnAsyncBatchStep,
     FnBatchStep,
     FnFlatMapStep,
     FnRowStep,
@@ -26,16 +31,20 @@ from refiner.pipeline.steps import (
     RenameStep,
     RefinerStep,
     SelectStep,
+    TableFactory,
+    TableFn,
     VectorizedOp,
     VectorizedSegmentStep,
     WithColumnsStep,
 )
 from refiner.pipeline.sinks import (
+    AddColumns,
     BaseSink,
+    Create,
     JsonlSink,
     LanceDatasetSink,
     LanceSink,
-    LanceWriteMode,
+    LanceWriteConfig,
     ParquetSink,
     ZarrSink,
 )
@@ -68,11 +77,17 @@ from refiner.execution.engine import (
     Block,
     Segment,
     compile_segments,
+    _declared_dtype_columns_after_segments,
     execute_segments,
     iter_rows,
     schema_after_segments,
 )
+from refiner.execution.factories import (
+    has_worker_factories,
+    initialize_worker_steps,
+)
 from refiner.execution.operators.row import (
+    AsyncBatchWindowRegistry,
     AsyncWindowRegistry,
     ShardDeltaFn,
     close_async_steps,
@@ -247,6 +262,10 @@ class RefinerPipeline:
         """
         return schema_after_segments(self.source.schema, self._get_compiled_segments())
 
+    def _output_dtype_columns(self) -> frozenset[str]:
+        """Return output columns constrained by explicit transform dtypes."""
+        return _declared_dtype_columns_after_segments(self._get_compiled_segments())
+
     def map(
         self, fn: MapFn, *, dtypes: DTypeMapping | None = None
     ) -> "RefinerPipeline":
@@ -324,8 +343,9 @@ class RefinerPipeline:
 
     def map_async(
         self,
-        fn: AsyncMapFn,
+        fn: AsyncMapFn | None = None,
         *,
+        factory: AsyncMapFactory | None = None,
         max_in_flight: int = 16,
         preserve_order: bool = True,
         dtypes: DTypeMapping | None = None,
@@ -333,7 +353,10 @@ class RefinerPipeline:
         """Apply an async Python function to each row.
 
         Args:
-            fn: Async callback receiving one row.
+            fn: Async callback receiving one row. Mutually exclusive with
+                ``factory``.
+            factory: Zero-argument callable initialized once per worker. It must
+                return the async callback reused by that worker.
             max_in_flight: Maximum unresolved callback tasks per worker.
             preserve_order: If True, emit rows in input order. If False, emit
                 rows as callbacks finish.
@@ -347,21 +370,25 @@ class RefinerPipeline:
                 op_name="map_async",
                 index=self._next_step_index(),
                 dtypes=dtypes,
+                factory=factory,
             )
         )
 
     def batch_map(
         self,
-        fn: BatchFn,
+        fn: BatchFn | None = None,
         *,
+        factory: BatchFactory | None = None,
         batch_size: int,
         dtypes: DTypeMapping | None = None,
     ) -> "RefinerPipeline":
         """Apply a Python function to fixed-size row batches.
 
         ``fn`` receives batches of rows and returns rows or row patches according
-        to the batch transform contract. Use this for APIs that are more
-        efficient when called on multiple rows at once.
+        to the batch transform contract. Alternatively, ``factory`` is called
+        once per worker and returns the callback reused for all of that worker's
+        batches. Use this for APIs that are more efficient when called on
+        multiple rows at once.
         """
         if batch_size <= 1:
             raise ValueError("batch_size for batch_map must be > 1")
@@ -370,6 +397,41 @@ class RefinerPipeline:
                 fn=fn,
                 batch_size=batch_size,
                 op_name="batch_map",
+                index=self._next_step_index(),
+                dtypes=dtypes,
+                factory=factory,
+            )
+        )
+
+    def batch_map_async(
+        self,
+        fn: AsyncBatchFn | None = None,
+        *,
+        factory: AsyncBatchFactory | None = None,
+        batch_size: int,
+        max_in_flight: int = 2,
+        preserve_order: bool = True,
+        dtypes: DTypeMapping | None = None,
+    ) -> "RefinerPipeline":
+        """Apply bounded asynchronous work to fixed-size row batches.
+
+        At most ``max_in_flight`` batches are unresolved per worker. This enables
+        CPU preparation, remote I/O, or other asynchronous work for a later batch
+        to overlap processing of an earlier batch while preserving bounded memory.
+        The callback must return an iterable of ``Row`` objects.
+        """
+        if batch_size <= 1:
+            raise ValueError("batch_size for batch_map_async must be > 1")
+        if max_in_flight <= 0:
+            raise ValueError("max_in_flight must be > 0")
+        return self.add_step(
+            FnAsyncBatchStep(
+                fn=fn,
+                factory=factory,
+                batch_size=batch_size,
+                max_in_flight=max_in_flight,
+                preserve_order=preserve_order,
+                op_name="batch_map_async",
                 index=self._next_step_index(),
                 dtypes=dtypes,
             )
@@ -396,17 +458,27 @@ class RefinerPipeline:
             )
         )
 
-    def map_table(self, fn: Callable[[pa.Table], pa.Table]) -> "RefinerPipeline":
+    def map_table(
+        self,
+        fn: TableFn | None = None,
+        *,
+        factory: TableFactory | None = None,
+    ) -> "RefinerPipeline":
         """Apply a vectorized Arrow table transform.
 
         ``fn`` receives a ``pyarrow.Table`` and must return a ``pyarrow.Table``.
-        Adjacent vectorized operations are fused so they can run inside the same
-        Arrow segment. The returned table must preserve Refiner's internal shard
-        ID and source-row-ID columns so execution identity stays aligned through
-        filters and reordering.
+        Alternatively, ``factory`` is called once per worker and returns the
+        callback reused for all of that worker's tables. Adjacent vectorized
+        operations are fused so they can run inside the same Arrow segment. The
+        returned table must preserve Refiner's internal shard ID and source-row-ID
+        columns so execution identity stays aligned through filters and reordering.
         """
         return self._add_vectorized_op(
-            FnTableStep(fn=fn, index=self._next_step_index())
+            FnTableStep(
+                fn=fn,
+                factory=factory,
+                index=self._next_step_index(),
+            )
         )
 
     def filter(self, predicate: Callable[[Row], bool] | Expr) -> "RefinerPipeline":
@@ -527,19 +599,27 @@ class RefinerPipeline:
         on_shard_delta: ShardDeltaFn | None = None,
     ) -> Iterable[Block]:
         async_window_registry: AsyncWindowRegistry = {}
+        async_batch_window_registry: AsyncBatchWindowRegistry = {}
+        if has_worker_factories(self.pipeline_steps):
+            runtime_steps = initialize_worker_steps(self.pipeline_steps)
+            runtime_segments = compile_segments(runtime_steps)
+        else:
+            runtime_steps = self.pipeline_steps
+            runtime_segments = self._get_compiled_segments()
         try:
             for rows in windows:
                 yield from execute_segments(
                     rows,
-                    self._get_compiled_segments(),
+                    runtime_segments,
                     vectorized_chunk_rows=self.max_block_rows,
                     max_vectorized_block_bytes=self.max_vectorized_block_bytes,
                     on_shard_delta=on_shard_delta,
                     input_schema=self.source.schema,
                     async_window_registry=async_window_registry,
+                    async_batch_window_registry=async_batch_window_registry,
                 )
         finally:
-            close_async_steps(self.pipeline_steps)
+            close_async_steps(runtime_steps)
 
     def execute(
         self,
@@ -679,19 +759,27 @@ class RefinerPipeline:
         self,
         output: DataFolderLike,
         *,
-        mode: LanceWriteMode = "create",
+        mode: LanceWriteConfig = Create(),
         columns: Sequence[str] | None = None,
         assets: AssetWriteConfig | None = None,
     ) -> "RefinerPipeline":
-        """Attach a distributed Lance dataset writer or schema-evolution sink."""
+        """Attach a distributed Lance dataset writer or schema-evolution sink.
+
+        Use ``mode=AddColumns(fill=...)`` with a bounded or filtered
+        ``load_lance`` source. Computed rows receive the pipeline output and
+        omitted rows receive the configured scalar or per-column fill value.
+        The legacy ``mode="add_columns"`` remains strict and requires exactly
+        one output for every source row.
+        """
         source_uri: str | None = None
         source_version: int | None = None
-        if mode == "add_columns":
+        is_add_columns = mode == "add_columns" or isinstance(mode, AddColumns)
+        if is_add_columns:
             if not isinstance(self.source, LanceSource):
                 raise ValueError(
                     "add_columns requires a pipeline created by load_lance"
                 )
-            if self.source.row_limit is not None:
+            if self.source.max_rows is not None and not isinstance(mode, AddColumns):
                 raise ValueError("add_columns does not support a limited Lance source")
             source_uri = self.source.dataset_uri
             source_version = self.source.version
@@ -1368,13 +1456,13 @@ def load_lance(
     columns: Sequence[str] | None = None,
     batch_size: int = 65_536,
     num_shards: int | None = None,
-    row_limit: int | None = None,
+    max_rows: int | None = None,
 ) -> RefinerPipeline:
     """Create a pipeline over one immutable version of a Lance dataset.
 
     ``num_shards`` groups whole, adjacent Lance fragments into the requested
     number of scheduling shards without splitting individual fragments.
-    ``row_limit`` reads at most that many leading rows from the pinned version.
+    ``max_rows`` reads at most that many leading rows from the pinned version.
     """
     return RefinerPipeline(
         source=LanceSource(
@@ -1383,7 +1471,7 @@ def load_lance(
             columns=columns,
             batch_size=batch_size,
             num_shards=num_shards,
-            row_limit=row_limit,
+            max_rows=max_rows,
         )
     )
 
