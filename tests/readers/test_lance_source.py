@@ -67,6 +67,54 @@ def test_load_lance_pins_version_and_shards_by_fragment(tmp_path) -> None:
     assert [int(row["x"]) for row in pipeline.iter_rows()] == [1, 2, 3]
 
 
+def test_load_lance_max_rows_bounds_fragment_plan_and_final_batch(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "limited.lance"
+    lance.write_dataset(
+        pa.table({"x": list(range(6))}),
+        str(dataset_uri),
+        max_rows_per_file=2,
+    )
+
+    pipeline = load_lance(dataset_uri, batch_size=2, max_rows=3)
+    shards = pipeline.list_shards()
+
+    assert [(shard.descriptor.start, shard.descriptor.end) for shard in shards] == [
+        (0, 1),
+        (1, 2),
+    ]
+    assert [int(row["x"]) for row in pipeline.iter_rows()] == [0, 1, 2]
+    assert pipeline.source.describe()["max_rows"] == 3
+
+
+def test_load_lance_max_rows_zero_and_negative(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "zero.lance"
+    lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+
+    assert load_lance(dataset_uri, max_rows=0).list_shards() == []
+    assert list(load_lance(dataset_uri, max_rows=0).iter_rows()) == []
+    with pytest.raises(ValueError, match="max_rows must be >= 0"):
+        load_lance(dataset_uri, max_rows=-1)
+
+
+def test_load_lance_max_rows_groups_only_required_fragments(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "grouped-limited.lance"
+    lance.write_dataset(
+        pa.table({"x": list(range(6))}),
+        str(dataset_uri),
+        max_rows_per_file=2,
+    )
+
+    pipeline = load_lance(dataset_uri, max_rows=3, num_shards=1)
+    shards = pipeline.list_shards()
+
+    assert len(shards) == 1
+    assert (shards[0].descriptor.start, shards[0].descriptor.end) == (0, 2)
+    assert [int(row["x"]) for row in pipeline.iter_rows()] == [0, 1, 2]
+
+
 def test_load_lance_normalizes_classic_blobs_to_references(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "blobs.lance"

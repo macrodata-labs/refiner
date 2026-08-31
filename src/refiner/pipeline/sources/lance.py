@@ -70,14 +70,19 @@ class LanceSource(BaseSource):
         batch_size: int = 65_536,
         num_shards: int | None = None,
         row_limit: int | None = None,
+        max_rows: int | None = None,
     ) -> None:
         if batch_size <= 0:
             raise ValueError("batch_size must be > 0")
         if columns is not None and len(set(columns)) != len(columns):
             raise ValueError("Lance columns must be unique")
         validate_explicit_num_shards(num_shards)
+        if row_limit is not None and max_rows is not None:
+            raise ValueError("row_limit and max_rows are mutually exclusive")
         if row_limit is not None and row_limit <= 0:
             raise ValueError("row_limit must be > 0")
+        if max_rows is not None and max_rows < 0:
+            raise ValueError("max_rows must be >= 0")
 
         self.input = DataFolder.resolve(input)
         if self.input.has_explicit_filesystem_configuration:
@@ -90,7 +95,11 @@ class LanceSource(BaseSource):
         self.columns = tuple(columns) if columns is not None else None
         self.batch_size = int(batch_size)
         self.num_shards = num_shards
-        self.row_limit = int(row_limit) if row_limit is not None else None
+        effective_row_limit = row_limit if row_limit is not None else max_rows
+        self.row_limit = (
+            int(effective_row_limit) if effective_row_limit is not None else None
+        )
+        self.max_rows = int(max_rows) if max_rows is not None else None
         self._dataset_cache: Any | None = None
         self._fragment_row_limits: tuple[int, ...] | None = None
 
@@ -330,6 +339,7 @@ class LanceSource(BaseSource):
             "batch_size": self.batch_size,
             "num_shards": self.num_shards,
             "row_limit": self.row_limit,
+            "max_rows": self.max_rows,
         }
 
 

@@ -233,7 +233,30 @@ def refiner_ref_exists_on_remote(ref: str) -> bool:
         with urllib_request.urlopen(request):
             return True
     except (urllib_error.HTTPError, urllib_error.URLError):
-        return False
+        # The commit endpoint is rate limited for unauthenticated callers.
+        # A public branch-head SHA remains verifiable through the git transport,
+        # which avoids turning a transient GitHub API quota into a forced PyPI
+        # downgrade (and therefore a possible source-version regression).
+        try:
+            result = subprocess.run(
+                [
+                    "git",
+                    "ls-remote",
+                    "https://github.com/macrodata-labs/refiner.git",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except FileNotFoundError:
+            return False
+        if result.returncode != 0:
+            return False
+        return any(
+            line.split("\t", 1)[0].strip() == ref
+            for line in result.stdout.splitlines()
+            if "\t" in line
+        )
 
 
 def build_run_manifest(

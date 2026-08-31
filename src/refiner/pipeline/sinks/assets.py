@@ -716,6 +716,87 @@ class BlobAssetManager:
             valid = valid and copied
         return rewritten, valid
 
+    @staticmethod
+    def _covers_entire_blob(
+        references: Sequence[tuple[int, int]],
+        source_size: int,
+    ) -> bool:
+        """Whether the union of byte references is exactly one source blob."""
+        position = 0
+        for offset, size in sorted(references):
+            if (
+                size < 0
+                or offset < 0
+                or offset > source_size
+                or size > source_size - offset
+            ):
+                return False
+            if offset > position:
+                return False
+            position = max(position, offset + size)
+        return position == source_size
+
+    def _coalesce_complete_blob_references(
+        self,
+        values: Sequence[object],
+        *,
+        shard_id: str,
+        column_name: str,
+    ) -> dict[int, object]:
+        """Copy complete classic blob sources once and translate their offsets.
+
+        This is deliberately an internal optimization of the existing blob
+        reference writer.  A partial selection still uses the established
+        per-range copier below, preserving its missing-asset policies.
+        """
+        if self.missing_asset_policy != "error":
+            return {}
+        grouped: dict[str, list[tuple[int, int, int]]] = {}
+        for index, value in enumerate(values):
+            if value is None or not isinstance(value, Mapping):
+                continue
+            path = value.get("path")
+            offset = value.get("offset")
+            size = value.get("size")
+            if (
+                isinstance(path, str)
+                and path
+                and isinstance(offset, int)
+                and not isinstance(offset, bool)
+                and isinstance(size, int)
+                and not isinstance(size, bool)
+            ):
+                grouped.setdefault(path, []).append((index, offset, size))
+
+        rewritten: dict[int, object] = {}
+        for path, references in grouped.items():
+            source = DataFile.resolve(path)
+            source_size = int(source.fs.size(source.path))
+            if not self._covers_entire_blob(
+                [(offset, size) for _, offset, size in references], source_size
+            ):
+                continue
+            block = self._block(shard_id, column_name, source_size)
+            output_offset = block.size
+            remaining = source_size
+            with source.open("rb") as stream:
+                while remaining:
+                    chunk = stream.read(min(remaining, 8 * 1024 * 1024))
+                    if not chunk:
+                        raise EOFError("asset ended before its declared size")
+                    block.stream.write(chunk)
+                    remaining -= len(chunk)
+            block.size += source_size
+            for index, offset, size in references:
+                rewritten[index] = {
+                    "path": block.path,
+                    "offset": output_offset + offset,
+                    "size": size,
+                }
+            log_throughput("source_blobs_coalesced", 1, shard_id, unit="blobs")
+            log_throughput("assets_uploaded", len(references), shard_id, unit="assets")
+        return rewritten
+
     def rewrite_table(self, shard_id: str, table: pa.Table) -> pa.Table:
         columns = dict(self._asset_columns)
         columns.update(_asset_columns_from_schema(table.schema))
@@ -727,15 +808,26 @@ class BlobAssetManager:
             index = out.schema.get_field_index(column_name)
             if index < 0:
                 continue
-            values: list[object] = []
-            for row_offset, value in enumerate(out.column(index).to_pylist()):
-                rewritten, valid = self._rewrite_value(
-                    value,
-                    shard_id=shard_id,
-                    column_name=column_name,
-                    kind=kind,
-                    storage=storage,
+            original_values = out.column(index).to_pylist()
+            coalesced = (
+                self._coalesce_complete_blob_references(
+                    original_values, shard_id=shard_id, column_name=column_name
                 )
+                if kind == "scalar" and storage == "blob_reference"
+                else {}
+            )
+            values: list[object] = []
+            for row_offset, value in enumerate(original_values):
+                if row_offset in coalesced:
+                    rewritten, valid = coalesced[row_offset], True
+                else:
+                    rewritten, valid = self._rewrite_value(
+                        value,
+                        shard_id=shard_id,
+                        column_name=column_name,
+                        kind=kind,
+                        storage=storage,
+                    )
                 values.append(rewritten)
                 if not valid and self.missing_asset_policy == "drop_row":
                     keep[row_offset] = False
