@@ -77,6 +77,7 @@ from refiner.execution.engine import (
     Block,
     Segment,
     compile_segments,
+    _declared_dtype_columns_after_segments,
     execute_segments,
     iter_rows,
     schema_after_segments,
@@ -260,6 +261,10 @@ class RefinerPipeline:
         fields not visible here unless they declare ``dtypes``.
         """
         return schema_after_segments(self.source.schema, self._get_compiled_segments())
+
+    def _output_dtype_columns(self) -> frozenset[str]:
+        """Return output columns constrained by explicit transform dtypes."""
+        return _declared_dtype_columns_after_segments(self._get_compiled_segments())
 
     def map(
         self, fn: MapFn, *, dtypes: DTypeMapping | None = None

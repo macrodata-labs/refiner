@@ -94,6 +94,7 @@ class Worker:
         sink = self.pipeline.sink or NullSink()
         sink_schema = self.pipeline.output_schema()
         sink.set_input_schema(sink_schema)
+        sink.set_input_dtype_columns(self.pipeline._output_dtype_columns())
         sink_step_index = (
             self.pipeline._next_step_index() if self.pipeline.sink is not None else None
         )

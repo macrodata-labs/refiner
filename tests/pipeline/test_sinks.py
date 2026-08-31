@@ -118,6 +118,18 @@ def test_lance_writer_preserves_runtime_inferred_type_changes() -> None:
     assert normalized.to_pydict() == {"value": ["chunk-1", "chunk-2"]}
 
 
+def test_lance_writer_honors_explicitly_declared_type_changes() -> None:
+    planned = pa.schema([pa.field("value", pa.int64())])
+    runtime = pa.table({"value": ["1", "2"]})
+
+    normalized = _cast_to_planned_schema(
+        runtime, planned, declared_columns=frozenset({"value"})
+    )
+
+    assert normalized.schema == planned
+    assert normalized.to_pydict() == {"value": [1, 2]}
+
+
 def test_lance_writer_allows_row_map_dropped_planned_fields() -> None:
     planned = pa.schema([pa.field("x", pa.int64()), pa.field("dropped", pa.string())])
     table = pa.table({"x": [1, 2]})
@@ -324,6 +336,31 @@ def test_lance_dataset_writer_preserves_undeclared_row_map_type_change(
     table = lance.dataset(str(output_uri)).to_table()
     assert table.schema.field("value").type == pa.string()
     assert table.column("value").to_pylist() == ["chunk-1", "chunk-2"]
+
+
+def test_lance_dataset_writer_enforces_declared_row_map_dtype(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    source_uri = tmp_path / "declared-type-source.lance"
+    output_uri = tmp_path / "declared-type-output.lance"
+    source = lance.write_dataset(pa.table({"value": [1, 2]}), str(source_uri))
+
+    (
+        load_lance(source_uri, version=source.version)
+        .map(
+            lambda row: {"value": str(int(row["value"]))},
+            dtypes={"value": pa.int64()},
+        )
+        .write_lance_dataset(output_uri)
+        .launch_local(
+            name="lance-declared-type",
+            num_workers=1,
+            rundir=str(tmp_path / "declared-type-run"),
+        )
+    )
+
+    table = lance.dataset(str(output_uri)).to_table()
+    assert table.schema.field("value").type == pa.int64()
+    assert table.column("value").to_pylist() == [1, 2]
 
 
 def test_lance_dataset_writer_handles_more_shards_than_io_threads(tmp_path) -> None:

@@ -135,6 +135,28 @@ def schema_after_segments(
     return schema
 
 
+def _declared_dtype_columns_after_segments(
+    segments: Sequence[Segment],
+) -> frozenset[str]:
+    """Return columns whose output types are explicitly constrained by steps."""
+    columns: set[str] = set()
+    for segment in segments:
+        steps = segment.ops if isinstance(segment, VectorSegment) else segment.steps
+        for step in steps:
+            dtypes = getattr(step, "dtypes", None)
+            if dtypes:
+                columns.update(dtypes)
+            if isinstance(step, FnTableStep):
+                columns.clear()
+            elif isinstance(step, SelectStep):
+                columns.intersection_update(step.columns)
+            elif isinstance(step, DropStep):
+                columns.difference_update(step.columns)
+            elif isinstance(step, RenameStep):
+                columns = {step.mapping.get(name, name) for name in columns}
+    return frozenset(columns)
+
+
 def _segment_schema(
     input_schema: pa.Schema | None,
     segment: Segment,

@@ -130,7 +130,12 @@ def _schema_difference(expected: pa.Schema, actual: pa.Schema) -> str:
     return "; ".join(details) or "unknown schema difference"
 
 
-def _cast_to_planned_schema(table: pa.Table, schema: pa.Schema) -> pa.Table:
+def _cast_to_planned_schema(
+    table: pa.Table,
+    schema: pa.Schema,
+    *,
+    declared_columns: frozenset[str] = frozenset(),
+) -> pa.Table:
     """Normalize known fields without overriding dynamic row-map changes.
 
     Dynamic row maps may drop fields or replace their values with another type;
@@ -143,7 +148,10 @@ def _cast_to_planned_schema(table: pa.Table, schema: pa.Schema) -> pa.Table:
         fields.append(
             actual_field
             if planned_index < 0
-            or actual_field.type != schema.field(planned_index).type
+            or (
+                actual_field.name not in declared_columns
+                and actual_field.type != schema.field(planned_index).type
+            )
             else schema.field(planned_index)
         )
     target = pa.schema(fields, metadata=schema.metadata)
@@ -863,6 +871,7 @@ class LanceDatasetSink(BaseSink):
         ] = {}
         self._add_columns_schema: pa.Schema | None = None
         self._planned_output_schema: pa.Schema | None = None
+        self._declared_output_columns: frozenset[str] = frozenset()
         self._existing_schema: pa.Schema | None = None
         self._existing_version: int | None = None
         self._source_dataset_cache: Any | None = None
@@ -952,6 +961,9 @@ class LanceDatasetSink(BaseSink):
                 [schema.field(column) for column in self.columns]
             )
 
+    def set_input_dtype_columns(self, columns: frozenset[str]) -> None:
+        self._declared_output_columns = columns
+
     def _write_add_columns_block(self, shard_id: str, block: Block) -> None:
         if not isinstance(block, Tabular) and not block:
             return
@@ -1039,7 +1051,11 @@ class LanceDatasetSink(BaseSink):
         if self._assets is not None:
             table = self._assets.rewrite_table(shard_id, table)
         if self._planned_output_schema is not None:
-            table = _cast_to_planned_schema(table, self._planned_output_schema)
+            table = _cast_to_planned_schema(
+                table,
+                self._planned_output_schema,
+                declared_columns=self._declared_output_columns,
+            )
         if self.mode == "append":
             existing_schema = self._load_existing_schema()
             _validate_append_asset_layout(table.schema, existing_schema)
