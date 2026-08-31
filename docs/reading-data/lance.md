@@ -29,9 +29,23 @@ pipeline = mdr.load_lance(
 When `version` is omitted, Refiner resolves the latest version once and pins it
 for the pipeline. Column projection is pushed into Lance, and `batch_size`
 controls the streamed Arrow batch size.
+
+## Limit the number of rows
+
 Set `max_rows` to a non-negative integer to read only that many leading rows from
 the pinned dataset version. Refiner stops scanning inside the final fragment;
 datasets with fewer rows simply yield all available rows.
+
+The limit is applied before pipeline transforms. Omit `max_rows` to read the
+entire pinned version, or use `max_rows=0` to produce no source rows. For
+example, this processes only the first 10,000 stored rows:
+
+```python
+pipeline = mdr.load_lance(
+    "s3://my-bucket/hands.lance",
+    max_rows=10_000,
+)
+```
 
 Classic Lance blob columns are returned as lazy Refiner blob references:
 
