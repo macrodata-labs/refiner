@@ -6,7 +6,7 @@ from typing import Any
 import pyarrow as pa
 
 from refiner.pipeline.data.row import Row
-from refiner.pipeline.data.shard import RowRangeDescriptor, Shard
+from refiner.pipeline.data.shard import Shard, ShardGroupDescriptor
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
 
@@ -54,27 +54,21 @@ class LimitedSource(BaseSource):
         if not source_shards:
             return []
         return [
-            Shard.from_row_range(
-                start=0,
-                end=1,
+            Shard(
+                descriptor=ShardGroupDescriptor(source_shards),
                 global_ordinal=0,
-                start_key=source_shards[0].start_key,
-                end_key=source_shards[-1].end_key,
             )
         ]
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         descriptor = shard.descriptor
-        if not isinstance(descriptor, RowRangeDescriptor) or (
-            descriptor.start,
-            descriptor.end,
-        ) != (0, 1):
-            raise ValueError("LimitedSource requires its synthetic row-range shard")
+        if not isinstance(descriptor, ShardGroupDescriptor):
+            raise ValueError("LimitedSource requires a shard-group descriptor")
 
         remaining = self.max_rows
         if remaining == 0:
             return
-        for source_shard in self._planned_source_shards():
+        for source_shard in descriptor.shards:
             source_units = iter(self.source.read_shard(source_shard))
             try:
                 for unit in source_units:

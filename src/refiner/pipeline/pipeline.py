@@ -1688,9 +1688,7 @@ def read_tfrecords(
                     else num_parallel_calls
                 ),
                 prefetch=(
-                    min(prefetch, 1)
-                    if max_rows is not None and prefetch is not None
-                    else prefetch
+                    1 if max_rows is not None and prefetch is not None else prefetch
                 ),
                 file_path_column=file_path_column,
             ),

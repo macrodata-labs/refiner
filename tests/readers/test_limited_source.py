@@ -4,6 +4,7 @@ import inspect
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
+import cloudpickle
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -131,6 +132,19 @@ def test_limited_source_applies_one_global_limit_across_source_shards() -> None:
     assert source.list_calls == 1
     assert source.read_starts == [0, 1]
     assert source.units_started == ["table-0", "row-2"]
+
+
+def test_limited_source_claim_carries_plan_to_serialized_worker() -> None:
+    pipeline = RefinerPipeline(source=LimitedSource(_RecordingSource(), max_rows=3))
+    worker_payload = cloudpickle.dumps(pipeline)
+    claimed_shard = Shard.from_dict(pipeline.list_shards()[0].to_dict())
+
+    worker_pipeline = cloudpickle.loads(worker_payload)
+    units = list(worker_pipeline.source.read_shard(claimed_shard))
+
+    assert units[0].table.column("x").to_pylist() == [0, 1]
+    assert units[1]["x"] == 2
+    assert worker_pipeline.source.source.list_calls == 0
 
 
 def test_limited_source_slices_only_the_final_tabular_unit() -> None:
@@ -271,7 +285,7 @@ def test_tfrecord_max_rows_bounds_eager_input_windows(tmp_path: Path) -> None:
         features={},
         batch_size=1024,
         num_parallel_calls=8,
-        prefetch=16,
+        prefetch=-1,
         max_rows=3,
     )
 
