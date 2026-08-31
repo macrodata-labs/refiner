@@ -724,7 +724,12 @@ class BlobAssetManager:
         """Whether the union of byte references is exactly one source blob."""
         position = 0
         for offset, size in sorted(references):
-            if size < 0 or offset < 0 or offset > source_size or size > source_size - offset:
+            if (
+                size < 0
+                or offset < 0
+                or offset > source_size
+                or size > source_size - offset
+            ):
                 return False
             if offset > position:
                 return False

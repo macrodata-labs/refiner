@@ -59,6 +59,13 @@ pipeline.write_parquet(
 target, not a hard limit: an individual asset larger than the target is written
 to its own larger block.
 
+When the input rows collectively reference every byte of an existing packed
+blob, Refiner copies that source blob once and translates the output offsets.
+It does not download and upload each referenced range separately. Partial
+selections retain the normal range-copy behavior, and the optimization is
+disabled for missing-asset policies other than `"error"` so their row-level
+semantics remain unchanged.
+
 When the destination uses s3fs, including AWS S3 and Cloudflare R2, Refiner
 uploads large files with bounded multipart concurrency. No additional
 configuration is required. Small files retain s3fs's one-shot PUT behavior.
@@ -145,3 +152,9 @@ size and therefore cannot exceed 10,000 parts; it fails and aborts cleanly
 instead. Peak memory includes the batch buffer and materialized input bytes.
 The patch subclasses s3fs's file class and keeps its normal multipart creation,
 commit, abort, endpoint, credential, and cache behavior.
+
+Complete-blob coalescing groups scalar blob references by source path and only
+uses the fast path when their sorted union covers the source from byte zero
+through its exact size without gaps. Overlapping references are supported;
+malformed or partial reference sets fall back to the established per-range
+writer.

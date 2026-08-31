@@ -1591,7 +1591,9 @@ def test_parquet_sink_packs_embedded_assets_into_blob_files(tmp_path) -> None:
     assert datatype.asset_storage(out.schema.field("image")) == "blob_reference"
 
 
-def test_blob_writer_coalesces_complete_source_blob_references(tmp_path, monkeypatch) -> None:
+def test_blob_writer_coalesces_complete_source_blob_references(
+    tmp_path, monkeypatch
+) -> None:
     source = tmp_path / "source.blob"
     source.write_bytes(b"abcdef")
     output = DataFolder.resolve(tmp_path / "coalesced-assets")
@@ -1636,7 +1638,9 @@ def test_blob_writer_coalesces_complete_source_blob_references(tmp_path, monkeyp
     assert references[1]["offset"] == 3
 
 
-def test_blob_writer_keeps_partial_source_blob_on_range_copy_path(tmp_path, monkeypatch) -> None:
+def test_blob_writer_keeps_partial_source_blob_on_range_copy_path(
+    tmp_path, monkeypatch
+) -> None:
     source = tmp_path / "source.blob"
     source.write_bytes(b"abcdef")
     output = DataFolder.resolve(tmp_path / "partial-assets")
@@ -1679,7 +1683,9 @@ def test_blob_writer_keeps_partial_source_blob_on_range_copy_path(tmp_path, monk
         manager.close()
 
     assert calls == 2
-    assert [read_blob(reference) for reference in rewritten.column("video").to_pylist()] == [
+    assert [
+        read_blob(reference) for reference in rewritten.column("video").to_pylist()
+    ] == [
         b"abc",
         b"de",
     ]
