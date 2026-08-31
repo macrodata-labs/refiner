@@ -131,18 +131,20 @@ def _schema_difference(expected: pa.Schema, actual: pa.Schema) -> str:
 
 
 def _cast_to_planned_schema(table: pa.Table, schema: pa.Schema) -> pa.Table:
-    """Normalize fields known to the planner without forbidding row-map drops.
+    """Normalize known fields without overriding dynamic row-map changes.
 
-    Python row maps may use ``row.drop(...)``; their dynamic removal is not
-    visible to the static pipeline schema.  Every surviving field that *is*
-    known to the planner is nevertheless cast to its declared field, which
-    makes dtypes and metadata deterministic across workers.
+    Dynamic row maps may drop fields or replace their values with another type;
+    neither change is visible to the static pipeline schema. Fields whose
+    runtime types match the plan still receive deterministic planned metadata.
     """
     fields: list[pa.Field] = []
     for actual_field in table.schema:
         planned_index = schema.get_field_index(actual_field.name)
         fields.append(
-            actual_field if planned_index < 0 else schema.field(planned_index)
+            actual_field
+            if planned_index < 0
+            or actual_field.type != schema.field(planned_index).type
+            else schema.field(planned_index)
         )
     target = pa.schema(fields, metadata=schema.metadata)
     return table.cast(target, safe=True)

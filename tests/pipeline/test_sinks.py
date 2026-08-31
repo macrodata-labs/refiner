@@ -108,6 +108,16 @@ def test_lance_writer_normalizes_worker_schema_metadata() -> None:
     assert normalized.to_pydict() == {"x": [1, 2]}
 
 
+def test_lance_writer_preserves_runtime_inferred_type_changes() -> None:
+    planned = pa.schema([pa.field("value", pa.int64())])
+    runtime = pa.table({"value": ["chunk-1", "chunk-2"]})
+
+    normalized = _cast_to_planned_schema(runtime, planned)
+
+    assert normalized.schema == pa.schema([pa.field("value", pa.string())])
+    assert normalized.to_pydict() == {"value": ["chunk-1", "chunk-2"]}
+
+
 def test_lance_writer_allows_row_map_dropped_planned_fields() -> None:
     planned = pa.schema([pa.field("x", pa.int64()), pa.field("dropped", pa.string())])
     table = pa.table({"x": [1, 2]})
@@ -290,6 +300,30 @@ def test_launch_local_writes_lance_dataset(tmp_path) -> None:
         20,
         30,
     ]
+
+
+def test_lance_dataset_writer_preserves_undeclared_row_map_type_change(
+    tmp_path,
+) -> None:
+    lance = pytest.importorskip("lance")
+    source_uri = tmp_path / "dynamic-type-source.lance"
+    output_uri = tmp_path / "dynamic-type-output.lance"
+    source = lance.write_dataset(pa.table({"value": [1, 2]}), str(source_uri))
+
+    (
+        load_lance(source_uri, version=source.version)
+        .map(lambda row: {"value": f"chunk-{int(row['value'])}"})
+        .write_lance_dataset(output_uri)
+        .launch_local(
+            name="lance-dynamic-type",
+            num_workers=1,
+            rundir=str(tmp_path / "dynamic-type-run"),
+        )
+    )
+
+    table = lance.dataset(str(output_uri)).to_table()
+    assert table.schema.field("value").type == pa.string()
+    assert table.column("value").to_pylist() == ["chunk-1", "chunk-2"]
 
 
 def test_lance_dataset_writer_handles_more_shards_than_io_threads(tmp_path) -> None:
