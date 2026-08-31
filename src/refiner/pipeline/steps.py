@@ -22,11 +22,24 @@ class RefinerStep(ABC):
 MapResult: TypeAlias = Row | dict[str, Any]
 MapFn: TypeAlias = Callable[[Row], MapResult]
 AsyncMapFn: TypeAlias = Callable[[Row], Awaitable[MapResult] | MapResult]
+AsyncMapFactory: TypeAlias = Callable[[], AsyncMapFn]
 PredicateFn: TypeAlias = Callable[[Row], bool]
 BatchFn: TypeAlias = Callable[[list[Row]], Iterable[Row]]
+BatchFactory: TypeAlias = Callable[[], BatchFn]
 FlatMapFn: TypeAlias = Callable[[Row], Iterable[MapResult]]
 TableResult: TypeAlias = pa.Table
 TableFn: TypeAlias = Callable[[pa.Table], TableResult]
+TableFactory: TypeAlias = Callable[[], TableFn]
+
+
+def _validate_fn_or_factory(
+    fn: Callable[..., Any] | None,
+    factory: Callable[[], Callable[..., Any]] | None,
+    *,
+    op_name: str,
+) -> None:
+    if (fn is None) == (factory is None):
+        raise ValueError(f"{op_name} requires exactly one of fn or factory")
 
 
 class RowStep(RefinerStep, ABC):
@@ -57,18 +70,22 @@ class AsyncRowStep(RefinerStep, ABC):
 
 @dataclass(frozen=True, slots=True)
 class FnAsyncRowStep(AsyncRowStep):
-    fn: AsyncMapFn
+    fn: AsyncMapFn | None
     index: int
     max_in_flight: int = 16
     preserve_order: bool = True
     op_name: str | None = None
     dtypes: DTypeMapping | None = None
+    factory: AsyncMapFactory | None = None
 
     def __post_init__(self) -> None:
+        _validate_fn_or_factory(self.fn, self.factory, op_name="map_async")
         if self.max_in_flight <= 0:
             raise ValueError("max_in_flight must be > 0")
 
     def apply_row_async(self, row: Row) -> Awaitable[MapResult] | MapResult:
+        if self.fn is None:
+            raise RuntimeError("map_async factory was not initialized")
         return self.fn(row)
 
 
@@ -82,17 +99,21 @@ class BatchStep(RefinerStep, ABC):
 
 @dataclass(frozen=True, slots=True)
 class FnBatchStep(BatchStep):
-    fn: BatchFn
+    fn: BatchFn | None
     index: int
     batch_size: int
     op_name: str | None = None
     dtypes: DTypeMapping | None = None
+    factory: BatchFactory | None = None
 
     def __post_init__(self) -> None:
+        _validate_fn_or_factory(self.fn, self.factory, op_name="batch_map")
         if self.batch_size <= 1:
             raise ValueError("batch_size for batch steps must be > 1")
 
     def apply_batch(self, rows: list[Row]) -> Iterable[Row]:
+        if self.fn is None:
+            raise RuntimeError("batch_map factory was not initialized")
         for i in range(0, len(rows), self.batch_size):
             yield from self.fn(rows[i : i + self.batch_size])
 
@@ -168,9 +189,18 @@ class FilterExprStep(RefinerStep):
 
 @dataclass(frozen=True, slots=True)
 class FnTableStep(RefinerStep):
-    fn: TableFn
+    fn: TableFn | None
     index: int
     op_name: str | None = "map_table"
+    factory: TableFactory | None = None
+
+    def __post_init__(self) -> None:
+        _validate_fn_or_factory(self.fn, self.factory, op_name="map_table")
+
+    def apply_table(self, table: pa.Table) -> pa.Table:
+        if self.fn is None:
+            raise RuntimeError("map_table factory was not initialized")
+        return self.fn(table)
 
 
 VectorizedOp: TypeAlias = (
@@ -211,11 +241,14 @@ __all__ = [
     "MapResult",
     "MapFn",
     "AsyncMapFn",
+    "AsyncMapFactory",
     "PredicateFn",
     "BatchFn",
+    "BatchFactory",
     "FlatMapFn",
     "TableResult",
     "TableFn",
+    "TableFactory",
     "SelectStep",
     "WithColumnsStep",
     "DropStep",

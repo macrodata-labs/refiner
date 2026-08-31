@@ -10,6 +10,7 @@ from refiner.pipeline.steps import (
     FnFlatMapStep,
     FnRowStep,
     FnTableStep,
+    VectorizedSegmentStep,
 )
 from refiner.services.base import RuntimeServiceSpec
 
@@ -48,13 +49,24 @@ def collect_pipeline_services(
 
     for step in pipeline.pipeline_steps:
         candidates: list[Any] = []
-        if isinstance(
-            step,
-            FnRowStep | FnAsyncRowStep | FnBatchStep | FnFlatMapStep | FnTableStep,
-        ):
-            candidates.append(step.fn)
-        elif (fn := getattr(step, "fn", None)) is not None:
-            candidates.append(fn)
+        callable_steps = (
+            step.ops if isinstance(step, VectorizedSegmentStep) else (step,)
+        )
+        for callable_step in callable_steps:
+            if isinstance(
+                callable_step,
+                FnRowStep | FnAsyncRowStep | FnBatchStep | FnFlatMapStep | FnTableStep,
+            ):
+                factory = getattr(callable_step, "factory", None)
+                candidate = (
+                    factory
+                    if factory is not None
+                    else getattr(callable_step, "fn", None)
+                )
+                if candidate is not None:
+                    candidates.append(candidate)
+            elif (fn := getattr(callable_step, "fn", None)) is not None:
+                candidates.append(fn)
 
         for candidate in candidates:
             builtin = _builtin_description(candidate)

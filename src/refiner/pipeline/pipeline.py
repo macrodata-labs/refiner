@@ -10,7 +10,9 @@ from refiner.pipeline.expressions import Expr, lit
 from refiner.io.fileset import DataFileSetLike
 from refiner.pipeline.resources import GPU
 from refiner.pipeline.steps import (
+    AsyncMapFactory,
     AsyncMapFn,
+    BatchFactory,
     BatchFn,
     CastStep,
     DropStep,
@@ -26,6 +28,8 @@ from refiner.pipeline.steps import (
     RenameStep,
     RefinerStep,
     SelectStep,
+    TableFactory,
+    TableFn,
     VectorizedOp,
     VectorizedSegmentStep,
     WithColumnsStep,
@@ -73,6 +77,10 @@ from refiner.execution.engine import (
     execute_segments,
     iter_rows,
     schema_after_segments,
+)
+from refiner.execution.factories import (
+    has_worker_factories,
+    initialize_worker_steps,
 )
 from refiner.execution.operators.row import (
     AsyncWindowRegistry,
@@ -326,8 +334,9 @@ class RefinerPipeline:
 
     def map_async(
         self,
-        fn: AsyncMapFn,
+        fn: AsyncMapFn | None = None,
         *,
+        factory: AsyncMapFactory | None = None,
         max_in_flight: int = 16,
         preserve_order: bool = True,
         dtypes: DTypeMapping | None = None,
@@ -335,7 +344,10 @@ class RefinerPipeline:
         """Apply an async Python function to each row.
 
         Args:
-            fn: Async callback receiving one row.
+            fn: Async callback receiving one row. Mutually exclusive with
+                ``factory``.
+            factory: Zero-argument callable initialized once per worker. It must
+                return the async callback reused by that worker.
             max_in_flight: Maximum unresolved callback tasks per worker.
             preserve_order: If True, emit rows in input order. If False, emit
                 rows as callbacks finish.
@@ -349,21 +361,25 @@ class RefinerPipeline:
                 op_name="map_async",
                 index=self._next_step_index(),
                 dtypes=dtypes,
+                factory=factory,
             )
         )
 
     def batch_map(
         self,
-        fn: BatchFn,
+        fn: BatchFn | None = None,
         *,
+        factory: BatchFactory | None = None,
         batch_size: int,
         dtypes: DTypeMapping | None = None,
     ) -> "RefinerPipeline":
         """Apply a Python function to fixed-size row batches.
 
         ``fn`` receives batches of rows and returns rows or row patches according
-        to the batch transform contract. Use this for APIs that are more
-        efficient when called on multiple rows at once.
+        to the batch transform contract. Alternatively, ``factory`` is called
+        once per worker and returns the callback reused for all of that worker's
+        batches. Use this for APIs that are more efficient when called on
+        multiple rows at once.
         """
         if batch_size <= 1:
             raise ValueError("batch_size for batch_map must be > 1")
@@ -374,6 +390,7 @@ class RefinerPipeline:
                 op_name="batch_map",
                 index=self._next_step_index(),
                 dtypes=dtypes,
+                factory=factory,
             )
         )
 
@@ -398,17 +415,27 @@ class RefinerPipeline:
             )
         )
 
-    def map_table(self, fn: Callable[[pa.Table], pa.Table]) -> "RefinerPipeline":
+    def map_table(
+        self,
+        fn: TableFn | None = None,
+        *,
+        factory: TableFactory | None = None,
+    ) -> "RefinerPipeline":
         """Apply a vectorized Arrow table transform.
 
         ``fn`` receives a ``pyarrow.Table`` and must return a ``pyarrow.Table``.
-        Adjacent vectorized operations are fused so they can run inside the same
-        Arrow segment. The returned table must preserve Refiner's internal shard
-        ID and source-row-ID columns so execution identity stays aligned through
-        filters and reordering.
+        Alternatively, ``factory`` is called once per worker and returns the
+        callback reused for all of that worker's tables. Adjacent vectorized
+        operations are fused so they can run inside the same Arrow segment. The
+        returned table must preserve Refiner's internal shard ID and source-row-ID
+        columns so execution identity stays aligned through filters and reordering.
         """
         return self._add_vectorized_op(
-            FnTableStep(fn=fn, index=self._next_step_index())
+            FnTableStep(
+                fn=fn,
+                factory=factory,
+                index=self._next_step_index(),
+            )
         )
 
     def filter(self, predicate: Callable[[Row], bool] | Expr) -> "RefinerPipeline":
@@ -529,11 +556,17 @@ class RefinerPipeline:
         on_shard_delta: ShardDeltaFn | None = None,
     ) -> Iterable[Block]:
         async_window_registry: AsyncWindowRegistry = {}
+        if has_worker_factories(self.pipeline_steps):
+            runtime_steps = initialize_worker_steps(self.pipeline_steps)
+            runtime_segments = compile_segments(runtime_steps)
+        else:
+            runtime_steps = self.pipeline_steps
+            runtime_segments = self._get_compiled_segments()
         try:
             for rows in windows:
                 yield from execute_segments(
                     rows,
-                    self._get_compiled_segments(),
+                    runtime_segments,
                     vectorized_chunk_rows=self.max_block_rows,
                     max_vectorized_block_bytes=self.max_vectorized_block_bytes,
                     on_shard_delta=on_shard_delta,
@@ -541,7 +574,7 @@ class RefinerPipeline:
                     async_window_registry=async_window_registry,
                 )
         finally:
-            close_async_steps(self.pipeline_steps)
+            close_async_steps(runtime_steps)
 
     def execute(
         self,
