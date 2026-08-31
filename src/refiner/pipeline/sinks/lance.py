@@ -73,6 +73,48 @@ def _import_lance() -> Any:
     return lance
 
 
+def _schema_difference(expected: pa.Schema, actual: pa.Schema) -> str:
+    """Return a compact, actionable schema difference for distributed commits."""
+    details: list[str] = []
+    expected_names = set(expected.names)
+    actual_names = set(actual.names)
+    if missing := sorted(expected_names - actual_names):
+        details.append("missing=" + ", ".join(missing))
+    if extra := sorted(actual_names - expected_names):
+        details.append("unexpected=" + ", ".join(extra))
+    for name in expected.names:
+        actual_index = actual.get_field_index(name)
+        if actual_index < 0:
+            continue
+        expected_field = expected.field(name)
+        actual_field = actual.field(actual_index)
+        if not expected_field.equals(actual_field, check_metadata=True):
+            details.append(
+                f"{name}: expected={expected_field!s}, actual={actual_field!s}"
+            )
+    if expected.metadata != actual.metadata:
+        details.append("schema metadata differs")
+    return "; ".join(details) or "unknown schema difference"
+
+
+def _cast_to_planned_schema(table: pa.Table, schema: pa.Schema) -> pa.Table:
+    """Normalize fields known to the planner without forbidding row-map drops.
+
+    Python row maps may use ``row.drop(...)``; their dynamic removal is not
+    visible to the static pipeline schema.  Every surviving field that *is*
+    known to the planner is nevertheless cast to its declared field, which
+    makes dtypes and metadata deterministic across workers.
+    """
+    fields: list[pa.Field] = []
+    for actual_field in table.schema:
+        planned_index = schema.get_field_index(actual_field.name)
+        fields.append(
+            actual_field if planned_index < 0 else schema.field(planned_index)
+        )
+    target = pa.schema(fields, metadata=schema.metadata)
+    return table.cast(target, safe=True)
+
+
 def _validate_write_mode(mode: str) -> None:
     valid_modes = get_args(LanceWriteMode)
     if mode not in valid_modes:
@@ -684,6 +726,7 @@ class LanceDatasetSink(BaseSink):
             str, dict[int, _StreamingAddColumnsWriter]
         ] = {}
         self._add_columns_schema: pa.Schema | None = None
+        self._planned_output_schema: pa.Schema | None = None
         self._existing_schema: pa.Schema | None = None
         self._existing_version: int | None = None
         self._source_dataset_cache: Any | None = None
@@ -750,6 +793,10 @@ class LanceDatasetSink(BaseSink):
         if self._assets is not None:
             self._assets.set_input_schema(schema)
             schema = self._assets.output_schema(schema)
+        # The planner has a complete schema for Lance-backed sources and for
+        # maps with dtypes.  Keep it so independent cloud workers cannot leak
+        # local Arrow inference or metadata into their output fragments.
+        self._planned_output_schema = schema
         if self.mode != "add_columns":
             return
         assert self.columns is not None
@@ -853,6 +900,8 @@ class LanceDatasetSink(BaseSink):
             return
         if self._assets is not None:
             table = self._assets.rewrite_table(shard_id, table)
+        if self._planned_output_schema is not None:
+            table = _cast_to_planned_schema(table, self._planned_output_schema)
         if self.mode == "append":
             existing_schema = self._load_existing_schema()
             _validate_append_asset_layout(table.schema, existing_schema)
@@ -1398,7 +1447,8 @@ class LanceDatasetCommitReducerSink(BaseSink):
                     schema = next_schema
                 elif not schema.equals(next_schema, check_metadata=True):
                     raise ValueError(
-                        "Cannot commit Lance fragments with inconsistent schemas."
+                        "Cannot commit Lance fragments with inconsistent schemas: "
+                        + _schema_difference(schema, next_schema)
                     )
             fragment_json.extend(next_fragments)
             if next_source_version is not None:

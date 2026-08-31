@@ -29,6 +29,7 @@ from refiner.pipeline.sinks.lance import (
     LanceDatasetCommitReducerSink,
     LanceDatasetSink,
     _StreamingAddColumnsWriter,
+    _cast_to_planned_schema,
     _job_token,
     _schema_to_base64,
 )
@@ -80,6 +81,33 @@ def test_iter_rows_ignores_sink(tmp_path) -> None:
     out = list(pipeline.iter_rows())
     assert [int(row["x"]) for row in out] == [1, 2]
     assert list(tmp_path.iterdir()) == []
+
+
+def test_lance_writer_normalizes_worker_schema_metadata() -> None:
+    planned = pa.schema(
+        [pa.field("x", pa.int64(), metadata={b"unit": b"planned"})],
+        metadata={b"schema": b"planned"},
+    )
+    worker_local = pa.schema(
+        [pa.field("x", pa.int64(), metadata={b"unit": b"worker"})],
+        metadata={b"schema": b"worker"},
+    )
+    table = pa.Table.from_arrays([pa.array([1, 2])], schema=worker_local)
+
+    normalized = _cast_to_planned_schema(table, planned)
+
+    assert normalized.schema.equals(planned, check_metadata=True)
+    assert normalized.to_pydict() == {"x": [1, 2]}
+
+
+def test_lance_writer_allows_row_map_dropped_planned_fields() -> None:
+    planned = pa.schema([pa.field("x", pa.int64()), pa.field("dropped", pa.string())])
+    table = pa.table({"x": [1, 2]})
+
+    normalized = _cast_to_planned_schema(table, planned)
+
+    assert normalized.schema.names == ["x"]
+    assert normalized.schema.field("x").type == pa.int64()
 
 
 def test_launch_local_writes_jsonl_per_shard(tmp_path) -> None:
@@ -1561,6 +1589,106 @@ def test_parquet_sink_packs_embedded_assets_into_blob_files(tmp_path) -> None:
     ]
     assert datatype.asset_type(out.schema.field("image")) == "image"
     assert datatype.asset_storage(out.schema.field("image")) == "blob_reference"
+
+
+def test_blob_writer_coalesces_complete_source_blob_references(
+    tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "source.blob"
+    source.write_bytes(b"abcdef")
+    output = DataFolder.resolve(tmp_path / "coalesced-assets")
+    field = datatype.blob_reference("video").with_name("video")
+    table = pa.Table.from_arrays(
+        [
+            pa.array(
+                [
+                    {"path": str(source), "offset": 0, "size": 3},
+                    {"path": str(source), "offset": 3, "size": 3},
+                ],
+                type=field.type,
+            )
+        ],
+        schema=pa.schema([field]),
+    )
+    manager = BlobAssetManager(
+        output,
+        config=BlobAssetConfig(target_bytes=1024),
+        filename_template="{shard_id}.parquet",
+    )
+    manager.set_input_schema(table.schema)
+
+    def unexpected_range_copy(*_args, **_kwargs):
+        raise AssertionError("complete source blob should not use per-range copies")
+
+    monkeypatch.setattr(manager, "_append", unexpected_range_copy)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        rewritten = manager.rewrite_table("0123456789ab", table)
+        manager.close()
+
+    references = rewritten.column("video").to_pylist()
+    assert [read_blob(reference) for reference in references] == [b"abc", b"def"]
+    assert references[0]["path"] == references[1]["path"]
+    assert references[0]["offset"] == 0
+    assert references[1]["offset"] == 3
+
+
+def test_blob_writer_keeps_partial_source_blob_on_range_copy_path(
+    tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "source.blob"
+    source.write_bytes(b"abcdef")
+    output = DataFolder.resolve(tmp_path / "partial-assets")
+    field = datatype.blob_reference("video").with_name("video")
+    table = pa.Table.from_arrays(
+        [
+            pa.array(
+                [
+                    {"path": str(source), "offset": 0, "size": 3},
+                    {"path": str(source), "offset": 3, "size": 2},
+                ],
+                type=field.type,
+            )
+        ],
+        schema=pa.schema([field]),
+    )
+    manager = BlobAssetManager(
+        output,
+        config=BlobAssetConfig(target_bytes=1024),
+        filename_template="{shard_id}.parquet",
+    )
+    manager.set_input_schema(table.schema)
+    calls = 0
+    original_append = manager._append
+
+    def count_range_copy(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_append(*args, **kwargs)
+
+    monkeypatch.setattr(manager, "_append", count_range_copy)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        rewritten = manager.rewrite_table("0123456789ab", table)
+        manager.close()
+
+    assert calls == 2
+    assert [
+        read_blob(reference) for reference in rewritten.column("video").to_pylist()
+    ] == [
+        b"abc",
+        b"de",
+    ]
 
 
 def test_file_asset_copy_removes_partial_output_when_source_disappears(
