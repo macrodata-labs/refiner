@@ -29,8 +29,7 @@ Use `max_in_flight` to match provider rate limits, memory limits, or open file
 limits.
 
 For expensive worker-local state, pass a zero-argument `factory` instead of a
-callback. Refiner calls the factory once in each worker and reuses the returned
-callable across every row handled by that worker:
+callback:
 
 ```python
 class Classifier:
@@ -40,9 +39,6 @@ class Classifier:
     async def __call__(self, row):
         label = await self.client.classify(row["text"])
         return {"label": label}
-
-    async def aclose(self):
-        await self.client.aclose()
 
 
 def create_classifier():
@@ -54,11 +50,6 @@ pipeline = pipeline.map_async(
     max_in_flight=32,
 )
 ```
-
-The factory is not called while building, inspecting, or serializing the
-pipeline. The returned async callable may receive up to `max_in_flight`
-concurrent calls. If it defines `aclose()`, Refiner calls it when that worker's
-execution ends.
 
 When callbacks return large values such as image or video bytes, set a small
 execution block row limit:
@@ -126,13 +117,11 @@ pipeline = pipeline.batch_map(
 )
 ```
 
-Exactly one of the positional callback or `factory` must be provided.
-
 ## `batch_map_async`
 
-`batch_map_async` keeps a bounded number of whole batches in flight. It is
-useful when CPU or remote-I/O preparation for a later batch can overlap GPU or
-service work for an earlier batch:
+`batch_map_async` processes multiple batches concurrently. Use
+`max_in_flight` to bound concurrency and `preserve_order` when output order
+must match input order:
 
 ```python
 pipeline = pipeline.batch_map_async(
@@ -143,16 +132,8 @@ pipeline = pipeline.batch_map_async(
 )
 ```
 
-The factory is initialized once per worker, just like `map_async` and
-`batch_map`. Its returned callable receives `list[Row]` and may return either an
-iterable of rows or an awaitable resolving to one. Refiner retains at most
-`max_in_flight` unresolved batches and blocks source consumption when the window
-is full, so memory stays bounded. If the returned callable defines `aclose()`,
-Refiner calls it after all batches drain.
-
-Refiner may invoke the returned callable concurrently. Stateful GPU processors
-should serialize access to a shared model while allowing preparation to run in
-parallel—for example, by using a CPU executor plus a one-worker GPU executor.
+The callback receives `list[Row]` and returns rows, either directly or through
+an awaitable.
 
 ## Order and backpressure
 

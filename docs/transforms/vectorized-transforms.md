@@ -61,9 +61,7 @@ def normalize(table: pa.Table) -> pa.Table:
 pipeline = pipeline.map_table(normalize)
 ```
 
-For expensive state such as a GPU model, provide a zero-argument factory.
-Refiner calls it once in each worker and reuses the returned callable for every
-table handled by that worker:
+For expensive state such as a GPU model, provide a zero-argument factory:
 
 ```python
 class Embedder:
@@ -82,10 +80,8 @@ def create_embedder():
 pipeline = pipeline.map_table(factory=create_embedder)
 ```
 
-The factory is not called while building, inspecting, or serializing the
-pipeline. Use `with_max_block_rows(...)` and
+Use `with_max_block_rows(...)` and
 `with_max_vectorized_block_bytes(...)` to bound the tables passed to the model.
-Exactly one of the positional callback or `factory` must be provided.
 
 ## When not to use vectorized transforms
 

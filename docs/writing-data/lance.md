@@ -101,16 +101,10 @@ pipeline.write_lance_dataset(
 )
 ```
 
-The `columns` argument is required and only those columns are written. Existing
-columns, including large blob columns, remain referenced by their original
-files. Results may arrive out of order; Refiner restores fragment-local source
-order before writing. Omitted results are filled with null by default, while
-duplicate source row identities fail execution and do not create a new dataset
-version. The legacy string `mode="add_columns"` retains its strict behavior and
-fails if any result is missing. `AddColumns()` also fails explicitly for a
-dataset with no rows because no fragment exists to receive the new column files.
-Fragments containing deleted rows are currently rejected because their physical
-row layout cannot yet be safely reconstructed by the column writer.
+The `columns` argument is required and only those columns are written. Omitted
+results are filled with null by default. The legacy string
+`mode="add_columns"` retains its strict behavior and fails if any result is
+missing.
 
 Every finalized shard emits coordination metadata, including shards that
 produce no rows. The reducer requires complete metadata coverage before it
@@ -123,7 +117,7 @@ Lance supplies its physical row address so `add_columns` can restore
 fragment-local order after asynchronous or batched transforms. Both columns are
 removed before user data is persisted.
 
-### Filling rows outside a bounded or filtered source
+### Filling omitted rows
 
 Use `AddColumns` when inference should run on only part of the source while the
 new columns still need to align with every row in the existing dataset:
@@ -147,15 +141,9 @@ pipeline = (
 )
 ```
 
-Processed rows receive their computed values. Rows beyond `max_rows`, or rows
-removed by a filter, receive null. Supply one Arrow-compatible scalar for every
-column or a mapping for per-column defaults:
+Processed rows receive their computed values. Omitted rows receive null. Supply
+a mapping to use per-column defaults instead:
 
 ```python
 mode=mdr.AddColumns(fill={"embedding": None, "status": "not_processed"})
 ```
-
-Unknown fill-column names and values that cannot be converted to the declared
-Arrow type fail before the dataset commit. Duplicate source row identities also
-remain an error. Existing columns and data files are retained; the operation
-commits only the new column files as a new Lance dataset version.
