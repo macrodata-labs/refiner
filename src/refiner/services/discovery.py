@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from refiner.pipeline.steps import (
+    FnAsyncBatchStep,
     FnAsyncRowStep,
     FnBatchStep,
     FnFlatMapStep,
@@ -55,7 +56,12 @@ def collect_pipeline_services(
         for callable_step in callable_steps:
             if isinstance(
                 callable_step,
-                FnRowStep | FnAsyncRowStep | FnBatchStep | FnFlatMapStep | FnTableStep,
+                FnRowStep
+                | FnAsyncRowStep
+                | FnAsyncBatchStep
+                | FnBatchStep
+                | FnFlatMapStep
+                | FnTableStep,
             ):
                 factory = getattr(callable_step, "factory", None)
                 candidate = (

@@ -5,6 +5,7 @@ from dataclasses import replace
 from typing import Any
 
 from refiner.pipeline.steps import (
+    FnAsyncBatchStep,
     FnAsyncRowStep,
     FnBatchStep,
     FnTableStep,
@@ -13,7 +14,7 @@ from refiner.pipeline.steps import (
 )
 from refiner.worker.context import set_active_step_index
 
-FactoryStep = FnAsyncRowStep | FnBatchStep | FnTableStep
+FactoryStep = FnAsyncRowStep | FnAsyncBatchStep | FnBatchStep | FnTableStep
 
 
 def _factory_step(step: RefinerStep) -> FactoryStep | None:

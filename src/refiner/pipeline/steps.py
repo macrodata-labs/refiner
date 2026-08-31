@@ -26,6 +26,10 @@ AsyncMapFactory: TypeAlias = Callable[[], AsyncMapFn]
 PredicateFn: TypeAlias = Callable[[Row], bool]
 BatchFn: TypeAlias = Callable[[list[Row]], Iterable[Row]]
 BatchFactory: TypeAlias = Callable[[], BatchFn]
+AsyncBatchFn: TypeAlias = Callable[
+    [list[Row]], Awaitable[Iterable[Row]] | Iterable[Row]
+]
+AsyncBatchFactory: TypeAlias = Callable[[], AsyncBatchFn]
 FlatMapFn: TypeAlias = Callable[[Row], Iterable[MapResult]]
 TableResult: TypeAlias = pa.Table
 TableFn: TypeAlias = Callable[[pa.Table], TableResult]
@@ -116,6 +120,44 @@ class FnBatchStep(BatchStep):
             raise RuntimeError("batch_map factory was not initialized")
         for i in range(0, len(rows), self.batch_size):
             yield from self.fn(rows[i : i + self.batch_size])
+
+
+class AsyncBatchStep(RefinerStep, ABC):
+    batch_size: int
+    max_in_flight: int
+    preserve_order: bool
+
+    @abstractmethod
+    def apply_batch_async(
+        self, rows: list[Row]
+    ) -> Awaitable[Iterable[Row]] | Iterable[Row]:
+        raise NotImplementedError
+
+
+@dataclass(frozen=True, slots=True)
+class FnAsyncBatchStep(AsyncBatchStep):
+    fn: AsyncBatchFn | None
+    index: int
+    batch_size: int
+    max_in_flight: int = 2
+    preserve_order: bool = True
+    op_name: str | None = None
+    dtypes: DTypeMapping | None = None
+    factory: AsyncBatchFactory | None = None
+
+    def __post_init__(self) -> None:
+        _validate_fn_or_factory(self.fn, self.factory, op_name="batch_map_async")
+        if self.batch_size <= 1:
+            raise ValueError("batch_size for async batch steps must be > 1")
+        if self.max_in_flight <= 0:
+            raise ValueError("max_in_flight must be > 0")
+
+    def apply_batch_async(
+        self, rows: list[Row]
+    ) -> Awaitable[Iterable[Row]] | Iterable[Row]:
+        if self.fn is None:
+            raise RuntimeError("batch_map_async factory was not initialized")
+        return self.fn(rows)
 
 
 class FlatMapStep(RefinerStep, ABC):
@@ -236,6 +278,8 @@ __all__ = [
     "AsyncRowStep",
     "FnAsyncRowStep",
     "FnBatchStep",
+    "AsyncBatchStep",
+    "FnAsyncBatchStep",
     "FnFlatMapStep",
     "FilterRowStep",
     "MapResult",
@@ -245,6 +289,8 @@ __all__ = [
     "PredicateFn",
     "BatchFn",
     "BatchFactory",
+    "AsyncBatchFn",
+    "AsyncBatchFactory",
     "FlatMapFn",
     "TableResult",
     "TableFn",

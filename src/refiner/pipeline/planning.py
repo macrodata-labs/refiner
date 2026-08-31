@@ -12,6 +12,7 @@ from refiner.pipeline.steps import (
     DropStep,
     FilterExprStep,
     FilterRowStep,
+    FnAsyncBatchStep,
     FnAsyncRowStep,
     FnBatchStep,
     FnFlatMapStep,
@@ -99,7 +100,9 @@ def _callable_step_args(
     return args
 
 
-def _step_callable(step: FnAsyncRowStep | FnBatchStep | FnTableStep) -> tuple[Any, str]:
+def _step_callable(
+    step: FnAsyncRowStep | FnAsyncBatchStep | FnBatchStep | FnTableStep,
+) -> tuple[Any, str]:
     if step.factory is not None:
         return step.factory, "factory"
     if step.fn is None:
@@ -140,6 +143,26 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
                 builtin_extra_args={
                     "async_map.max_in_flight": step.max_in_flight,
                     "async_map.preserve_order": step.preserve_order,
+                },
+            ),
+        )
+    if isinstance(step, FnAsyncBatchStep):
+        fn, callable_arg_name = _step_callable(step)
+        inferred_name = (
+            explicit_name
+            if explicit_name and explicit_name != "batch_map_async"
+            else _explicit_callable_name(fn)
+        )
+        return (
+            (inferred_name or "batch_map_async"),
+            "async_batch_map",
+            _callable_step_args(
+                fn,
+                callable_arg_name=callable_arg_name,
+                extra_args={
+                    "batch_size": step.batch_size,
+                    "max_in_flight": step.max_in_flight,
+                    "preserve_order": step.preserve_order,
                 },
             ),
         )

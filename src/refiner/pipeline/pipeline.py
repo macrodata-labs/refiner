@@ -10,6 +10,8 @@ from refiner.pipeline.expressions import Expr, lit
 from refiner.io.fileset import DataFileSetLike
 from refiner.pipeline.resources import GPU
 from refiner.pipeline.steps import (
+    AsyncBatchFactory,
+    AsyncBatchFn,
     AsyncMapFactory,
     AsyncMapFn,
     BatchFactory,
@@ -20,6 +22,7 @@ from refiner.pipeline.steps import (
     FilterRowStep,
     FlatMapFn,
     FnAsyncRowStep,
+    FnAsyncBatchStep,
     FnBatchStep,
     FnFlatMapStep,
     FnRowStep,
@@ -83,6 +86,7 @@ from refiner.execution.factories import (
     initialize_worker_steps,
 )
 from refiner.execution.operators.row import (
+    AsyncBatchWindowRegistry,
     AsyncWindowRegistry,
     ShardDeltaFn,
     close_async_steps,
@@ -394,6 +398,40 @@ class RefinerPipeline:
             )
         )
 
+    def batch_map_async(
+        self,
+        fn: AsyncBatchFn | None = None,
+        *,
+        factory: AsyncBatchFactory | None = None,
+        batch_size: int,
+        max_in_flight: int = 2,
+        preserve_order: bool = True,
+        dtypes: DTypeMapping | None = None,
+    ) -> "RefinerPipeline":
+        """Apply bounded asynchronous work to fixed-size row batches.
+
+        At most ``max_in_flight`` batches are unresolved per worker. This enables
+        CPU preparation, remote I/O, or other asynchronous work for a later batch
+        to overlap processing of an earlier batch while preserving bounded memory.
+        The callback must return an iterable of ``Row`` objects.
+        """
+        if batch_size <= 1:
+            raise ValueError("batch_size for batch_map_async must be > 1")
+        if max_in_flight <= 0:
+            raise ValueError("max_in_flight must be > 0")
+        return self.add_step(
+            FnAsyncBatchStep(
+                fn=fn,
+                factory=factory,
+                batch_size=batch_size,
+                max_in_flight=max_in_flight,
+                preserve_order=preserve_order,
+                op_name="batch_map_async",
+                index=self._next_step_index(),
+                dtypes=dtypes,
+            )
+        )
+
     def flat_map(
         self,
         fn: FlatMapFn,
@@ -556,6 +594,7 @@ class RefinerPipeline:
         on_shard_delta: ShardDeltaFn | None = None,
     ) -> Iterable[Block]:
         async_window_registry: AsyncWindowRegistry = {}
+        async_batch_window_registry: AsyncBatchWindowRegistry = {}
         if has_worker_factories(self.pipeline_steps):
             runtime_steps = initialize_worker_steps(self.pipeline_steps)
             runtime_segments = compile_segments(runtime_steps)
@@ -572,6 +611,7 @@ class RefinerPipeline:
                     on_shard_delta=on_shard_delta,
                     input_schema=self.source.schema,
                     async_window_registry=async_window_registry,
+                    async_batch_window_registry=async_batch_window_registry,
                 )
         finally:
             close_async_steps(runtime_steps)

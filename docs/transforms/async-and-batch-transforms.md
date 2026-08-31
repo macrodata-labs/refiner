@@ -1,6 +1,6 @@
 ---
 title: "Async and batch transforms"
-description: "Use map_async and batch_map for concurrent I/O and batched model work"
+description: "Use map_async, batch_map, and batch_map_async for concurrent I/O and batched model work"
 ---
 
 # Async and batch transforms
@@ -127,6 +127,32 @@ pipeline = pipeline.batch_map(
 ```
 
 Exactly one of the positional callback or `factory` must be provided.
+
+## `batch_map_async`
+
+`batch_map_async` keeps a bounded number of whole batches in flight. It is
+useful when CPU or remote-I/O preparation for a later batch can overlap GPU or
+service work for an earlier batch:
+
+```python
+pipeline = pipeline.batch_map_async(
+    factory=create_async_batch_model,
+    batch_size=64,
+    max_in_flight=2,
+    preserve_order=True,
+)
+```
+
+The factory is initialized once per worker, just like `map_async` and
+`batch_map`. Its returned callable receives `list[Row]` and may return either an
+iterable of rows or an awaitable resolving to one. Refiner retains at most
+`max_in_flight` unresolved batches and blocks source consumption when the window
+is full, so memory stays bounded. If the returned callable defines `aclose()`,
+Refiner calls it after all batches drain.
+
+Refiner may invoke the returned callable concurrently. Stateful GPU processors
+should serialize access to a shared model while allowing preparation to run in
+parallel—for example, by using a CPU executor plus a one-worker GPU executor.
 
 ## Order and backpressure
 

@@ -116,13 +116,17 @@ def test_map_async_factory_is_reused_and_closed() -> None:
     assert instances[0].close_calls == 1
 
 
-@pytest.mark.parametrize("operation", ["map_table", "batch_map", "map_async"])
+@pytest.mark.parametrize(
+    "operation", ["map_table", "batch_map", "batch_map_async", "map_async"]
+)
 def test_worker_factory_must_return_callable(operation: str) -> None:
     pipeline = from_items([{"x": 1}])
     if operation == "map_table":
         pipeline = pipeline.map_table(factory=lambda: object())
     elif operation == "batch_map":
         pipeline = pipeline.batch_map(factory=lambda: object(), batch_size=2)
+    elif operation == "batch_map_async":
+        pipeline = pipeline.batch_map_async(factory=lambda: object(), batch_size=2)
     else:
         pipeline = pipeline.map_async(factory=lambda: object())
 
@@ -142,6 +146,15 @@ def test_transforms_require_exactly_one_callback_or_factory() -> None:
         pipeline.batch_map(batch_size=2)
     with pytest.raises(ValueError, match="exactly one of fn or factory"):
         pipeline.batch_map(
+            lambda rows: rows,
+            factory=lambda: lambda rows: rows,
+            batch_size=2,
+        )
+
+    with pytest.raises(ValueError, match="exactly one of fn or factory"):
+        pipeline.batch_map_async(batch_size=2)
+    with pytest.raises(ValueError, match="exactly one of fn or factory"):
+        pipeline.batch_map_async(
             lambda rows: rows,
             factory=lambda: lambda rows: rows,
             batch_size=2,

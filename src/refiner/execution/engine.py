@@ -14,6 +14,7 @@ from refiner.pipeline.steps import (
     CastStep,
     DropStep,
     FilterExprStep,
+    FnAsyncBatchStep,
     FnAsyncRowStep,
     FnBatchStep,
     FnFlatMapStep,
@@ -28,6 +29,7 @@ from refiner.pipeline.steps import (
 )
 from refiner.execution.buffer import RowBuffer
 from refiner.execution.operators.row import (
+    AsyncBatchWindowRegistry,
     AsyncWindowRegistry,
     ShardDeltaFn,
     execute_row_steps,
@@ -80,6 +82,7 @@ def execute_segments(
     on_shard_delta: ShardDeltaFn | None = None,
     input_schema: pa.Schema | None = None,
     async_window_registry: AsyncWindowRegistry | None = None,
+    async_batch_window_registry: AsyncBatchWindowRegistry | None = None,
 ) -> Iterator[Block]:
     """Execute segments and yield row or tabular blocks."""
     configured_block_rows = vectorized_chunk_rows
@@ -112,6 +115,7 @@ def execute_segments(
                 on_shard_delta=on_shard_delta,
                 output_schema=output_schema,
                 async_window_registry=async_window_registry,
+                async_batch_window_registry=async_batch_window_registry,
             )
             current_schema = output_schema
     yield from _limit_output_blocks(
@@ -212,6 +216,7 @@ def _execute_row_segment(
     on_shard_delta: ShardDeltaFn | None,
     output_schema: pa.Schema | None,
     async_window_registry: AsyncWindowRegistry | None,
+    async_batch_window_registry: AsyncBatchWindowRegistry | None,
 ) -> Iterator[Block]:
     # Row/UDF execution consumes row views and emits row blocks for downstream
     # vectorized segments (or final row iteration).
@@ -221,6 +226,7 @@ def _execute_row_segment(
         steps,
         on_shard_delta=on_shard_delta,
         async_window_registry=async_window_registry,
+        async_batch_window_registry=async_batch_window_registry,
     )
     if not output_tabular:
         yield from _chunk_output_rows(step_out, output_block_rows)
@@ -243,7 +249,16 @@ def _row_segment_schema(
     for step in steps:
         dtypes = (
             step.dtypes
-            if isinstance(step, (FnRowStep, FnAsyncRowStep, FnBatchStep, FnFlatMapStep))
+            if isinstance(
+                step,
+                (
+                    FnRowStep,
+                    FnAsyncRowStep,
+                    FnAsyncBatchStep,
+                    FnBatchStep,
+                    FnFlatMapStep,
+                ),
+            )
             else None
         )
         if not dtypes:
