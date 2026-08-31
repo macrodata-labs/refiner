@@ -1757,7 +1757,7 @@ def test_blob_writer_coalesces_complete_source_blob_references(
     assert references[1]["offset"] == 3
 
 
-def test_blob_writer_stages_complete_source_before_retry_destination_is_opened(
+def test_blob_writer_rejects_same_complete_source_and_retry_destination(
     tmp_path,
 ) -> None:
     output_path = tmp_path / "retry-assets"
@@ -1788,18 +1788,20 @@ def test_blob_writer_stages_complete_source_before_retry_destination_is_opened(
     )
     manager.set_input_schema(table.schema)
 
-    with set_active_run_context(
-        job_id="job",
-        stage_index=0,
-        worker_id=worker_id,
-        worker_name=None,
-        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    with (
+        set_active_run_context(
+            job_id="job",
+            stage_index=0,
+            worker_id=worker_id,
+            worker_name=None,
+            runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+        ),
+        pytest.raises(
+            ValueError, match="packed blob source and destination must differ"
+        ),
     ):
-        rewritten = manager.rewrite_table(shard_id, table)
-        manager.close()
+        manager.rewrite_table(shard_id, table)
 
-    references = rewritten.column("video").to_pylist()
-    assert [read_blob(reference) for reference in references] == [b"abc", b"def"]
     assert source.read_bytes() == b"abcdef"
 
 
