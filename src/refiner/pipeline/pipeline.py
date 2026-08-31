@@ -1623,6 +1623,7 @@ def read_lerobot(
                 storage_options=storage_options,
                 target_shard_bytes=target_shard_bytes,
                 num_shards=num_shards,
+                arrow_batch_size=_bounded_reader_window(65536, max_rows),
                 split_row_groups=split_row_groups,
                 skip_malformed_rows=skip_malformed_rows,
             ),

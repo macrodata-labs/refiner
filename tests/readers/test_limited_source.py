@@ -32,6 +32,7 @@ from refiner.pipeline.expressions import col
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
 from refiner.pipeline.sources.limited import LimitedSource, limit_source
 from refiner.pipeline.sources.readers.files import FilesReader
+from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
 from refiner.pipeline.sources.readers.parquet import ParquetReader
 from refiner.pipeline.sources.readers.tfrecord import TfrecordReader
 
@@ -277,6 +278,14 @@ def test_file_max_rows_bounds_content_read_concurrency(tmp_path: Path) -> None:
     assert isinstance(pipeline.source, LimitedSource)
     assert isinstance(pipeline.source.source, FilesReader)
     assert pipeline.source.source.max_in_flight == 1
+
+
+def test_lerobot_max_rows_bounds_episode_hydration_batch(tmp_path: Path) -> None:
+    pipeline = read_lerobot(tmp_path, max_rows=3)
+
+    assert isinstance(pipeline.source, LimitedSource)
+    assert isinstance(pipeline.source.source, LeRobotEpisodeReader)
+    assert pipeline.source.source.arrow_batch_size == 3
 
 
 def test_tfrecord_max_rows_bounds_eager_input_windows(tmp_path: Path) -> None:
