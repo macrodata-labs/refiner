@@ -755,9 +755,10 @@ class BlobAssetManager:
         for index, value in enumerate(values):
             if value is None or not isinstance(value, Mapping):
                 continue
-            path = value.get("path")
-            offset = value.get("offset")
-            size = value.get("size")
+            reference = cast(Mapping[str, object], value)
+            path = reference.get("path")
+            offset = reference.get("offset")
+            size = reference.get("size")
             if (
                 isinstance(path, str)
                 and path
