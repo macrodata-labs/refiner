@@ -4,7 +4,6 @@ import asyncio
 from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-import os
 import posixpath
 import re
 import tempfile
@@ -566,6 +565,11 @@ class BlobAssetManager:
         if block is None:
             next_index = self._blocks[key].index + 1 if key in self._blocks else 0
             relpath = self._block_relpath(shard_id, column_name, next_index)
+            if self.output.exists(relpath):
+                raise FileExistsError(
+                    "packed blob destination already exists; refusing to overwrite it: "
+                    f"{self.output.abs_path(relpath)}"
+                )
             open_kwargs = (
                 {"size": max(self.config.target_bytes, payload_size)}
                 if is_s3fs(self.output.fs)
@@ -580,36 +584,6 @@ class BlobAssetManager:
             )
             self._blocks[key] = block
         return block
-
-    def _block_output_path(
-        self,
-        shard_id: str,
-        column_name: str,
-        payload_size: int,
-    ) -> str:
-        key = (shard_id, column_name)
-        block = self._blocks.get(key)
-        if block is not None and not (
-            block.size > 0 and block.size + payload_size > self.config.target_bytes
-        ):
-            return block.path
-        next_index = block.index + 1 if block is not None else 0
-        return self.output.abs_path(
-            self._block_relpath(shard_id, column_name, next_index)
-        )
-
-    @staticmethod
-    def _same_file(source: DataFile, destination: str) -> bool:
-        target = DataFile.resolve(destination)
-        if source.abs_path() == target.abs_path():
-            return True
-        if source.is_local and target.is_local:
-            return os.path.realpath(source.abs_path()) == os.path.realpath(
-                target.abs_path()
-            )
-        return source.fs is target.fs and (
-            posixpath.normpath(source.path) == posixpath.normpath(target.path)
-        )
 
     @staticmethod
     def _source(value: object, storage: str) -> tuple[bytes | DataFile, int, int]:
@@ -808,12 +782,6 @@ class BlobAssetManager:
                 [(offset, size) for _, offset, size in references], source_size
             ):
                 continue
-            output_path = self._block_output_path(shard_id, column_name, source_size)
-            if self._same_file(source, output_path):
-                raise ValueError(
-                    "packed blob source and destination must differ: "
-                    f"{source.abs_path()}"
-                )
             block = self._block(shard_id, column_name, source_size)
             output_offset = block.size
             remaining = source_size

@@ -1796,13 +1796,61 @@ def test_blob_writer_rejects_same_complete_source_and_retry_destination(
             worker_name=None,
             runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
         ),
-        pytest.raises(
-            ValueError, match="packed blob source and destination must differ"
-        ),
+        pytest.raises(FileExistsError, match="packed blob destination already exists"),
     ):
         manager.rewrite_table(shard_id, table)
 
     assert source.read_bytes() == b"abcdef"
+
+
+def test_blob_writer_rejects_cross_blob_overwrite_before_reordered_copy(
+    tmp_path,
+) -> None:
+    output_path = tmp_path / "retry-assets"
+    output = DataFolder.resolve(output_path)
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    worker = worker_token_for(worker_id)
+    asset_dir = output_path / "assets" / f"{shard_id}__w{worker}" / "video"
+    asset_dir.mkdir(parents=True)
+    first = asset_dir / "00000.blob"
+    second = asset_dir / "00001.blob"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    field = datatype.blob_reference("video").with_name("video")
+    table = pa.Table.from_arrays(
+        [
+            pa.array(
+                [
+                    {"path": str(second), "offset": 0, "size": 6},
+                    {"path": str(first), "offset": 0, "size": 5},
+                ],
+                type=field.type,
+            )
+        ],
+        schema=pa.schema([field]),
+    )
+    manager = BlobAssetManager(
+        output,
+        config=BlobAssetConfig(target_bytes=6),
+        filename_template="{shard_id}.parquet",
+    )
+    manager.set_input_schema(table.schema)
+
+    with (
+        set_active_run_context(
+            job_id="job",
+            stage_index=0,
+            worker_id=worker_id,
+            worker_name=None,
+            runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+        ),
+        pytest.raises(FileExistsError, match="packed blob destination already exists"),
+    ):
+        manager.rewrite_table(shard_id, table)
+
+    assert first.read_bytes() == b"first"
+    assert second.read_bytes() == b"second"
 
 
 def test_blob_writer_keeps_partial_source_blob_on_range_copy_path(
