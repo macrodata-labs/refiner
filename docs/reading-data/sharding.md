@@ -62,6 +62,11 @@ plan within the 10,000-shard hard limit.
 Do not overfit shard count before measuring. Too few shards leave workers idle;
 too many shards add scheduling and output overhead.
 
+When a built-in reader receives `max_rows`, Refiner exposes one bounded source
+shard regardless of `num_shards`. This is intentional: the limit is global, so
+running several independently capped shards could emit `max_rows` from every
+worker. Remove `max_rows` for the production shard plan.
+
 ## Shards and writers
 
 Writers usually write shard-local files first. Some writers add a reducer stage

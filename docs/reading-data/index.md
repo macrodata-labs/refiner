@@ -39,3 +39,50 @@ pipeline = mdr.read_lerobot("hf://datasets/lerobot/aloha_sim_transfer_cube_human
 
 Read [Reader Model](reader-model.md) and [Sharding](sharding.md) before writing
 large jobs.
+
+## Run a bounded quick test
+
+Pass `max_rows` to a built-in reader before testing transforms or allocating a
+full cloud run:
+
+```python
+import refiner as mdr
+
+pipeline = mdr.read_parquet(
+    "s3://my-bucket/episodes/*.parquet",
+    columns_to_read=["episode_id", "video"],
+    max_rows=100,
+)
+
+rows = pipeline.take(5)
+```
+
+`max_rows` is a global source-output cap, not a per-worker cap. It applies after
+reader-level operations such as Parquet or Hugging Face filtering, but before
+pipeline transforms. A positive limit uses one source shard so multiple workers
+cannot each emit the requested number of rows. Consequently,
+`num_workers="auto"` starts at most one worker for a limited source. Set
+`max_rows=0` to execute no source shards.
+
+The option is available on `read_csv`, `read_json`, `read_jsonl`, `read_files`,
+`read_videos`, `read_hdf5`, `read_zarr`, `read_mcap`, `read_parquet`,
+`read_hf_dataset`, `read_lerobot`, `read_tfrecords`, and `read_tfds`.
+`load_lance` provides the same public option through its native indexed limit.
+
+Readers stop before opening later source shards and slice the final Arrow batch.
+Refiner also reduces configurable batch or concurrency windows for Parquet,
+Hugging Face, file-content, Zarr, TFRecord, and TFDS readers. A reader may still
+need to load one indivisible physical unit to produce a row—for example, one
+whole-file JSON document, HDF5 group, MCAP episode, or LeRobot episode. The
+limit bounds later work but cannot make that first logical row smaller.
+
+## Internal Notes
+
+Spark, Daft, and Ray Data can represent a limit as a distributed logical-plan
+node, with their schedulers coordinating partitions and ordering. Beam/Dataflow
+treats collections as unordered, so a deterministic leading-row limit requires
+additional ordering or runner-specific behavior. Hugging Face Datasets offers
+simple local selection or iterable `take` operations. Refiner follows the latter
+DX but exposes one deterministic scheduling shard for limited runs. This trades
+parallelism—which is not useful for a small smoke test—for an exact global cap
+without adding distributed limit coordination to the worker protocol.
