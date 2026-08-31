@@ -10,6 +10,7 @@ from refiner.execution.buffer import RowBuffer
 from refiner.execution.tracking.shards import ShardDeltaFn, ShardDeltaTracker
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import (
+    AsyncBatchStep,
     AsyncRowStep,
     BatchStep,
     FilterRowStep,
@@ -23,6 +24,8 @@ from refiner.worker.metrics.api import register_gauge
 
 AsyncCloseFn = Callable[[], Coroutine[object, object, None]]
 AsyncWindowRegistry = dict[int, AsyncWindow[Row]]
+AsyncBatchResult = tuple[list[Row], list[Row]]
+AsyncBatchWindowRegistry = dict[int, AsyncWindow[AsyncBatchResult]]
 
 
 class AsyncStepTeardownError(RuntimeError):
@@ -33,17 +36,21 @@ def close_async_steps(steps: Sequence[RefinerStep]) -> None:
     """Close async callables owned by the provided pipeline steps."""
     close_fns: list[AsyncCloseFn] = []
     for step in steps:
-        if not isinstance(step, AsyncRowStep):
+        if not isinstance(step, AsyncRowStep | AsyncBatchStep):
             continue
         fn = getattr(step, "fn", None)
         close = getattr(fn, "aclose", None)
         if close is not None:
             close_fns.append(cast(AsyncCloseFn, close))
+    first_error: Exception | None = None
     for close in close_fns:
         try:
             submit(close()).result()
         except Exception as e:
-            raise AsyncStepTeardownError(str(e)) from e
+            if first_error is None:
+                first_error = e
+    if first_error is not None:
+        raise AsyncStepTeardownError(str(first_error)) from first_error
 
 
 def execute_row_steps(
@@ -52,6 +59,7 @@ def execute_row_steps(
     *,
     on_shard_delta: ShardDeltaFn | None = None,
     async_window_registry: AsyncWindowRegistry | None = None,
+    async_batch_window_registry: AsyncBatchWindowRegistry | None = None,
 ) -> Iterator[Row]:
     """Execute row/batch/flatmap steps using per-step queues.
 
@@ -86,8 +94,35 @@ def execute_row_steps(
             )
         return window
 
+    def _async_batch_window(
+        step: AsyncBatchStep,
+    ) -> AsyncWindow[AsyncBatchResult]:
+        window = (
+            async_batch_window_registry.get(step.index)
+            if async_batch_window_registry is not None
+            else None
+        )
+        if window is None:
+            window = AsyncWindow[AsyncBatchResult](
+                max_in_flight=step.max_in_flight,
+                preserve_order=step.preserve_order,
+            )
+            if async_batch_window_registry is not None:
+                async_batch_window_registry[step.index] = window
+            register_gauge(
+                "in_flight_batches",
+                lambda window=window: len(window),
+                unit="batches",
+                step_index=step.index,
+            )
+        return window
+
     async_windows = [
         _async_window(step) if isinstance(step, AsyncRowStep) else None
+        for step in ordered
+    ]
+    async_batch_windows = [
+        _async_batch_window(step) if isinstance(step, AsyncBatchStep) else None
         for step in ordered
     ]
 
@@ -103,10 +138,25 @@ def execute_row_steps(
                 return row.update(result)
             raise TypeError(f"Unsupported map_async() result type: {type(result)!r}")
 
+    async def _run_async_batch(
+        *, step: AsyncBatchStep, rows: list[Row]
+    ) -> AsyncBatchResult:
+        with set_active_step_index(step.index):
+            result = step.apply_batch_async(rows)
+            if inspect.isawaitable(result):
+                result = await result
+            output = list(cast(Iterable[Row], result))
+            for item in output:
+                if not isinstance(item, Row):
+                    raise TypeError(
+                        f"Unsupported batch_map_async() result type: {type(item)!r}"
+                    )
+            return rows, output
+
     def _run_step(i: int, *, flush_all: bool) -> None:
         step = ordered[i]
         inp = queues[i]
-        if not inp and not isinstance(step, AsyncRowStep):
+        if not inp and not isinstance(step, AsyncRowStep | AsyncBatchStep):
             return
         out = queues[i + 1]
         with set_active_step_index(step.index):
@@ -139,6 +189,34 @@ def execute_row_steps(
                     for row in drained_rows:
                         row.log_throughput("rows_processed", 1, unit="rows")
                     out.extend(drained_rows)
+                return
+
+            if isinstance(step, AsyncBatchStep):
+                window = async_batch_windows[i]
+                if window is None:
+                    return
+
+                def emit(completed: list[AsyncBatchResult]) -> None:
+                    if not completed:
+                        return
+                    with ShardDeltaTracker(on_shard_delta) as delta:
+                        for batch_in, batch_out in completed:
+                            delta.remove_rows(batch_in)
+                            for item in batch_out:
+                                item.log_throughput("rows_out", 1, unit="rows")
+                                if item.shard_id is not None:
+                                    delta.add(item.shard_id, 1)
+                                out.append(item)
+
+                while len(inp) >= step.batch_size or (flush_all and inp):
+                    size = step.batch_size if len(inp) >= step.batch_size else len(inp)
+                    batch_in = inp.take(size)
+                    window.submit_blocking(_run_async_batch(step=step, rows=batch_in))
+                    emit(window.take_completed())
+                if flush_all:
+                    emit(window.drain())
+                else:
+                    emit(window.take_completed())
                 return
 
             if isinstance(step, FilterRowStep):
@@ -226,10 +304,14 @@ def execute_row_steps(
         for window in async_windows:
             if window is not None:
                 window.cancel_pending()
+        for window in async_batch_windows:
+            if window is not None:
+                window.cancel_pending()
 
 
 __all__ = [
     "AsyncWindowRegistry",
+    "AsyncBatchWindowRegistry",
     "AsyncStepTeardownError",
     "close_async_steps",
     "execute_row_steps",

@@ -1,6 +1,6 @@
 ---
 title: "Async and batch transforms"
-description: "Use map_async and batch_map for concurrent I/O and batched model work"
+description: "Use map_async, batch_map, and batch_map_async for concurrent I/O and batched model work"
 ---
 
 # Async and batch transforms
@@ -27,6 +27,29 @@ pipeline = pipeline.map_async(
 
 Use `max_in_flight` to match provider rate limits, memory limits, or open file
 limits.
+
+For expensive worker-local state, pass a zero-argument `factory` instead of a
+callback:
+
+```python
+class Classifier:
+    def __init__(self):
+        self.client = create_client()
+
+    async def __call__(self, row):
+        label = await self.client.classify(row["text"])
+        return {"label": label}
+
+
+def create_classifier():
+    return Classifier()
+
+
+pipeline = pipeline.map_async(
+    factory=create_classifier,
+    max_in_flight=32,
+)
+```
 
 When callbacks return large values such as image or video bytes, set a small
 execution block row limit:
@@ -74,6 +97,43 @@ pipeline = pipeline.batch_map(add_batch_rank, batch_size=32)
 ```
 
 Use this for perception pipelines or model APIs that naturally process batches.
+
+Use `factory` when constructing the batch callback loads a model or another
+expensive resource:
+
+```python
+def create_batch_model():
+    model = load_model("model.pt")
+
+    def infer(rows):
+        return model.predict(rows)
+
+    return infer
+
+
+pipeline = pipeline.batch_map(
+    factory=create_batch_model,
+    batch_size=32,
+)
+```
+
+## `batch_map_async`
+
+`batch_map_async` processes multiple batches concurrently. Use
+`max_in_flight` to bound concurrency and `preserve_order` when output order
+must match input order:
+
+```python
+pipeline = pipeline.batch_map_async(
+    factory=create_async_batch_model,
+    batch_size=64,
+    max_in_flight=2,
+    preserve_order=True,
+)
+```
+
+The callback receives `list[Row]` and returns rows, either directly or through
+an awaitable.
 
 ## Order and backpressure
 
