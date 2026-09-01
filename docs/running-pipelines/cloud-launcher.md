@@ -34,9 +34,31 @@ limits to the resulting count. The submitting machine does not need access to
 private inputs. An empty stage starts no worker containers and completes after
 shard registration. Pass a positive integer when you want a fixed worker count.
 
+## Execution provider
+
+Modal remains the default. For a CPU-only run on AWS Batch, pass `provider="aws"`:
+
+```python
+pipeline.launch_cloud(
+    name="aws-normalization",
+    provider="aws",
+    num_workers=8,
+    cpus_per_worker=2,
+    mem_mb_per_worker=4096,
+)
+```
+
+AWS Batch supports pip dependencies, secrets, environment variables, multiple
+workers, continuation, and multi-stage pipelines. It does not currently support
+GPUs, managed runtime services, apt packages, custom images, or arbitrary file
+and directory attachments. Retained cloud debugging uses the same
+`provider="aws"` selection; see [Cloud debug sessions](cloud-debug-sessions.md).
+
 ## Cloud and region placement
 
-Workers use AWS by default. Select one supported public cloud with `cloud`:
+For Modal execution, workers use AWS by default. Select one supported public
+cloud with `cloud`; this placement setting is separate from the `provider`
+execution-backend setting above:
 
 ```python
 pipeline.launch_cloud(

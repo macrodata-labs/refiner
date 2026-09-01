@@ -17,8 +17,10 @@ from refiner.pipeline.data.shard import FilePartsDescriptor, Shard
 from refiner.pipeline.data.tabular import Tabular, set_or_append_column
 from refiner.pipeline.sources.base import BaseSource, SourceUnit
 from refiner.pipeline.sources.readers.parquet import ParquetReader
-from refiner.pipeline.sources.readers.utils import DEFAULT_TARGET_SHARD_BYTES
-from refiner.pipeline.sources.shard_limit import validate_num_shards
+from refiner.pipeline.sources.readers.utils import (
+    DEFAULT_TARGET_SHARD_BYTES,
+    validate_explicit_num_shards,
+)
 from refiner.robotics.lerobot_format import (
     LeRobotInfo,
     LeRobotMetadata,
@@ -64,6 +66,7 @@ class LeRobotEpisodeReader(BaseSource):
         The shard-planning arguments apply to the episode parquet files under
         each dataset root's `meta/episodes` directory.
         """
+        validate_explicit_num_shards(num_shards)
         self._root_fileset = DataFileSet.resolve(
             inputs,
             fs=fs,
@@ -72,7 +75,6 @@ class LeRobotEpisodeReader(BaseSource):
         )
         if not self._root_fileset.entries:
             raise ValueError("LeRobot reader requires at least one dataset root")
-        validate_num_shards(num_shards)
         self._roots: tuple[DataFolder, ...] | None = None
         self._episode_reader: ParquetReader | None = None
         self.target_shard_bytes = target_shard_bytes

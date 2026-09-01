@@ -48,16 +48,16 @@ pipeline = mdr.read_lerobot(
 )
 ```
 
-Refiner rejects plans above 10,000 shards. This applies both to explicit
-`num_shards` values and to automatic plans derived from input sizes or row
-ranges. If an automatic plan exceeds the limit, increase `target_shard_bytes`
-or set `num_shards` to 10,000 or fewer. If the inputs themselves require more
-than 10,000 shards—for example, more than 10,000 non-empty Zarr stores—combine
-them into fewer inputs before reading them.
+Automatic planning produces at most 1,000 shards. When the normal target size
+would create more, Refiner combines adjacent work while keeping every input
+file, byte range, or row range in the resulting plan. Across readers, explicit
+`num_shards` values may request up to 10,000 shards; larger requests fail with
+a validation error.
 
-`mdr.task(..., num_tasks=...)` has the same 10,000-task limit. For larger
-logical workloads, use 10,000 or fewer tasks and process multiple work units
-inside each task.
+Zarr row-range shards refer to one input store, so automatic planning cannot
+combine more than 1,000 non-empty Zarr stores into one plan. For a larger set,
+group the stores upstream or pass an explicit `num_shards` value to opt into a
+plan within the 10,000-shard hard limit.
 
 Do not overfit shard count before measuring. Too few shards leave workers idle;
 too many shards add scheduling and output overhead.

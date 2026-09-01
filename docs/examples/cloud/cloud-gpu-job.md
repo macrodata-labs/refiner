@@ -37,6 +37,6 @@ pipeline.launch_cloud(
 This example requests one H100 GPU for a single cloud worker and logs the raw output of `nvidia-smi` to the worker logs.
 Because the callback is side-effect-only, it does not need to return anything.
 
-For real GPU workloads, use `gpu=mdr.GPU(...)` to specify the required GPU type and count based on your model's needs. Increase the number of tasks if you need to improve parallelization.
+For real GPU workloads, use `gpu=mdr.GPU(...)` to specify the required GPU type and count based on your model's needs. Supported types are `h100`, `l40s`, `a100`, `a10`, `l4`, and `t4`. Increase the number of tasks if you need to improve parallelization.
 
 Related: [Resources, GPUs, and Services](../../running-pipelines/resources-gpus-and-services.md).

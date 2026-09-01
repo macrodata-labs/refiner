@@ -11,7 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
 
-from refiner import col, read_blob
+from refiner import AddColumns, Append, Create, Overwrite, col, read_blob
 from refiner.io import DataFolder
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.row import DictRow, Row
@@ -29,6 +29,7 @@ from refiner.pipeline.sinks.lance import (
     LanceDatasetCommitReducerSink,
     LanceDatasetSink,
     _StreamingAddColumnsWriter,
+    _cast_to_planned_schema,
     _job_token,
     _schema_to_base64,
 )
@@ -48,6 +49,14 @@ class _FinalizedWorkersRuntime:
     ) -> list[FinalizedShardWorker]:
         assert stage_index == 0
         return self._rows
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [(Create(), "create"), (Append(), "append"), (Overwrite(), "overwrite")],
+)
+def test_lance_write_mode_dataclasses_normalize(mode, expected, tmp_path) -> None:
+    assert LanceDatasetSink(tmp_path / "output.lance", mode=mode).mode == expected
 
 
 class _PartialMissingStream:
@@ -80,6 +89,55 @@ def test_iter_rows_ignores_sink(tmp_path) -> None:
     out = list(pipeline.iter_rows())
     assert [int(row["x"]) for row in out] == [1, 2]
     assert list(tmp_path.iterdir()) == []
+
+
+def test_lance_writer_normalizes_worker_schema_metadata() -> None:
+    planned = pa.schema(
+        [pa.field("x", pa.int64(), metadata={b"unit": b"planned"})],
+        metadata={b"schema": b"planned"},
+    )
+    worker_local = pa.schema(
+        [pa.field("x", pa.int64(), metadata={b"unit": b"worker"})],
+        metadata={b"schema": b"worker"},
+    )
+    table = pa.Table.from_arrays([pa.array([1, 2])], schema=worker_local)
+
+    normalized = _cast_to_planned_schema(table, planned)
+
+    assert normalized.schema.equals(planned, check_metadata=True)
+    assert normalized.to_pydict() == {"x": [1, 2]}
+
+
+def test_lance_writer_preserves_runtime_inferred_type_changes() -> None:
+    planned = pa.schema([pa.field("value", pa.int64())])
+    runtime = pa.table({"value": ["chunk-1", "chunk-2"]})
+
+    normalized = _cast_to_planned_schema(runtime, planned)
+
+    assert normalized.schema == pa.schema([pa.field("value", pa.string())])
+    assert normalized.to_pydict() == {"value": ["chunk-1", "chunk-2"]}
+
+
+def test_lance_writer_honors_explicitly_declared_type_changes() -> None:
+    planned = pa.schema([pa.field("value", pa.int64())])
+    runtime = pa.table({"value": ["1", "2"]})
+
+    normalized = _cast_to_planned_schema(
+        runtime, planned, declared_columns=frozenset({"value"})
+    )
+
+    assert normalized.schema == planned
+    assert normalized.to_pydict() == {"value": [1, 2]}
+
+
+def test_lance_writer_allows_row_map_dropped_planned_fields() -> None:
+    planned = pa.schema([pa.field("x", pa.int64()), pa.field("dropped", pa.string())])
+    table = pa.table({"x": [1, 2]})
+
+    normalized = _cast_to_planned_schema(table, planned)
+
+    assert normalized.schema.names == ["x"]
+    assert normalized.schema.field("x").type == pa.int64()
 
 
 def test_launch_local_writes_jsonl_per_shard(tmp_path) -> None:
@@ -254,6 +312,55 @@ def test_launch_local_writes_lance_dataset(tmp_path) -> None:
         20,
         30,
     ]
+
+
+def test_lance_dataset_writer_preserves_undeclared_row_map_type_change(
+    tmp_path,
+) -> None:
+    lance = pytest.importorskip("lance")
+    source_uri = tmp_path / "dynamic-type-source.lance"
+    output_uri = tmp_path / "dynamic-type-output.lance"
+    source = lance.write_dataset(pa.table({"value": [1, 2]}), str(source_uri))
+
+    (
+        load_lance(source_uri, version=source.version)
+        .map(lambda row: {"value": f"chunk-{int(row['value'])}"})
+        .write_lance_dataset(output_uri)
+        .launch_local(
+            name="lance-dynamic-type",
+            num_workers=1,
+            rundir=str(tmp_path / "dynamic-type-run"),
+        )
+    )
+
+    table = lance.dataset(str(output_uri)).to_table()
+    assert table.schema.field("value").type == pa.string()
+    assert table.column("value").to_pylist() == ["chunk-1", "chunk-2"]
+
+
+def test_lance_dataset_writer_enforces_declared_row_map_dtype(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    source_uri = tmp_path / "declared-type-source.lance"
+    output_uri = tmp_path / "declared-type-output.lance"
+    source = lance.write_dataset(pa.table({"value": [1, 2]}), str(source_uri))
+
+    (
+        load_lance(source_uri, version=source.version)
+        .map(
+            lambda row: {"value": str(int(row["value"]))},
+            dtypes={"value": pa.int64()},
+        )
+        .write_lance_dataset(output_uri)
+        .launch_local(
+            name="lance-declared-type",
+            num_workers=1,
+            rundir=str(tmp_path / "declared-type-run"),
+        )
+    )
+
+    table = lance.dataset(str(output_uri)).to_table()
+    assert table.schema.field("value").type == pa.int64()
+    assert table.column("value").to_pylist() == [1, 2]
 
 
 def test_lance_dataset_writer_handles_more_shards_than_io_threads(tmp_path) -> None:
@@ -483,6 +590,83 @@ def test_lance_add_columns_handles_more_fragments_than_io_threads(tmp_path) -> N
         "x": list(range(12)),
         "y": [value * 10 for value in range(12)],
     }
+
+
+def test_lance_add_columns_fills_filtered_rows(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "filtered-column-fill.lance"
+    base = lance.write_dataset(
+        pa.table({"x": list(range(6))}),
+        str(dataset_uri),
+        max_rows_per_file=2,
+    )
+
+    (
+        load_lance(dataset_uri, version=base.version)
+        .filter(lambda row: int(row["x"]) % 2 == 0)
+        .map(lambda row: {"y": int(row["x"]) * 10}, dtypes={"y": datatype.int64()})
+        .write_lance_dataset(
+            dataset_uri,
+            mode=AddColumns(fill={"y": -1}),
+            columns=["y"],
+        )
+        .launch_local(
+            name="lance-filtered-column-fill",
+            num_workers=1,
+            rundir=str(tmp_path / "filtered-column-fill-run"),
+        )
+    )
+
+    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
+        "x": list(range(6)),
+        "y": [0, -1, 20, -1, 40, -1],
+    }
+
+
+def test_lance_add_columns_fills_when_every_row_is_filtered(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "all-filtered-column-fill.lance"
+    base = lance.write_dataset(
+        pa.table({"x": list(range(4))}),
+        str(dataset_uri),
+        max_rows_per_file=2,
+    )
+
+    (
+        load_lance(dataset_uri, version=base.version)
+        .map(lambda _row: {"y": 0}, dtypes={"y": datatype.int64()})
+        .filter(lambda _row: False)
+        .write_lance_dataset(
+            dataset_uri,
+            mode=AddColumns(fill={"y": -1}),
+            columns=["y"],
+        )
+        .launch_local(
+            name="lance-all-filtered-column-fill",
+            num_workers=1,
+            rundir=str(tmp_path / "all-filtered-column-fill-run"),
+        )
+    )
+
+    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
+        "x": list(range(4)),
+        "y": [-1, -1, -1, -1],
+    }
+
+
+def test_lance_add_columns_rejects_unknown_fill_column(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "unknown-fill-column.lance"
+    base = lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+
+    with pytest.raises(ValueError, match="unknown columns: z"):
+        LanceDatasetSink(
+            dataset_uri,
+            mode=AddColumns(fill={"z": 0}),
+            columns=["y"],
+            source_uri=str(dataset_uri),
+            source_version=base.version,
+        )
 
 
 def test_lance_add_columns_accepts_equivalent_nested_metadata_order(tmp_path) -> None:
@@ -1561,6 +1745,202 @@ def test_parquet_sink_packs_embedded_assets_into_blob_files(tmp_path) -> None:
     ]
     assert datatype.asset_type(out.schema.field("image")) == "image"
     assert datatype.asset_storage(out.schema.field("image")) == "blob_reference"
+
+
+def test_blob_writer_coalesces_complete_source_blob_references(
+    tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "source.blob"
+    source.write_bytes(b"abcdef")
+    output = DataFolder.resolve(tmp_path / "coalesced-assets")
+    field = datatype.blob_reference("video").with_name("video")
+    table = pa.Table.from_arrays(
+        [
+            pa.array(
+                [
+                    {"path": str(source), "offset": 0, "size": 3},
+                    {"path": str(source), "offset": 3, "size": 3},
+                ],
+                type=field.type,
+            )
+        ],
+        schema=pa.schema([field]),
+    )
+    manager = BlobAssetManager(
+        output,
+        config=BlobAssetConfig(target_bytes=1024),
+        filename_template="{shard_id}.parquet",
+    )
+    manager.set_input_schema(table.schema)
+
+    def unexpected_range_copy(*_args, **_kwargs):
+        raise AssertionError("complete source blob should not use per-range copies")
+
+    monkeypatch.setattr(manager, "_append", unexpected_range_copy)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        rewritten = manager.rewrite_table("0123456789ab", table)
+        manager.close()
+
+    references = rewritten.column("video").to_pylist()
+    assert [read_blob(reference) for reference in references] == [b"abc", b"def"]
+    assert references[0]["path"] == references[1]["path"]
+    assert references[0]["offset"] == 0
+    assert references[1]["offset"] == 3
+
+
+def test_blob_writer_rejects_same_complete_source_and_retry_destination(
+    tmp_path,
+) -> None:
+    output_path = tmp_path / "retry-assets"
+    output = DataFolder.resolve(output_path)
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    worker = worker_token_for(worker_id)
+    source = output_path / "assets" / f"{shard_id}__w{worker}" / "video" / "00000.blob"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"abcdef")
+    field = datatype.blob_reference("video").with_name("video")
+    table = pa.Table.from_arrays(
+        [
+            pa.array(
+                [
+                    {"path": str(source), "offset": 0, "size": 3},
+                    {"path": str(source), "offset": 3, "size": 3},
+                ],
+                type=field.type,
+            )
+        ],
+        schema=pa.schema([field]),
+    )
+    manager = BlobAssetManager(
+        output,
+        config=BlobAssetConfig(target_bytes=1024),
+        filename_template="{shard_id}.parquet",
+    )
+    manager.set_input_schema(table.schema)
+
+    with (
+        set_active_run_context(
+            job_id="job",
+            stage_index=0,
+            worker_id=worker_id,
+            worker_name=None,
+            runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+        ),
+        pytest.raises(FileExistsError, match="packed blob destination already exists"),
+    ):
+        manager.rewrite_table(shard_id, table)
+
+    assert source.read_bytes() == b"abcdef"
+
+
+def test_blob_writer_rejects_cross_blob_overwrite_before_reordered_copy(
+    tmp_path,
+) -> None:
+    output_path = tmp_path / "retry-assets"
+    output = DataFolder.resolve(output_path)
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    worker = worker_token_for(worker_id)
+    asset_dir = output_path / "assets" / f"{shard_id}__w{worker}" / "video"
+    asset_dir.mkdir(parents=True)
+    first = asset_dir / "00000.blob"
+    second = asset_dir / "00001.blob"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    field = datatype.blob_reference("video").with_name("video")
+    table = pa.Table.from_arrays(
+        [
+            pa.array(
+                [
+                    {"path": str(second), "offset": 0, "size": 6},
+                    {"path": str(first), "offset": 0, "size": 5},
+                ],
+                type=field.type,
+            )
+        ],
+        schema=pa.schema([field]),
+    )
+    manager = BlobAssetManager(
+        output,
+        config=BlobAssetConfig(target_bytes=6),
+        filename_template="{shard_id}.parquet",
+    )
+    manager.set_input_schema(table.schema)
+
+    with (
+        set_active_run_context(
+            job_id="job",
+            stage_index=0,
+            worker_id=worker_id,
+            worker_name=None,
+            runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+        ),
+        pytest.raises(FileExistsError, match="packed blob destination already exists"),
+    ):
+        manager.rewrite_table(shard_id, table)
+
+    assert first.read_bytes() == b"first"
+    assert second.read_bytes() == b"second"
+
+
+def test_blob_writer_keeps_partial_source_blob_on_range_copy_path(
+    tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "source.blob"
+    source.write_bytes(b"abcdef")
+    output = DataFolder.resolve(tmp_path / "partial-assets")
+    field = datatype.blob_reference("video").with_name("video")
+    table = pa.Table.from_arrays(
+        [
+            pa.array(
+                [
+                    {"path": str(source), "offset": 0, "size": 3},
+                    {"path": str(source), "offset": 3, "size": 2},
+                ],
+                type=field.type,
+            )
+        ],
+        schema=pa.schema([field]),
+    )
+    manager = BlobAssetManager(
+        output,
+        config=BlobAssetConfig(target_bytes=1024),
+        filename_template="{shard_id}.parquet",
+    )
+    manager.set_input_schema(table.schema)
+    calls = 0
+    original_append = manager._append
+
+    def count_range_copy(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_append(*args, **kwargs)
+
+    monkeypatch.setattr(manager, "_append", count_range_copy)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        rewritten = manager.rewrite_table("0123456789ab", table)
+        manager.close()
+
+    assert calls == 2
+    assert [
+        read_blob(reference) for reference in rewritten.column("video").to_pylist()
+    ] == [
+        b"abc",
+        b"de",
+    ]
 
 
 def test_file_asset_copy_removes_partial_output_when_source_disappears(
