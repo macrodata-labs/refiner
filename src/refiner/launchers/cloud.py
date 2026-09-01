@@ -25,6 +25,7 @@ from refiner.platform.client import (
     CloudFileUploadStatus,
     CloudRunCreateRequest,
     CloudRuntimeConfig,
+    CloudPlacementMode,
     CloudProvider,
     CloudRegion,
     MacrodataApiError,
@@ -50,6 +51,7 @@ _FALLBACK_ENV_VAR = "MACRODATA_FALLBACK_TO_LATEST_PYPI"
 _CLOUD_FILE_BATCH_SIZE = 100
 _CLOUD_PROVIDER_KEYS = {"modal": "modal", "aws": "aws_batch"}
 _SUPPORTED_CLOUDS = frozenset({"aws", "oci", "gcp"})
+_SUPPORTED_PLACEMENT_MODES = frozenset({"best_effort", "strict"})
 _SUPPORTED_REGIONS = frozenset(
     {
         "us",
@@ -125,6 +127,13 @@ def _normalize_regions(value: str | Sequence[str]) -> tuple[CloudRegion, ...]:
     return cast(tuple[CloudRegion, ...], tuple(dict.fromkeys(values)))
 
 
+def _normalize_placement_mode(value: str) -> CloudPlacementMode:
+    if value not in _SUPPORTED_PLACEMENT_MODES:
+        supported = ", ".join(sorted(_SUPPORTED_PLACEMENT_MODES))
+        raise ValueError(f"placement_mode must be one of: {supported}")
+    return cast(CloudPlacementMode, value)
+
+
 @dataclass(frozen=True, slots=True)
 class CloudLaunchResult:
     job_id: str
@@ -153,6 +162,10 @@ class CloudLauncher(BaseLauncher):
         cpus_per_worker: Optional requested CPU cores per worker.
         mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
         gpu: Optional GPU runtime request for cloud scheduling.
+        cloud: Public cloud provider used for worker placement.
+        region: Accepted region selectors for worker placement.
+        placement_mode: ``"best_effort"`` validates the actual worker placement;
+            ``"strict"`` also requests the native provider region constraint.
         sync_local_dependencies: Whether to include packages detected from the
             local environment in the cloud runtime.
         dependencies: Additional packages to install in the cloud runtime.
@@ -176,6 +189,7 @@ class CloudLauncher(BaseLauncher):
         gpu: GPU | None = None,
         cloud: CloudProvider = "aws",
         region: CloudRegion | Sequence[CloudRegion] = ("us", "eu", "ca"),
+        placement_mode: CloudPlacementMode = "best_effort",
         sync_local_dependencies: bool = False,
         dependencies: Sequence[str] | None = None,
         refiner_extras: Sequence[str] | None = None,
@@ -206,6 +220,7 @@ class CloudLauncher(BaseLauncher):
         self.mem_mb_per_worker = mem_mb_per_worker
         self.cloud = _normalize_cloud(cloud)
         self.region = _normalize_regions(region)
+        self.placement_mode = _normalize_placement_mode(placement_mode)
         self.sync_local_dependencies = sync_local_dependencies
         self.dependencies = dependencies
         self.refiner_extras = refiner_extras
@@ -586,6 +601,7 @@ class CloudLauncher(BaseLauncher):
                             num_workers=stage.compute.num_workers,
                             cloud=self.cloud,
                             region=self.region,
+                            placement_mode=self.placement_mode,
                             cpus_per_worker=stage.compute.cpus_per_worker,
                             mem_mb_per_worker=stage.compute.memory_mb_per_worker,
                             gpu=stage.compute.gpu,

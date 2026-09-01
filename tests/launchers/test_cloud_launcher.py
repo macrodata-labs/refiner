@@ -258,6 +258,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.stage_payloads[0].runtime.num_workers == 3
     assert request.stage_payloads[0].runtime.cloud == "aws"
     assert request.stage_payloads[0].runtime.region == ("us", "eu", "ca")
+    assert request.stage_payloads[0].runtime.placement_mode == "best_effort"
     assert request.stage_payloads[0].runtime.cpus_per_worker == 2
     assert request.stage_payloads[0].runtime.mem_mb_per_worker == 4096
     assert request.stage_payloads[0].runtime.gpu == GPU(
@@ -1946,7 +1947,10 @@ def test_pipeline_launch_cloud_forwards_cloud_and_multiple_regions(monkeypatch) 
     captured = _stub_cloud_submit(monkeypatch)
 
     read_jsonl("input.jsonl").launch_cloud(
-        name="placed cloud", cloud="gcp", region=["uk", "us-west"]
+        name="placed cloud",
+        cloud="gcp",
+        region=["uk", "us-west"],
+        placement_mode="strict",
     )
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
@@ -1954,6 +1958,19 @@ def test_pipeline_launch_cloud_forwards_cloud_and_multiple_regions(monkeypatch) 
     assert runtime is not None
     assert runtime.cloud == "gcp"
     assert runtime.region == ("uk", "us-west")
+    assert runtime.placement_mode == "strict"
+
+
+@pytest.mark.parametrize("placement_mode", ["native", "spill", "STRICT"])
+def test_pipeline_launch_cloud_rejects_invalid_placement_mode(
+    monkeypatch, placement_mode
+) -> None:
+    _stub_cloud_submit(monkeypatch, fail_on_submit=True)
+
+    with pytest.raises(ValueError, match="placement_mode must be one of"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="demo cloud", placement_mode=placement_mode
+        )
 
 
 @pytest.mark.parametrize("cloud", ["auto", "azure", "AWS"])

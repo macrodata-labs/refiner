@@ -83,6 +83,23 @@ Broad selectors are `us`, `eu`, `ca`, and `uk`. Narrow selectors are
 `eu-south`. `eu` excludes the UK. Madrid is classified as `eu-south`; the
 defensive `FRA*` and `AMS` aliases are classified as `eu-west`.
 
+The default `placement_mode="best_effort"` lets the provider choose a region,
+then rejects and safely retries a worker that lands outside the requested
+selectors. Use strict placement when a job must not spill to another region:
+
+```python
+pipeline.launch_cloud(
+    name="strict-eu-workers",
+    cloud="aws",
+    region=["eu-west", "uk"],
+    placement_mode="strict",
+)
+```
+
+Strict placement also sends the region list as a native provider placement
+constraint. If the provider cannot satisfy it, the job remains fail-closed
+instead of silently running elsewhere.
+
 ## What gets submitted
 
 A cloud submission includes:
