@@ -9,7 +9,7 @@ import subprocess
 import sys
 from urllib import error as urllib_error
 from urllib import request as urllib_request
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -254,9 +254,18 @@ def build_run_manifest(
         pipeline_refiner_extras.update(pipeline.source.required_refiner_extras())
         for step in pipeline.pipeline_steps:
             for candidate in getattr(step, "ops", (step,)):
-                for attr in ("fn", "predicate"):
+                callables = [
+                    getattr(candidate, attr, None) for attr in ("fn", "predicate")
+                ]
+                contract = getattr(candidate, "contract", None)
+                contract_predicates = getattr(contract, "predicates", {})
+                if isinstance(contract_predicates, Mapping):
+                    callables.extend(contract_predicates.values())
+                for callable_candidate in callables:
                     spec = getattr(
-                        getattr(candidate, attr, None), _REFINER_BUILTIN_CALL_ATTR, None
+                        callable_candidate,
+                        _REFINER_BUILTIN_CALL_ATTR,
+                        None,
                     )
                     if isinstance(spec, dict):
                         declared = spec.get("refiner_extras", ())

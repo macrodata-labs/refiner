@@ -12,6 +12,7 @@ from refiner.pipeline.steps import (
     FnRowStep,
     FnTableStep,
     VectorizedSegmentStep,
+    ValidationStep,
 )
 from refiner.services.base import RuntimeServiceSpec
 
@@ -73,6 +74,8 @@ def collect_pipeline_services(
                     candidates.append(candidate)
             elif (fn := getattr(callable_step, "fn", None)) is not None:
                 candidates.append(fn)
+            elif isinstance(callable_step, ValidationStep):
+                candidates.extend(callable_step.contract.predicates.values())
 
         for candidate in candidates:
             builtin = _builtin_description(candidate)

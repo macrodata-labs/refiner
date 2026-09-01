@@ -33,6 +33,8 @@ _LAZY_ATTRS = {
     "GPUType": "refiner.pipeline.resources",
     "SUPPORTED_CUDA_VERSIONS": "refiner.pipeline.resources",
     "SUPPORTED_GPU_TYPES": "refiner.pipeline.resources",
+    "ValidationContract": "refiner.pipeline.validation",
+    "ValidationError": "refiner.pipeline.validation",
 }
 
 __all__ = [
@@ -48,6 +50,8 @@ __all__ = [
     "Shard",
     "SUPPORTED_CUDA_VERSIONS",
     "SUPPORTED_GPU_TYPES",
+    "ValidationContract",
+    "ValidationError",
     "read_csv",
     "read_files",
     "read_hf_dataset",
@@ -113,3 +117,4 @@ if TYPE_CHECKING:
         SUPPORTED_CUDA_VERSIONS,
         SUPPORTED_GPU_TYPES,
     )
+    from refiner.pipeline.validation import ValidationContract, ValidationError

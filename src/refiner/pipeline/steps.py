@@ -10,6 +10,7 @@ import pyarrow as pa
 from refiner.pipeline.expressions import Expr
 from refiner.pipeline.data.datatype import DTypeMapping
 from refiner.pipeline.data.row import Row
+from refiner.pipeline.validation import ValidationContract
 
 
 class RefinerStep(ABC):
@@ -230,6 +231,13 @@ class FilterExprStep(RefinerStep):
 
 
 @dataclass(frozen=True, slots=True)
+class ValidationStep(RefinerStep):
+    contract: ValidationContract
+    index: int
+    op_name: str | None = "validate"
+
+
+@dataclass(frozen=True, slots=True)
 class FnTableStep(RefinerStep):
     fn: TableFn | None
     index: int
@@ -301,6 +309,7 @@ __all__ = [
     "RenameStep",
     "CastStep",
     "FilterExprStep",
+    "ValidationStep",
     "FnTableStep",
     "VectorizedOp",
     "VectorizedSegmentStep",

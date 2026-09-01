@@ -35,6 +35,7 @@ from refiner.pipeline.steps import (
     TableFn,
     VectorizedOp,
     VectorizedSegmentStep,
+    ValidationStep,
     WithColumnsStep,
 )
 from refiner.pipeline.sinks import (
@@ -69,6 +70,15 @@ from refiner.pipeline.sources.readers.mcap import SyncMethod
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.shard_limit import validate_shard_count
 from refiner.pipeline.sources.task import TaskSource, TaskStep
+from refiner.pipeline.sources.validation import (
+    global_validation_source,
+    unwrap_global_validation_source,
+)
+from refiner.pipeline.validation import (
+    RangeBounds,
+    ValidationContract,
+    ValidationPredicate,
+)
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.datatype import DTypeLike, DTypeMapping
 from refiner.pipeline.data.row import Row
@@ -265,6 +275,84 @@ class RefinerPipeline:
     def _output_dtype_columns(self) -> frozenset[str]:
         """Return output columns constrained by explicit transform dtypes."""
         return _declared_dtype_columns_after_segments(self._get_compiled_segments())
+
+    def _has_global_validation(self) -> bool:
+        return any(
+            isinstance(step, ValidationStep) and step.contract.requires_global_scope
+            for step in self.pipeline_steps
+        )
+
+    def validate(
+        self,
+        contract: ValidationContract | None = None,
+        *,
+        name: str | None = None,
+        not_null: Sequence[str] = (),
+        unique: Sequence[str] = (),
+        unique_together: Sequence[Sequence[str]] = (),
+        ranges: Mapping[str, RangeBounds] | None = None,
+        min_rows: int | None = None,
+        max_rows: int | None = None,
+        exact_rows: int | None = None,
+        predicates: Mapping[str, ValidationPredicate] | None = None,
+    ) -> "RefinerPipeline":
+        """Assert reusable data-quality rules without changing pipeline rows.
+
+        Row-local null, range, and custom predicate checks preserve source
+        parallelism. Exact uniqueness and row-count rules require dataset-wide
+        state, so Refiner executes pipelines containing those rules as one
+        scheduling shard and one worker.
+
+        Pass a reusable ``ValidationContract`` or configure one inline. Nulls
+        participate in uniqueness checks and pass range checks unless the same
+        contract also lists the column in ``not_null``.
+        """
+        inline_rules = bool(
+            name is not None
+            or not_null
+            or unique
+            or unique_together
+            or ranges
+            or min_rows is not None
+            or max_rows is not None
+            or exact_rows is not None
+            or predicates
+        )
+        if contract is not None and inline_rules:
+            raise ValueError(
+                "validate accepts either a ValidationContract or inline rules, not both"
+            )
+        if contract is None:
+            contract = ValidationContract(
+                name=name or "validation",
+                not_null=not_null,
+                unique=unique,
+                unique_together=unique_together,
+                ranges=ranges or {},
+                min_rows=min_rows,
+                max_rows=max_rows,
+                exact_rows=exact_rows,
+                predicates=predicates or {},
+            )
+        contract.validate_schema(self.output_schema())
+        source = (
+            global_validation_source(self.source)
+            if contract.requires_global_scope
+            else self.source
+        )
+        return self.__class__(
+            source,
+            self.pipeline_steps
+            + (
+                ValidationStep(
+                    contract=contract,
+                    index=self._next_step_index(),
+                ),
+            ),
+            max_block_rows=self.max_block_rows,
+            max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+            sink=self.sink,
+        )
 
     def map(
         self, fn: MapFn, *, dtypes: DTypeMapping | None = None
@@ -775,14 +863,15 @@ class RefinerPipeline:
         source_version: int | None = None
         is_add_columns = mode == "add_columns" or isinstance(mode, AddColumns)
         if is_add_columns:
-            if not isinstance(self.source, LanceSource):
+            lance_source = unwrap_global_validation_source(self.source)
+            if not isinstance(lance_source, LanceSource):
                 raise ValueError(
                     "add_columns requires a pipeline created by load_lance"
                 )
-            if self.source.max_rows is not None and not isinstance(mode, AddColumns):
+            if lance_source.max_rows is not None and not isinstance(mode, AddColumns):
                 raise ValueError("add_columns does not support a limited Lance source")
-            source_uri = self.source.dataset_uri
-            source_version = self.source.version
+            source_uri = lance_source.dataset_uri
+            source_version = lance_source.version
         return self.with_sink(
             LanceDatasetSink(
                 output=output,

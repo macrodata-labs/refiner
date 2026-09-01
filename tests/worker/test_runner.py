@@ -10,7 +10,7 @@ import pytest
 
 from refiner.pipeline.data.shard import Shard
 from refiner import register_gauge
-from refiner.pipeline import RefinerPipeline, task
+from refiner.pipeline import RefinerPipeline, from_items, task
 from refiner.pipeline.expressions import col
 from refiner.execution.engine import iter_rows
 from refiner.pipeline.sinks import BaseSink
@@ -666,6 +666,32 @@ def test_worker_runtime_complete_errors_fail_the_shard_without_crashing() -> Non
     assert runtime_lifecycle.completed_ids == []
     assert runtime_lifecycle.failed_ids == [shard.id]
     assert runtime_lifecycle.failed_errors == ["complete failed"]
+
+
+def test_global_validation_finalizer_fails_before_shard_completion() -> None:
+    sink = _RecordingSink()
+    pipeline = from_items([{"x": 1}]).validate(exact_rows=2).with_sink(sink)
+    shards = pipeline.list_shards()
+    runtime_lifecycle = _FakeRuntimeLifecycle(shards)
+    worker = Worker(
+        pipeline=pipeline,
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
+        runtime_lifecycle=runtime_lifecycle,
+    )
+
+    stats = worker.run()
+
+    assert stats.completed == 0
+    assert stats.failed == 1
+    assert sink.written_counts == []
+    assert runtime_lifecycle.completed_ids == []
+    assert runtime_lifecycle.failed_ids == [shards[0].id]
+    assert runtime_lifecycle.failed_errors
+    assert "Validation 'validation' failed [exact_rows]" in str(
+        runtime_lifecycle.failed_errors[0]
+    )
 
 
 def test_worker_completes_shards_only_after_sink_drain() -> None:

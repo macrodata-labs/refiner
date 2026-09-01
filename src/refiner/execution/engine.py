@@ -25,6 +25,7 @@ from refiner.pipeline.steps import (
     SelectStep,
     VectorizedOp,
     VectorizedSegmentStep,
+    ValidationStep,
     WithColumnsStep,
 )
 from refiner.execution.buffer import RowBuffer
@@ -52,7 +53,12 @@ class VectorSegment:
     ops: tuple[VectorizedOp, ...]
 
 
-Segment = RowSegment | VectorSegment
+@dataclass(frozen=True, slots=True)
+class ValidationSegment:
+    step: ValidationStep
+
+
+Segment = RowSegment | VectorSegment | ValidationSegment
 
 
 def compile_segments(steps: Sequence[RefinerStep]) -> tuple[Segment, ...]:
@@ -60,16 +66,23 @@ def compile_segments(steps: Sequence[RefinerStep]) -> tuple[Segment, ...]:
     # through the row-step engine until the next vectorized boundary.
     out: list[Segment] = []
     row_steps: list[RefinerStep] = []
+
+    def _flush_row_steps() -> None:
+        if row_steps:
+            out.append(RowSegment(steps=tuple(row_steps)))
+            row_steps.clear()
+
     for step in steps:
         if isinstance(step, VectorizedSegmentStep):
-            if row_steps:
-                out.append(RowSegment(steps=tuple(row_steps)))
-                row_steps.clear()
+            _flush_row_steps()
             out.append(VectorSegment(ops=step.ops))
             continue
+        if isinstance(step, ValidationStep):
+            _flush_row_steps()
+            out.append(ValidationSegment(step=step))
+            continue
         row_steps.append(step)
-    if row_steps:
-        out.append(RowSegment(steps=tuple(row_steps)))
+    _flush_row_steps()
     return tuple(out)
 
 
@@ -94,7 +107,9 @@ def execute_segments(
     current_schema = input_schema
     for idx, segment in enumerate(segments):
         next_segment = segments[idx + 1] if idx + 1 < len(segments) else None
-        if isinstance(segment, VectorSegment):
+        if isinstance(segment, ValidationSegment):
+            current = _execute_validation_segment(current, segment.step)
+        elif isinstance(segment, VectorSegment):
             current = _execute_vector_segment(
                 current,
                 segment.ops,
@@ -141,6 +156,8 @@ def _declared_dtype_columns_after_segments(
     """Return columns whose output types are explicitly constrained by steps."""
     columns: set[str] = set()
     for segment in segments:
+        if isinstance(segment, ValidationSegment):
+            continue
         steps = segment.ops if isinstance(segment, VectorSegment) else segment.steps
         for step in steps:
             dtypes = getattr(step, "dtypes", None)
@@ -163,7 +180,38 @@ def _segment_schema(
 ) -> pa.Schema | None:
     if isinstance(segment, VectorSegment):
         return _vector_segment_schema(input_schema, segment.ops)
+    if isinstance(segment, ValidationSegment):
+        return input_schema
     return _row_segment_schema(input_schema, segment.steps)
+
+
+def _execute_validation_segment(
+    stream: Iterable[Block],
+    step: ValidationStep,
+) -> Iterator[Block]:
+    from refiner.pipeline.validation import ValidationRuntime
+
+    runtime = ValidationRuntime(step.contract)
+    if not step.contract.requires_global_scope:
+        for block in stream:
+            runtime.validate_block(block)
+            yield block
+        runtime.finalize()
+        return
+
+    # Keep one block pending until the end-of-stream checks pass. Workers mark a
+    # shard complete once its source is exhausted and every emitted row reaches
+    # the sink; retaining the final block ensures a failing global finalizer can
+    # still fail the one grouped validation shard instead of completing it first.
+    pending: Block | None = None
+    for block in stream:
+        if pending is not None:
+            yield pending
+        runtime.validate_block(block)
+        pending = block
+    runtime.finalize()
+    if pending is not None:
+        yield pending
 
 
 def iter_rows(stream: Iterable[StreamItem]) -> Iterator[Row]:
@@ -585,6 +633,7 @@ def _limit_output_blocks(
 __all__ = [
     "Block",
     "RowSegment",
+    "ValidationSegment",
     "VectorSegment",
     "block_num_rows",
     "compile_segments",
