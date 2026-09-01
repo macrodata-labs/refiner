@@ -4,7 +4,7 @@ import math
 import pickle
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, TypeAlias, cast
+from typing import Any, NoReturn, TypeAlias, cast
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -192,11 +192,12 @@ class ValidationContract:
         return tuple(dict.fromkeys(columns))
 
     def validate_schema(self, schema: pa.Schema | None) -> None:
-        if schema is None:
+        self.validate_columns(None if schema is None else schema.names)
+
+    def validate_columns(self, columns: Sequence[str] | None) -> None:
+        if columns is None:
             return
-        missing = [
-            column for column in self.required_columns if column not in schema.names
-        ]
+        missing = [column for column in self.required_columns if column not in columns]
         if missing:
             raise ValueError(
                 f"Validation contract {self.name!r} references missing column "
@@ -233,9 +234,16 @@ class ValidationContract:
 class ValidationRuntime:
     """Mutable state for one execution of an immutable contract."""
 
-    def __init__(self, contract: ValidationContract) -> None:
+    def __init__(
+        self,
+        contract: ValidationContract,
+        *,
+        known_columns: Sequence[str] | None = None,
+    ) -> None:
         self.contract = contract
+        self.known_columns = None if known_columns is None else tuple(known_columns)
         self.row_count = 0
+        self._columns_observed = False
         self._seen: dict[str, dict[Any, RowLocation]] = {
             f"unique:{column}": {} for column in contract.unique
         }
@@ -292,6 +300,17 @@ class ValidationRuntime:
                     f"observed {self.row_count}"
                 ),
             )
+        if self.contract.required_columns and not self._columns_observed:
+            if self.known_columns is None:
+                column = self.contract.required_columns[0]
+                self._fail(
+                    rule=f"column_exists:{column}",
+                    detail=(
+                        f"required column {column!r} cannot be established from "
+                        "an empty input without a schema"
+                    ),
+                )
+            self._require_columns(self.known_columns)
 
     def _validate_table(self, block: Tabular) -> None:
         table = block.table
@@ -457,6 +476,7 @@ class ValidationRuntime:
                     rule=f"column_exists:{column}",
                     detail=f"required column {column!r} is missing",
                 )
+        self._columns_observed = True
 
     def _check_unique(
         self,
@@ -488,7 +508,7 @@ class ValidationRuntime:
         rule: str,
         detail: str,
         location: RowLocation | None = None,
-    ) -> None:
+    ) -> NoReturn:
         raise ValidationError(
             contract_name=self.contract.name,
             rule=rule,

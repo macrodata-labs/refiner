@@ -223,6 +223,37 @@ def test_known_schema_rejects_missing_columns_before_execution() -> None:
         pipeline.validate(not_null=["missing"])
 
 
+@pytest.mark.parametrize("column", ["added", "value"])
+def test_validation_recognizes_columns_assigned_by_with_column(column: str) -> None:
+    pipeline = (
+        RefinerPipeline(_TableSource(pa.table({"value": [1]})))
+        .with_column(column, 2)
+        .validate(not_null=[column], ranges={column: (1, 3)})
+    )
+
+    assert _values(pipeline, column) == [2]
+
+
+def test_required_column_fails_for_empty_schema_less_input() -> None:
+    pipeline = mdr.from_items([]).validate(not_null=["id"])
+
+    with pytest.raises(ValidationError) as caught:
+        pipeline.materialize()
+
+    assert caught.value.rule == "column_exists:id"
+    assert "empty input without a schema" in str(caught.value)
+
+
+def test_known_schema_can_validate_after_filtering_every_row() -> None:
+    pipeline = (
+        RefinerPipeline(_TableSource(pa.table({"id": [1, 2]})))
+        .filter(lambda row: False)
+        .validate(not_null=["id"])
+    )
+
+    assert pipeline.materialize() == []
+
+
 def test_global_contract_forces_one_worker_but_row_local_contract_does_not() -> None:
     global_pipeline = mdr.from_items([{"id": 1}]).validate(unique=["id"])
     local_pipeline = mdr.from_items([{"id": 1}]).validate(not_null=["id"])

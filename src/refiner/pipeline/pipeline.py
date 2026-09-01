@@ -272,6 +272,50 @@ class RefinerPipeline:
         """
         return schema_after_segments(self.source.schema, self._get_compiled_segments())
 
+    def _validation_output_columns(self) -> tuple[str, ...] | None:
+        """Return statically known output columns without requiring known dtypes.
+
+        ``output_schema`` intentionally omits expression-assigned columns whose
+        resulting Arrow type is unknown. Validation only needs to know whether
+        a column exists, so track names separately from types here.
+        """
+        source_schema = self.source.schema
+        if source_schema is None:
+            return None
+        columns = list(source_schema.names)
+
+        for step in self.pipeline_steps:
+            if isinstance(step, VectorizedSegmentStep):
+                for op in step.ops:
+                    if isinstance(op, FnTableStep):
+                        return None
+                    if isinstance(op, SelectStep):
+                        available = set(columns)
+                        columns = [name for name in op.columns if name in available]
+                    elif isinstance(op, DropStep):
+                        dropped = set(op.columns)
+                        columns = [name for name in columns if name not in dropped]
+                    elif isinstance(op, RenameStep):
+                        columns = [op.mapping.get(name, name) for name in columns]
+                    elif isinstance(op, WithColumnsStep):
+                        for name in op.assignments:
+                            if name not in columns:
+                                columns.append(name)
+                    elif isinstance(op, CastStep):
+                        for name in op.dtypes:
+                            if name not in columns:
+                                columns.append(name)
+                continue
+            if isinstance(step, (FilterRowStep, ValidationStep)):
+                continue
+            dtypes = getattr(step, "dtypes", None)
+            if not dtypes:
+                return None
+            for name in dtypes:
+                if name not in columns:
+                    columns.append(name)
+        return tuple(columns)
+
     def _output_dtype_columns(self) -> frozenset[str]:
         """Return output columns constrained by explicit transform dtypes."""
         return _declared_dtype_columns_after_segments(self._get_compiled_segments())
@@ -334,7 +378,8 @@ class RefinerPipeline:
                 exact_rows=exact_rows,
                 predicates=predicates or {},
             )
-        contract.validate_schema(self.output_schema())
+        known_columns = self._validation_output_columns()
+        contract.validate_columns(known_columns)
         source = (
             global_validation_source(self.source)
             if contract.requires_global_scope
@@ -347,6 +392,7 @@ class RefinerPipeline:
                 ValidationStep(
                     contract=contract,
                     index=self._next_step_index(),
+                    known_columns=known_columns,
                 ),
             ),
             max_block_rows=self.max_block_rows,

@@ -234,6 +234,7 @@ class FilterExprStep(RefinerStep):
 class ValidationStep(RefinerStep):
     contract: ValidationContract
     index: int
+    known_columns: tuple[str, ...] | None = None
     op_name: str | None = "validate"
 
 
