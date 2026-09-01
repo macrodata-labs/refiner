@@ -100,7 +100,7 @@ class Worker:
         )
         runtime_services_started = False
         source_exhausted = False
-        defer_shard_completion = self.pipeline._has_global_validation()
+        defer_shard_completion = self.pipeline._requires_validation_completion_barrier()
 
         def _heartbeat_once() -> None:
             with inflight_lock:

@@ -326,6 +326,16 @@ class RefinerPipeline:
             for step in self.pipeline_steps
         )
 
+    def _requires_validation_completion_barrier(self) -> bool:
+        return any(
+            isinstance(step, ValidationStep)
+            and (
+                step.contract.requires_global_scope
+                or (step.contract.required_columns and step.known_columns is None)
+            )
+            for step in self.pipeline_steps
+        )
+
     def validate(
         self,
         contract: ValidationContract | None = None,
