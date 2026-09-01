@@ -122,16 +122,3 @@ except mdr.ValidationError as error:
 
 A named custom predicate that raises is wrapped in `ValidationError`, with the
 original exception retained as its cause.
-
-## Internal Notes
-
-Spark, Daft, and Ray Data can implement global uniqueness through distributed
-grouping or aggregation; Beam/Dataflow expresses the same work as keyed
-combines with explicit window semantics. Hugging Face Datasets commonly runs
-validation in one process or relies on a separate validation pass. Refiner does
-not yet have a general shuffle/barrier transform, so this implementation keeps
-schema-backed row-local rules parallel and deliberately serializes exact global
-rules and schema-less column-existence checks instead of presenting
-worker-local results as dataset-wide guarantees. A future partitioned
-validation reducer can replace that execution strategy without changing
-`ValidationContract` or `validate(...)`.
