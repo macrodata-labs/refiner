@@ -246,10 +246,12 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
             {"expression": step.predicate.to_code()},
         )
     if isinstance(step, ValidationStep):
+        description = step.contract.describe()
+        description["scope"] = "global" if step.requires_global_scope else "row_local"
         return (
             step.contract.name,
             "validation",
-            step.contract.describe(),
+            description,
         )
     return step.__class__.__name__, step.__class__.__name__.lower(), None
 

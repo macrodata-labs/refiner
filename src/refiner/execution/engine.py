@@ -192,7 +192,7 @@ def _execute_validation_segment(
     from refiner.pipeline.validation import ValidationRuntime
 
     runtime = ValidationRuntime(step.contract, known_columns=step.known_columns)
-    if not step.contract.requires_global_scope:
+    if not step.requires_global_scope:
         for block in stream:
             runtime.validate_block(block)
             yield block

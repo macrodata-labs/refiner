@@ -322,17 +322,13 @@ class RefinerPipeline:
 
     def _has_global_validation(self) -> bool:
         return any(
-            isinstance(step, ValidationStep) and step.contract.requires_global_scope
+            isinstance(step, ValidationStep) and step.requires_global_scope
             for step in self.pipeline_steps
         )
 
     def _requires_validation_completion_barrier(self) -> bool:
         return any(
-            isinstance(step, ValidationStep)
-            and (
-                step.contract.requires_global_scope
-                or (step.contract.required_columns and step.known_columns is None)
-            )
+            isinstance(step, ValidationStep) and step.requires_global_scope
             for step in self.pipeline_steps
         )
 
@@ -353,9 +349,10 @@ class RefinerPipeline:
         """Assert reusable data-quality rules without changing pipeline rows.
 
         Row-local null, range, and custom predicate checks preserve source
-        parallelism. Exact uniqueness and row-count rules require dataset-wide
-        state, so Refiner executes pipelines containing those rules as one
-        scheduling shard and one worker.
+        parallelism when the input schema is known. Exact uniqueness and
+        row-count rules, plus required-column checks on schema-less inputs,
+        require dataset-wide state, so Refiner executes pipelines containing
+        those rules as one scheduling shard and one worker.
 
         Pass a reusable ``ValidationContract`` or configure one inline. Nulls
         participate in uniqueness checks and pass range checks unless the same
@@ -390,9 +387,12 @@ class RefinerPipeline:
             )
         known_columns = self._validation_output_columns()
         contract.validate_columns(known_columns)
+        requires_global_scope = contract.requires_global_scope or bool(
+            contract.required_columns and known_columns is None
+        )
         source = (
             global_validation_source(self.source)
-            if contract.requires_global_scope
+            if requires_global_scope
             else self.source
         )
         return self.__class__(

@@ -721,10 +721,16 @@ def test_empty_global_validation_fails_before_shard_completion() -> None:
 
 
 def test_empty_schema_less_validation_fails_before_shard_completion() -> None:
-    shard = _shard("empty", 0, 1)
-    source = _FakeReader({shard.id: []})
+    source_shard = _shard("empty", 0, 1)
+
+    class _OneShardEmptyReader(_FakeReader):
+        def list_shards(self) -> list[Shard]:
+            return [source_shard]
+
+    source = _OneShardEmptyReader({source_shard.id: []})
     pipeline = RefinerPipeline(source).validate(not_null=["id"])
-    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
+    validation_shard = pipeline.list_shards()[0]
+    runtime_lifecycle = _FakeRuntimeLifecycle([validation_shard])
     worker = Worker(
         pipeline=pipeline,
         job_id="job",
@@ -738,7 +744,7 @@ def test_empty_schema_less_validation_fails_before_shard_completion() -> None:
     assert stats.completed == 0
     assert stats.failed == 1
     assert runtime_lifecycle.completed_ids == []
-    assert runtime_lifecycle.failed_ids == [shard.id]
+    assert runtime_lifecycle.failed_ids == [validation_shard.id]
     assert runtime_lifecycle.failed_errors
     assert "Validation 'validation' failed [column_exists:id]" in str(
         runtime_lifecycle.failed_errors[0]

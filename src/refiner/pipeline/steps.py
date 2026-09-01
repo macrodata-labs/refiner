@@ -237,6 +237,12 @@ class ValidationStep(RefinerStep):
     known_columns: tuple[str, ...] | None = None
     op_name: str | None = "validate"
 
+    @property
+    def requires_global_scope(self) -> bool:
+        return self.contract.requires_global_scope or bool(
+            self.contract.required_columns and self.known_columns is None
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class FnTableStep(RefinerStep):

@@ -256,7 +256,9 @@ def test_known_schema_can_validate_after_filtering_every_row() -> None:
 
 def test_global_contract_forces_one_worker_but_row_local_contract_does_not() -> None:
     global_pipeline = mdr.from_items([{"id": 1}]).validate(unique=["id"])
-    local_pipeline = mdr.from_items([{"id": 1}]).validate(not_null=["id"])
+    local_pipeline = RefinerPipeline(_TableSource(pa.table({"id": [1]}))).validate(
+        not_null=["id"]
+    )
 
     assert (
         plan_pipeline_stages(
@@ -272,6 +274,18 @@ def test_global_contract_forces_one_worker_but_row_local_contract_does_not() -> 
         )[0].compute.num_workers
         == 8
     )
+
+
+def test_schema_less_required_columns_use_global_execution() -> None:
+    pipeline = mdr.from_items([{"id": 1}]).validate(not_null=["id"])
+
+    assert isinstance(pipeline.source, GlobalValidationSource)
+    assert (
+        plan_pipeline_stages(pipeline, default_num_workers=8)[0].compute.num_workers
+        == 1
+    )
+    validation_step = compile_pipeline_plan(pipeline)["stages"][0]["steps"][1]
+    assert validation_step["args"]["scope"] == "global"
 
 
 def test_global_validation_claim_carries_the_exact_plan_to_workers() -> None:

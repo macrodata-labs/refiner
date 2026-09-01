@@ -90,9 +90,9 @@ over unseen rows.
 
 ## Parallelism and Global Checks
 
-Null, range, and custom predicate checks are row-local. They preserve the
-source shard plan and worker count, and built-in checks operate directly on
-Arrow blocks.
+Null, range, and custom predicate checks are row-local. When the source exposes
+a schema, they preserve its shard plan and worker count, and built-in checks
+operate directly on Arrow blocks.
 
 Uniqueness and row-count checks need exact dataset-wide state. Refiner currently
 groups the physical source shards into one deterministic scheduling shard and
@@ -102,6 +102,11 @@ different source order. This guarantees exact results, including for empty
 datasets, but it serializes the whole pipeline and stores observed uniqueness
 keys in worker memory. Keep high-cardinality global checks separate from your
 main production transform when that cost is material.
+
+A required-column rule on a schema-less input also uses the grouped one-worker
+path. Without schema metadata, an empty distributed input cannot otherwise be
+distinguished from workers that happened to receive empty shards. Supplying a
+reader schema keeps null and range validation shard-parallel.
 
 ## Failure Handling
 
@@ -125,7 +130,8 @@ grouping or aggregation; Beam/Dataflow expresses the same work as keyed
 combines with explicit window semantics. Hugging Face Datasets commonly runs
 validation in one process or relies on a separate validation pass. Refiner does
 not yet have a general shuffle/barrier transform, so this implementation keeps
-row-local rules parallel and deliberately serializes exact global rules instead
-of presenting worker-local results as dataset-wide guarantees. A future
-partitioned validation reducer can replace that execution strategy without
-changing `ValidationContract` or `validate(...)`.
+schema-backed row-local rules parallel and deliberately serializes exact global
+rules and schema-less column-existence checks instead of presenting
+worker-local results as dataset-wide guarantees. A future partitioned
+validation reducer can replace that execution strategy without changing
+`ValidationContract` or `validate(...)`.
