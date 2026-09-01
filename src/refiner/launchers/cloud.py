@@ -166,6 +166,7 @@ class CloudLauncher(BaseLauncher):
         *,
         pipeline: "RefinerPipeline",
         name: str,
+        provider: str = "modal",
         num_workers: int | Literal["auto"] = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
@@ -192,6 +193,12 @@ class CloudLauncher(BaseLauncher):
             raise ValueError("unsafe_continue requires continue_from_job")
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
+        normalized_provider = provider.strip().lower()
+        if normalized_provider not in {"modal", "aws"}:
+            raise ValueError("provider must be 'modal' or 'aws'")
+        if normalized_provider == "aws" and gpu is not None:
+            raise ValueError("provider='aws' does not support GPU workers")
+        self.provider = normalized_provider
         self.cpus_per_worker = cpus_per_worker
         self.mem_mb_per_worker = mem_mb_per_worker
         self.cloud = _normalize_cloud(cloud)
