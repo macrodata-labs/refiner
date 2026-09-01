@@ -694,6 +694,53 @@ def test_global_validation_finalizer_fails_before_shard_completion() -> None:
     )
 
 
+def test_empty_global_validation_fails_before_shard_completion() -> None:
+    sink = _RecordingSink()
+    pipeline = from_items([]).validate(min_rows=1).with_sink(sink)
+    shards = pipeline.list_shards()
+    runtime_lifecycle = _FakeRuntimeLifecycle(shards)
+    worker = Worker(
+        pipeline=pipeline,
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
+        runtime_lifecycle=runtime_lifecycle,
+    )
+
+    stats = worker.run()
+
+    assert stats.completed == 0
+    assert stats.failed == 1
+    assert sink.written_counts == []
+    assert runtime_lifecycle.completed_ids == []
+    assert runtime_lifecycle.failed_ids == [shards[0].id]
+    assert runtime_lifecycle.failed_errors
+    assert "Validation 'validation' failed [min_rows]" in str(
+        runtime_lifecycle.failed_errors[0]
+    )
+
+
+def test_passing_global_validation_completes_deferred_shard() -> None:
+    sink = _RecordingSink()
+    pipeline = from_items([{"x": 1}]).validate(exact_rows=1).with_sink(sink)
+    shards = pipeline.list_shards()
+    runtime_lifecycle = _FakeRuntimeLifecycle(shards)
+    worker = Worker(
+        pipeline=pipeline,
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
+        runtime_lifecycle=runtime_lifecycle,
+    )
+
+    stats = worker.run()
+
+    assert stats.completed == 1
+    assert stats.failed == 0
+    assert runtime_lifecycle.completed_ids == [shards[0].id]
+    assert runtime_lifecycle.failed_ids == []
+
+
 def test_worker_completes_shards_only_after_sink_drain() -> None:
     shard = _shard("p", 0, 2)
     rows_by_shard = {

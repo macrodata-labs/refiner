@@ -12,8 +12,6 @@ from refiner.pipeline.sources.base import BaseSource, SourceUnit
 class GlobalValidationSource(BaseSource):
     """Collapse a source plan into one retryable unit for exact global checks."""
 
-    claim_shards_sequentially = True
-
     def __init__(self, source: BaseSource) -> None:
         self.source = source
         self.name = source.name

@@ -100,6 +100,7 @@ class Worker:
         )
         runtime_services_started = False
         source_exhausted = False
+        defer_shard_completion = self.pipeline._has_global_validation()
 
         def _heartbeat_once() -> None:
             with inflight_lock:
@@ -158,7 +159,19 @@ class Worker:
             with inflight_lock:
                 pending = pending_rows_by_shard.get(shard_id, 0)
                 source_done = shard_id in source_done_shards
-            if source_done and pending == 0:
+            if source_done and pending == 0 and not defer_shard_completion:
+                _complete_shard(shard_id)
+
+        def _complete_deferred_shards() -> None:
+            if not defer_shard_completion:
+                return
+            with inflight_lock:
+                ready = [
+                    shard_id
+                    for shard_id in source_done_shards
+                    if pending_rows_by_shard.get(shard_id, 0) == 0
+                ]
+            for shard_id in ready:
                 _complete_shard(shard_id)
 
         def _apply_row_delta(delta: dict[str, int]) -> None:
@@ -338,6 +351,7 @@ class Worker:
                         raise
                 else:
                     _heartbeat_once()
+                    _complete_deferred_shards()
                     with inflight_lock:
                         remaining_shards = list(inflight_by_id.values())
                     if remaining_shards:
