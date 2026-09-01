@@ -35,6 +35,7 @@ from refiner.pipeline.steps import (
     TableFn,
     VectorizedOp,
     VectorizedSegmentStep,
+    ValidationStep,
     WithColumnsStep,
 )
 from refiner.pipeline.sinks import (
@@ -69,6 +70,15 @@ from refiner.pipeline.sources.readers.mcap import SyncMethod
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.shard_limit import validate_shard_count
 from refiner.pipeline.sources.task import TaskSource, TaskStep
+from refiner.pipeline.sources.validation import (
+    global_validation_source,
+    unwrap_global_validation_source,
+)
+from refiner.pipeline.validation import (
+    RangeBounds,
+    ValidationContract,
+    ValidationPredicate,
+)
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.datatype import DTypeLike, DTypeMapping
 from refiner.pipeline.data.row import Row
@@ -262,9 +272,143 @@ class RefinerPipeline:
         """
         return schema_after_segments(self.source.schema, self._get_compiled_segments())
 
+    def _validation_output_columns(self) -> tuple[str, ...] | None:
+        """Return statically known output columns without requiring known dtypes.
+
+        ``output_schema`` intentionally omits expression-assigned columns whose
+        resulting Arrow type is unknown. Validation only needs to know whether
+        a column exists, so track names separately from types here.
+        """
+        source_schema = self.source.schema
+        if source_schema is None:
+            return None
+        columns = list(source_schema.names)
+
+        for step in self.pipeline_steps:
+            if isinstance(step, VectorizedSegmentStep):
+                for op in step.ops:
+                    if isinstance(op, FnTableStep):
+                        return None
+                    if isinstance(op, SelectStep):
+                        available = set(columns)
+                        columns = [name for name in op.columns if name in available]
+                    elif isinstance(op, DropStep):
+                        dropped = set(op.columns)
+                        columns = [name for name in columns if name not in dropped]
+                    elif isinstance(op, RenameStep):
+                        columns = [op.mapping.get(name, name) for name in columns]
+                    elif isinstance(op, WithColumnsStep):
+                        for name in op.assignments:
+                            if name not in columns:
+                                columns.append(name)
+                    elif isinstance(op, CastStep):
+                        for name in op.dtypes:
+                            if name not in columns:
+                                columns.append(name)
+                continue
+            if isinstance(step, (FilterRowStep, ValidationStep)):
+                continue
+            dtypes = getattr(step, "dtypes", None)
+            if not dtypes:
+                return None
+            for name in dtypes:
+                if name not in columns:
+                    columns.append(name)
+        return tuple(columns)
+
     def _output_dtype_columns(self) -> frozenset[str]:
         """Return output columns constrained by explicit transform dtypes."""
         return _declared_dtype_columns_after_segments(self._get_compiled_segments())
+
+    def _has_global_validation(self) -> bool:
+        return any(
+            isinstance(step, ValidationStep) and step.requires_global_scope
+            for step in self.pipeline_steps
+        )
+
+    def _requires_validation_completion_barrier(self) -> bool:
+        return any(
+            isinstance(step, ValidationStep) and step.requires_global_scope
+            for step in self.pipeline_steps
+        )
+
+    def validate(
+        self,
+        contract: ValidationContract | None = None,
+        *,
+        name: str | None = None,
+        not_null: Sequence[str] = (),
+        unique: Sequence[str] = (),
+        unique_together: Sequence[Sequence[str]] = (),
+        ranges: Mapping[str, RangeBounds] | None = None,
+        min_rows: int | None = None,
+        max_rows: int | None = None,
+        exact_rows: int | None = None,
+        predicates: Mapping[str, ValidationPredicate] | None = None,
+    ) -> "RefinerPipeline":
+        """Assert reusable data-quality rules without changing pipeline rows.
+
+        Row-local null, range, and custom predicate checks preserve source
+        parallelism when the input schema is known. Exact uniqueness and
+        row-count rules, plus required-column checks on schema-less inputs,
+        require dataset-wide state, so Refiner executes pipelines containing
+        those rules as one scheduling shard and one worker.
+
+        Pass a reusable ``ValidationContract`` or configure one inline. Nulls
+        participate in uniqueness checks and pass range checks unless the same
+        contract also lists the column in ``not_null``.
+        """
+        inline_rules = bool(
+            name is not None
+            or not_null
+            or unique
+            or unique_together
+            or ranges
+            or min_rows is not None
+            or max_rows is not None
+            or exact_rows is not None
+            or predicates
+        )
+        if contract is not None and inline_rules:
+            raise ValueError(
+                "validate accepts either a ValidationContract or inline rules, not both"
+            )
+        if contract is None:
+            contract = ValidationContract(
+                name=name or "validation",
+                not_null=not_null,
+                unique=unique,
+                unique_together=unique_together,
+                ranges=ranges or {},
+                min_rows=min_rows,
+                max_rows=max_rows,
+                exact_rows=exact_rows,
+                predicates=predicates or {},
+            )
+        known_columns = self._validation_output_columns()
+        contract.validate_columns(known_columns)
+        requires_global_scope = contract.requires_global_scope or bool(
+            contract.required_columns and known_columns is None
+        )
+        source = (
+            global_validation_source(self.source)
+            if requires_global_scope
+            else self.source
+        )
+        return self.__class__(
+            source,
+            self.pipeline_steps
+            + (
+                ValidationStep(
+                    contract=contract,
+                    index=self._next_step_index(),
+                    known_columns=known_columns,
+                ),
+            ),
+            max_block_rows=self.max_block_rows,
+            max_vectorized_block_bytes=self.max_vectorized_block_bytes,
+            sink=self.sink,
+        )
 
     def map(
         self, fn: MapFn, *, dtypes: DTypeMapping | None = None
@@ -775,14 +919,15 @@ class RefinerPipeline:
         source_version: int | None = None
         is_add_columns = mode == "add_columns" or isinstance(mode, AddColumns)
         if is_add_columns:
-            if not isinstance(self.source, LanceSource):
+            lance_source = unwrap_global_validation_source(self.source)
+            if not isinstance(lance_source, LanceSource):
                 raise ValueError(
                     "add_columns requires a pipeline created by load_lance"
                 )
-            if self.source.max_rows is not None and not isinstance(mode, AddColumns):
+            if lance_source.max_rows is not None and not isinstance(mode, AddColumns):
                 raise ValueError("add_columns does not support a limited Lance source")
-            source_uri = self.source.dataset_uri
-            source_version = self.source.version
+            source_uri = lance_source.dataset_uri
+            source_version = lance_source.version
         return self.with_sink(
             LanceDatasetSink(
                 output=output,

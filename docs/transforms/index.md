@@ -15,7 +15,7 @@ Python rows, async I/O, batches, or Arrow-backed vectorized tables.
 | [Vectorized Transforms](vectorized-transforms.md) | Fast columnar filtering, projection, renaming, and computed columns. |
 | [Expressions](expressions.md) | The expression DSL behind vectorized transforms. |
 | [Schemas and DTypes](schemas-and-dtypes.md) | Type hints for assets, media, and writer schemas. |
+| [Validation Contracts](validation.md) | Nullability, ranges, uniqueness, row counts, and custom assertions. |
 
 For packaged episode-level workflows, see
 [Episode Operations](../episode-operations/index.md).
-

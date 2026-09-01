@@ -44,6 +44,7 @@
 - [Vectorized transforms](transforms/vectorized-transforms.md)
 - [Expressions](transforms/expressions.md)
 - [Schemas and DTypes](transforms/schemas-and-dtypes.md)
+- [Validation contracts](transforms/validation.md)
 
 ## Episode operations
 

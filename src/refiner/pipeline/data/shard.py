@@ -145,7 +145,43 @@ class RowRangeDescriptor:
         return None
 
 
-ShardDescriptor = FilePartsDescriptor | RowRangeDescriptor
+@dataclass(frozen=True, slots=True)
+class ShardGroupDescriptor:
+    """An ordered group of physical source shards scheduled as one unit."""
+
+    shards: tuple[Shard, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": "shard_group",
+            "shards": [shard.to_dict() for shard in self.shards],
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> ShardGroupDescriptor:
+        shards = payload["shards"]
+        if not isinstance(shards, list):
+            raise ValueError("shard-group descriptor must contain a shards list")
+        if any(not isinstance(shard, dict) for shard in shards):
+            raise ValueError("shard-group descriptor shards must be objects")
+        return cls(tuple(Shard.from_dict(shard) for shard in shards))
+
+    def update_hash(self, h: _HashWriter) -> None:
+        h.update(b"shard_group\0")
+        for shard in self.shards:
+            h.update(shard.id.encode("ascii"))
+            h.update(b"\0")
+
+    @property
+    def descriptor_start_key(self) -> str | None:
+        return self.shards[0].start_key if self.shards else None
+
+    @property
+    def descriptor_end_key(self) -> str | None:
+        return self.shards[-1].end_key if self.shards else None
+
+
+ShardDescriptor = FilePartsDescriptor | RowRangeDescriptor | ShardGroupDescriptor
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,6 +273,8 @@ class Shard:
             )
         elif kind == "row_range":
             parsed_descriptor = RowRangeDescriptor.from_dict(descriptor)
+        elif kind == "shard_group":
+            parsed_descriptor = ShardGroupDescriptor.from_dict(descriptor)
         else:
             raise ValueError(f"unsupported shard descriptor kind: {kind!r}")
         global_ordinal = payload.get("global_ordinal")
@@ -270,5 +308,6 @@ __all__ = [
     "RowRangeDescriptor",
     "Shard",
     "ShardDescriptor",
+    "ShardGroupDescriptor",
     "path_hash",
 ]

@@ -22,6 +22,7 @@ from refiner.pipeline.steps import (
     SelectStep,
     VectorizedSegmentStep,
     WithColumnsStep,
+    ValidationStep,
 )
 from refiner.pipeline.data.datatype import dtype_to_plan
 from refiner.pipeline.resources import GPU
@@ -243,6 +244,14 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
             explicit_name or "filter",
             "filter_expr",
             {"expression": step.predicate.to_code()},
+        )
+    if isinstance(step, ValidationStep):
+        description = step.contract.describe()
+        description["scope"] = "global" if step.requires_global_scope else "row_local"
+        return (
+            step.contract.name,
+            "validation",
+            description,
         )
     return step.__class__.__name__, step.__class__.__name__.lower(), None
 
@@ -518,6 +527,9 @@ def plan_pipeline_stages(
 
     sink = pipeline.sink
     reducer = sink.build_reducer() if sink is not None else None
+    stage_num_workers: WorkerCount = (
+        1 if pipeline._has_global_validation() else default_num_workers
+    )
     if reducer is not None:
         assert sink is not None
         reducer_stage = RefinerPipeline(
@@ -536,7 +548,7 @@ def plan_pipeline_stages(
                 index=0,
                 name=f"{stage_base_name}_stage_0",
                 pipeline=pipeline,
-                compute=StageComputeRequirements(num_workers=default_num_workers),
+                compute=StageComputeRequirements(num_workers=stage_num_workers),
             ),
             PlannedStage(
                 index=1,
@@ -554,7 +566,7 @@ def plan_pipeline_stages(
             index=0,
             name="stage_0",
             pipeline=pipeline,
-            compute=StageComputeRequirements(num_workers=default_num_workers),
+            compute=StageComputeRequirements(num_workers=stage_num_workers),
         )
     ]
 
