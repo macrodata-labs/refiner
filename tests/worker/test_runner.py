@@ -741,6 +741,32 @@ def test_passing_global_validation_completes_deferred_shard() -> None:
     assert runtime_lifecycle.failed_ids == []
 
 
+def test_deferred_completion_error_fails_global_validation_shard() -> None:
+    class _FailingCompleteRuntimeLifecycle(_FakeRuntimeLifecycle):
+        def complete(self, shard: Shard) -> None:
+            del shard
+            raise RuntimeError("complete failed")
+
+    pipeline = from_items([{"x": 1}]).validate(exact_rows=1)
+    shards = pipeline.list_shards()
+    runtime_lifecycle = _FailingCompleteRuntimeLifecycle(shards)
+    worker = Worker(
+        pipeline=pipeline,
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
+        runtime_lifecycle=runtime_lifecycle,
+    )
+
+    stats = worker.run()
+
+    assert stats.completed == 0
+    assert stats.failed == 1
+    assert runtime_lifecycle.completed_ids == []
+    assert runtime_lifecycle.failed_ids == [shards[0].id]
+    assert runtime_lifecycle.failed_errors == ["complete failed"]
+
+
 def test_worker_completes_shards_only_after_sink_drain() -> None:
     shard = _shard("p", 0, 2)
     rows_by_shard = {

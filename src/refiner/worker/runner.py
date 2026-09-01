@@ -319,6 +319,7 @@ class Worker:
                         )
                         if sink.counts_output_rows:
                             output_rows += written_output_rows
+                    _complete_deferred_shards()
                 except KeyboardInterrupt as e:
                     execution_error = e
                     logger.warning(
@@ -351,7 +352,6 @@ class Worker:
                         raise
                 else:
                     _heartbeat_once()
-                    _complete_deferred_shards()
                     with inflight_lock:
                         remaining_shards = list(inflight_by_id.values())
                     if remaining_shards:
