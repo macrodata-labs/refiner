@@ -11,6 +11,7 @@ import pytest
 
 from refiner.pipeline import (
     RefinerPipeline,
+    load_lance,
     read_csv,
     read_files,
     read_hdf5,
@@ -205,6 +206,7 @@ def test_limit_source_validates_and_avoids_a_wrapper_without_a_limit() -> None:
         read_files,
         read_videos,
         read_hdf5,
+        load_lance,
         read_zarr,
         read_mcap,
         read_parquet,

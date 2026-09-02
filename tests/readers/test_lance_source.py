@@ -6,8 +6,13 @@ from fsspec.implementations.memory import MemoryFileSystem
 
 from refiner import AddColumns, load_lance, read_blob
 from refiner.pipeline.data import datatype
-from refiner.pipeline.data.shard import SOURCE_ROW_ID_COLUMN, RowRangeDescriptor
+from refiner.pipeline.data.shard import (
+    SOURCE_ROW_ID_COLUMN,
+    RowRangeDescriptor,
+    ShardGroupDescriptor,
+)
 from refiner.pipeline.sources.lance import LanceSource
+from refiner.pipeline.sources.limited import LimitedSource
 from refiner.pipeline.data.tabular import Tabular
 
 
@@ -19,8 +24,6 @@ def test_load_lance_rejects_explicit_shard_count_above_limit() -> None:
 def test_load_lance_caps_automatic_shards_without_dropping_fragments() -> None:
     source = object.__new__(LanceSource)
     source.num_shards = None
-    source.max_rows = None
-    source._planned_rows_by_fragment = None
     source._dataset_cache = type(
         "Dataset",
         (),
@@ -67,7 +70,9 @@ def test_load_lance_pins_version_and_shards_by_fragment(tmp_path) -> None:
     assert [int(row["x"]) for row in pipeline.iter_rows()] == [1, 2, 3]
 
 
-def test_load_lance_max_rows_bounds_fragment_plan_and_final_batch(tmp_path) -> None:
+def test_load_lance_max_rows_uses_limited_source_and_slices_final_batch(
+    tmp_path,
+) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "limited.lance"
     lance.write_dataset(
@@ -79,10 +84,11 @@ def test_load_lance_max_rows_bounds_fragment_plan_and_final_batch(tmp_path) -> N
     pipeline = load_lance(dataset_uri, batch_size=2, max_rows=3)
     shards = pipeline.list_shards()
 
-    assert [(shard.descriptor.start, shard.descriptor.end) for shard in shards] == [
-        (0, 1),
-        (1, 2),
-    ]
+    assert len(shards) == 1
+    assert isinstance(shards[0].descriptor, ShardGroupDescriptor)
+    assert isinstance(pipeline.source, LimitedSource)
+    assert isinstance(pipeline.source.source, LanceSource)
+    assert pipeline.source.source.batch_size == 2
     assert [int(row["x"]) for row in pipeline.iter_rows()] == [0, 1, 2]
     assert pipeline.source.describe()["max_rows"] == 3
 
@@ -98,7 +104,7 @@ def test_load_lance_max_rows_zero_and_negative(tmp_path) -> None:
         load_lance(dataset_uri, max_rows=-1)
 
 
-def test_load_lance_max_rows_groups_only_required_fragments(tmp_path) -> None:
+def test_load_lance_max_rows_wraps_requested_fragment_plan(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "grouped-limited.lance"
     lance.write_dataset(
@@ -111,7 +117,16 @@ def test_load_lance_max_rows_groups_only_required_fragments(tmp_path) -> None:
     shards = pipeline.list_shards()
 
     assert len(shards) == 1
-    assert (shards[0].descriptor.start, shards[0].descriptor.end) == (0, 2)
+    descriptor = shards[0].descriptor
+    assert isinstance(descriptor, ShardGroupDescriptor)
+    assert len(descriptor.shards) == 1
+    assert (
+        descriptor.shards[0].descriptor.start,
+        descriptor.shards[0].descriptor.end,
+    ) == (
+        0,
+        3,
+    )
     assert [int(row["x"]) for row in pipeline.iter_rows()] == [0, 1, 2]
 
 
@@ -212,7 +227,9 @@ def test_load_lance_limits_leading_rows_across_fragments(tmp_path) -> None:
     )
 
     assert [int(row["x"]) for row in pipeline.iter_rows()] == list(range(5))
-    assert len(pipeline.list_shards()) == 2
+    assert len(pipeline.list_shards()) == 1
+    assert isinstance(pipeline.source, LimitedSource)
+    assert isinstance(pipeline.source.source, LanceSource)
     assert pipeline.source.describe()["max_rows"] == 5
 
 

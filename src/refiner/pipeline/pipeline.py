@@ -57,6 +57,7 @@ from refiner.pipeline.sources import (
     Hdf5Reader,
     JsonReader,
     LanceSource,
+    LimitedSource,
     limit_source,
     McapReader,
     ParquetReader,
@@ -776,14 +777,20 @@ class RefinerPipeline:
         source_version: int | None = None
         is_add_columns = mode == "add_columns" or isinstance(mode, AddColumns)
         if is_add_columns:
-            if not isinstance(self.source, LanceSource):
+            source = self.source
+            if isinstance(source, LimitedSource):
+                is_limited = True
+                source = source.source
+            else:
+                is_limited = False
+            if not isinstance(source, LanceSource):
                 raise ValueError(
                     "add_columns requires a pipeline created by load_lance"
                 )
-            if self.source.max_rows is not None and not isinstance(mode, AddColumns):
+            if is_limited and not isinstance(mode, AddColumns):
                 raise ValueError("add_columns does not support a limited Lance source")
-            source_uri = self.source.dataset_uri
-            source_version = self.source.version
+            source_uri = source.dataset_uri
+            source_version = source.version
         return self.with_sink(
             LanceDatasetSink(
                 output=output,
@@ -1535,14 +1542,17 @@ def load_lance(
     number of scheduling shards without splitting individual fragments.
     ``max_rows`` reads at most that many leading rows from the pinned version.
     """
+    max_rows = _validated_max_rows(max_rows)
     return RefinerPipeline(
-        source=LanceSource(
-            input,
-            version=version,
-            columns=columns,
-            batch_size=batch_size,
-            num_shards=num_shards,
-            max_rows=max_rows,
+        source=limit_source(
+            LanceSource(
+                input,
+                version=version,
+                columns=columns,
+                batch_size=_bounded_reader_window(batch_size, max_rows),
+                num_shards=num_shards,
+            ),
+            max_rows,
         )
     )
 

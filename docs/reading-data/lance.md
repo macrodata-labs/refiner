@@ -33,8 +33,10 @@ controls the streamed Arrow batch size.
 ## Limit the number of rows
 
 Set `max_rows` to a non-negative integer to read only that many leading rows from
-the pinned dataset version. Refiner stops scanning inside the final fragment;
-datasets with fewer rows simply yield all available rows.
+the pinned dataset version. Refiner uses the same global bounded-source wrapper
+as other built-in readers, stops after the final required Arrow batch, and
+slices that batch when necessary. Datasets with fewer rows simply yield all
+available rows.
 
 The limit is applied before pipeline transforms. Omit `max_rows` to read the
 entire pinned version, or use `max_rows=0` to produce no source rows. For
