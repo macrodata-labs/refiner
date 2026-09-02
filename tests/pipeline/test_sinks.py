@@ -918,8 +918,7 @@ def test_lance_add_columns_reorders_fragment_outputs(tmp_path) -> None:
     }
 
 
-def test_lance_add_columns_streams_contiguous_reordered_batches(tmp_path) -> None:
-    first_batch_consumed = threading.Event()
+def test_lance_add_columns_orders_contiguous_reordered_batches(tmp_path) -> None:
     consumed: list[int] = []
 
     class _Metadata:
@@ -933,7 +932,6 @@ def test_lance_add_columns_streams_contiguous_reordered_batches(tmp_path) -> Non
             assert reader_schema == pa.schema([("y", pa.int64())])
             for batch in reader:
                 consumed.extend(batch.column("y").to_pylist())
-                first_batch_consumed.set()
             return "updated", "schema"
 
     writer = _StreamingAddColumnsWriter(
@@ -947,15 +945,64 @@ def test_lance_add_columns_streams_contiguous_reordered_batches(tmp_path) -> Non
         pa.chunked_array([[2, 3]], type=pa.uint64()),
         pa.table({"y": [30, 40]}),
     )
-    assert not first_batch_consumed.is_set()
+    assert consumed == []
 
     writer.put(
         pa.chunked_array([[1, 0]], type=pa.uint64()),
         pa.table({"y": [20, 10]}),
     )
-    assert first_batch_consumed.wait(timeout=2)
+    assert consumed == []
     assert writer.finish() == ("updated", "schema")
     assert consumed == [10, 20, 30, 40]
+
+
+def test_lance_add_columns_honors_byte_aware_buffer_limits(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(lance_sink_module, "_LANCE_PROCESS_UPLOAD_CONFIG", None)
+    captured: list[pa.RecordBatch] = []
+
+    class _Metadata:
+        def to_json(self):
+            return {"files": [], "physical_rows": 12}
+
+    class _Fragment:
+        metadata = _Metadata()
+
+        def merge_columns(self, reader, *, reader_schema):
+            assert reader_schema == pa.schema([("payload", pa.binary())])
+            captured.extend(reader)
+            return "updated", "schema"
+
+    target_bytes = 5 * 1024 * 1024
+    writer = _StreamingAddColumnsWriter(
+        fragment=_Fragment(),
+        fragment_id=7,
+        num_rows=12,
+        schema=pa.schema([("payload", pa.binary())]),
+        output=LanceDatasetSink(tmp_path / "bounded-columns.lance").output,
+        io_config=LanceIOConfig(
+            upload_concurrency=1,
+            multipart_part_bytes=target_bytes,
+            target_batch_bytes=target_bytes,
+            max_buffered_bytes=4 * target_bytes,
+        ),
+    )
+
+    assert writer.queue.maxsize == 1
+    for index in range(12):
+        writer.put(
+            pa.chunked_array([[index]], type=pa.uint64()),
+            pa.table({"payload": [bytes([index]) * 1024 * 1024]}),
+        )
+
+    assert writer.finish() == ("updated", "schema")
+    assert len(captured) == 3
+    assert all(batch.nbytes <= target_bytes for batch in captured)
+    assert [
+        value[0] for batch in captured for value in batch["payload"].to_pylist()
+    ] == [*range(12)]
 
 
 def test_lance_add_columns_preserves_existing_field_ids(tmp_path) -> None:
