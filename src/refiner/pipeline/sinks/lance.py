@@ -930,9 +930,8 @@ class _StreamingAddColumnsWriter:
             end, path = self.pending.pop(self.next_position)
             try:
                 with pa.memory_map(path, "r") as source:
-                    table = pa.ipc.open_stream(source).read_all()
-                for batch in table.to_batches():
-                    self._put_batch(batch)
+                    for batch in pa.ipc.open_stream(source):
+                        self._put_batch(batch)
             finally:
                 os.unlink(path)
             self.next_position = end

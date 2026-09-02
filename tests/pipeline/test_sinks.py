@@ -1001,8 +1001,24 @@ def test_lance_add_columns_reorders_fragment_outputs(tmp_path) -> None:
     }
 
 
-def test_lance_add_columns_orders_contiguous_reordered_batches(tmp_path) -> None:
+def test_lance_add_columns_orders_contiguous_reordered_batches(
+    tmp_path,
+    monkeypatch,
+) -> None:
     consumed: list[int] = []
+    original_open_stream = pa.ipc.open_stream
+
+    class _StreamingOnlyReader:
+        def __init__(self, source) -> None:
+            self._reader = original_open_stream(source)
+
+        def __iter__(self):
+            yield from self._reader
+
+        def read_all(self):
+            raise AssertionError("Pending Lance batches must be replayed incrementally")
+
+    monkeypatch.setattr(pa.ipc, "open_stream", _StreamingOnlyReader)
 
     class _Metadata:
         def to_json(self):
