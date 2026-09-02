@@ -270,6 +270,8 @@ class _ByteBoundedBatchQueue:
             config.max_buffered_bytes // config.target_batch_bytes - 3,
         )
         self._budget = budget or _ByteBudget(self.max_bytes)
+        self._closed = False
+        self._state_lock = threading.Lock()
         self._queue: queue_module.Queue[_QueuedBatch | object] = queue_module.Queue()
 
     def put(
@@ -279,12 +281,19 @@ class _ByteBoundedBatchQueue:
         timeout: float | None = None,
     ) -> None:
         if item is _QUEUE_CLOSED:
-            self._queue.put(item)
+            with self._state_lock:
+                if self._closed:
+                    raise queue_module.Full
+                self._queue.put(item)
             return
         assert isinstance(item, pa.RecordBatch)
         item_bytes = item.nbytes
         self._budget.acquire(item_bytes, timeout)
-        self._queue.put(_QueuedBatch(item, item_bytes))
+        with self._state_lock:
+            if self._closed:
+                self._budget.release(item_bytes)
+                raise queue_module.Full
+            self._queue.put(_QueuedBatch(item, item_bytes))
 
     def iter_batches(self):
         previous_bytes = 0
@@ -300,8 +309,17 @@ class _ByteBoundedBatchQueue:
                 previous_bytes = item.bytes
                 yield item.batch
         finally:
-            if previous_bytes:
-                self._release(previous_bytes)
+            with self._state_lock:
+                self._closed = True
+                if previous_bytes:
+                    self._release(previous_bytes)
+                while True:
+                    try:
+                        queued = self._queue.get_nowait()
+                    except queue_module.Empty:
+                        break
+                    if isinstance(queued, _QueuedBatch):
+                        self._release(queued.bytes)
 
     def _release(self, released_bytes: int) -> None:
         self._budget.release(released_bytes)

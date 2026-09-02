@@ -28,6 +28,8 @@ from refiner.pipeline.sinks.assets import (
     FileAssetConfig,
 )
 from refiner.pipeline.sinks.lance import (
+    _ByteBoundedBatchQueue,
+    _ByteBudget,
     LanceDatasetCommitReducerSink,
     LanceDatasetSink,
     LanceIOConfig,
@@ -280,6 +282,32 @@ def test_lance_streaming_writer_allows_only_one_oversized_batch_in_flight(
     finally:
         release_first_batch.set()
         writer_pool.shutdown(wait=True)
+
+
+def test_lance_batch_queue_releases_queued_bytes_when_consumer_exits() -> None:
+    target_bytes = 5 * 1024 * 1024
+    config = LanceIOConfig(
+        upload_concurrency=1,
+        multipart_part_bytes=target_bytes,
+        target_batch_bytes=target_bytes,
+        max_buffered_bytes=4 * target_bytes,
+    )
+    budget = _ByteBudget(2 * target_bytes)
+    first_queue = _ByteBoundedBatchQueue(config, budget=budget)
+    second_queue = _ByteBoundedBatchQueue(config, budget=budget)
+    schema = pa.schema([pa.field("payload", pa.binary())])
+    batch = pa.record_batch([pa.array([b"x" * (4 * 1024 * 1024)])], schema=schema)
+
+    first_queue.put(batch, timeout=0)
+    first_queue.put(batch, timeout=0)
+    iterator = first_queue.iter_batches()
+    next(iterator)
+    iterator.close()
+
+    second_queue.put(batch, timeout=0)
+    second_iterator = second_queue.iter_batches()
+    next(second_iterator)
+    second_iterator.close()
 
 
 class _PartialMissingStream:
