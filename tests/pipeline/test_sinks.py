@@ -1000,6 +1000,8 @@ def test_lance_add_columns_orders_contiguous_reordered_batches(tmp_path) -> None
         pa.chunked_array([[2, 3]], type=pa.uint64()),
         pa.table({"y": [30, 40]}),
     )
+    pending_path = writer.pending[2][1]
+    assert lance_sink_module.os.path.exists(pending_path)
     assert consumed == []
 
     writer.put(
@@ -1007,6 +1009,8 @@ def test_lance_add_columns_orders_contiguous_reordered_batches(tmp_path) -> None
         pa.table({"y": [20, 10]}),
     )
     assert consumed == []
+    assert writer.pending == {}
+    assert not lance_sink_module.os.path.exists(pending_path)
     assert writer.finish() == ("updated", "schema")
     assert consumed == [10, 20, 30, 40]
 

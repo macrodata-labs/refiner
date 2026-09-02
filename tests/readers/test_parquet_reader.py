@@ -137,6 +137,37 @@ def test_max_block_rows_bounds_parquet_scanner_batches(tmp_path):
     )
 
 
+def test_parquet_reader_copy_does_not_share_open_file_caches(tmp_path):
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    first_path = _write_parquet(first_dir)
+    second_path = _write_parquet(second_dir)
+    pipeline = read_parquet(
+        [first_path, second_path],
+        file_path_column=None,
+        target_shard_bytes=1,
+    )
+    source = pipeline.source
+    assert isinstance(source, ParquetReader)
+    shards = source.list_shards()
+
+    list(source.read_shard(shards[0]))
+    original_handle = source._open_fh
+    assert original_handle is not None
+
+    derived = pipeline.with_max_block_rows(3)
+    assert isinstance(derived.source, ParquetReader)
+    assert derived.source._open_fh is None
+    assert derived.source._open_pf is None
+    assert derived.source._open_fragment is None
+
+    list(derived.source.read_shard(shards[-1]))
+    assert not original_handle.closed
+    assert list(source.read_shard(shards[0]))
+
+
 def test_read_parquet_rejects_invalid_read_batch_rows(tmp_path):
     p = _write_parquet(tmp_path)
 

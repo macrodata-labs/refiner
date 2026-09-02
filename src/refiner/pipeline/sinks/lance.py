@@ -854,7 +854,7 @@ class _StreamingAddColumnsWriter:
         )
         self.closed = False
         self.next_position = 0
-        self.pending: dict[int, tuple[int, pa.Table]] = {}
+        self.pending: dict[int, tuple[int, str]] = {}
         self.task_future = _LANCE_WRITER_POOL.submit(self._run)
         self._spool_path: str | None = None
         self._spool_sink: pa.OSFile | None = None
@@ -909,10 +909,39 @@ class _StreamingAddColumnsWriter:
 
     def _emit_ready(self) -> None:
         while self.next_position in self.pending:
-            end, table = self.pending.pop(self.next_position)
-            for batch in table.to_batches():
-                self._put_batch(batch)
+            end, path = self.pending.pop(self.next_position)
+            try:
+                with pa.memory_map(path, "r") as source:
+                    table = pa.ipc.open_stream(source).read_all()
+                for batch in table.to_batches():
+                    self._put_batch(batch)
+            finally:
+                os.unlink(path)
             self.next_position = end
+
+    def _spool_pending_table(self, table: pa.Table) -> str:
+        tmp = tempfile.NamedTemporaryFile(
+            prefix="refiner-lance-columns-pending-",
+            delete=False,
+        )
+        path = tmp.name
+        tmp.close()
+        try:
+            with pa.OSFile(path, "wb") as sink:
+                with pa.ipc.new_stream(sink, table.schema) as writer:
+                    writer.write_table(table)
+        except Exception:
+            os.unlink(path)
+            raise
+        return path
+
+    def _cleanup_pending_spools(self) -> None:
+        for _, path in self.pending.values():
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+        self.pending.clear()
 
     def _emit_fill(self, end: int) -> None:
         while self.next_position < end:
@@ -981,12 +1010,18 @@ class _StreamingAddColumnsWriter:
                     f"Lance fragment {self.fragment_id} has invalid or duplicate "
                     "row positions"
                 )
-            self.pending[start] = (
-                end,
-                sorted_output.slice(run_start, index - run_start),
-            )
+            run_table = sorted_output.slice(run_start, index - run_start)
+            if start == self.next_position:
+                for batch in run_table.to_batches():
+                    self._put_batch(batch)
+                self.next_position = end
+                self._emit_ready()
+            else:
+                self.pending[start] = (
+                    end,
+                    self._spool_pending_table(run_table),
+                )
             run_start = index
-        self._emit_ready()
 
     def _close_input(self) -> None:
         if self.closed:
@@ -1027,6 +1062,7 @@ class _StreamingAddColumnsWriter:
         complete = self.next_position == self.num_rows and not self.pending
         self._close_input()
         if not complete:
+            self._cleanup_pending_spools()
             if self._spool_path is None:
                 try:
                     result = self.task_future.result()
@@ -1049,6 +1085,7 @@ class _StreamingAddColumnsWriter:
 
     def abort(self) -> None:
         self._close_input()
+        self._cleanup_pending_spools()
         if self._spool_path is not None:
             os.unlink(self._spool_path)
             return

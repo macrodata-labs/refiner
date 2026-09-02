@@ -149,6 +149,12 @@ class ParquetReader(BaseReader):
         reader.arrow_batch_size = (
             self._default_arrow_batch_size if max_rows is None else max_rows
         )
+        reader._open_file = None
+        reader._open_fh = None
+        reader._open_pf = None
+        reader._open_metadata = None
+        reader._open_fragment_file = None
+        reader._open_fragment = None
         return reader
 
     def _get_parquet_file(self, source_file: DataFile) -> pq.ParquetFile:
