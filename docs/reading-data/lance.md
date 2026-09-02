@@ -20,15 +20,39 @@ pipeline = mdr.load_lance(
     "s3://my-bucket/hands.lance",
     version=42,
     columns=["image", "frame_id"],
-    batch_size=128,
     num_shards=32,
     max_rows=2_000,
 )
 ```
 
 When `version` is omitted, Refiner resolves the latest version once and pins it
-for the pipeline. Column projection is pushed into Lance, and `batch_size`
-controls the streamed Arrow batch size.
+for the pipeline. Column projection is pushed into Lance.
+
+Use the pipeline-wide execution block limit when rows contain large media or
+other variable-sized values:
+
+```python
+pipeline = mdr.load_lance("s3://my-bucket/hands.lance").with_max_block_rows(128)
+```
+
+Refiner propagates this limit into Lance's scanner, so the source does not
+materialize a larger Arrow batch and then immediately split it. The same limit
+continues to apply to blocks produced by downstream transforms. Omit it to use
+Lance's internal read-batch default.
+
+When source rows are lightweight references but downstream transforms expand
+them into large media values, tune the two boundaries independently:
+
+```python
+pipeline = mdr.load_lance(
+    "s3://my-bucket/hands.lance",
+    read_batch_rows=256,
+).with_max_block_rows(8)
+```
+
+Here Lance scans 256 rows at a time while transforms and sinks receive blocks
+of at most eight rows. An explicit `read_batch_rows` value takes precedence over
+scanner inheritance from `with_max_block_rows`.
 
 ## Limit the number of rows
 

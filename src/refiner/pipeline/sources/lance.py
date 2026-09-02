@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from copy import copy
 import posixpath
 from typing import Any
 
@@ -25,6 +26,7 @@ from refiner.utils import check_required_dependencies
 
 _LANCE_ROW_ADDRESS_COLUMN = "_rowaddr"
 _LANCE_BLOB_METADATA_KEY = b"lance-encoding:blob"
+_DEFAULT_READ_BATCH_ROWS = 65_536
 
 
 def _import_lance() -> Any:
@@ -67,11 +69,8 @@ class LanceSource(BaseSource):
         *,
         version: int | str | None = None,
         columns: Sequence[str] | None = None,
-        batch_size: int = 65_536,
         num_shards: int | None = None,
     ) -> None:
-        if batch_size <= 0:
-            raise ValueError("batch_size must be > 0")
         if columns is not None and len(set(columns)) != len(columns):
             raise ValueError("Lance columns must be unique")
         validate_explicit_num_shards(num_shards)
@@ -85,7 +84,7 @@ class LanceSource(BaseSource):
         self.dataset_uri = self.input.abs_path()
         validate_lance_uri(self.dataset_uri)
         self.columns = tuple(columns) if columns is not None else None
-        self.batch_size = int(batch_size)
+        self._read_batch_rows = _DEFAULT_READ_BATCH_ROWS
         self.num_shards = num_shards
         self._dataset_cache: Any | None = None
 
@@ -136,6 +135,18 @@ class LanceSource(BaseSource):
                 metadata=normalized_schema.metadata,
             )
         self._schema = projected_schema
+
+    def with_read_batch_rows(self, max_rows: int | None) -> "LanceSource":
+        source = copy(self)
+        source._read_batch_rows = (
+            _DEFAULT_READ_BATCH_ROWS if max_rows is None else max_rows
+        )
+        return source
+
+    def with_max_read_batch_rows(self, max_rows: int) -> "LanceSource":
+        source = copy(self)
+        source._read_batch_rows = min(source._read_batch_rows, max_rows)
+        return source
 
     @property
     def schema(self) -> pa.Schema:
@@ -263,7 +274,7 @@ class LanceSource(BaseSource):
             rows_read = 0
             for batch in fragment.to_batches(
                 columns=list(self.columns) if self.columns is not None else None,
-                batch_size=self.batch_size,
+                batch_size=self._read_batch_rows,
                 with_row_address=True,
                 blob_handling="blobs_descriptions",
             ):
@@ -291,7 +302,7 @@ class LanceSource(BaseSource):
             "path": self.dataset_uri,
             "version": self.version,
             "columns": list(self.columns) if self.columns is not None else None,
-            "batch_size": self.batch_size,
+            "read_batch_rows": self._read_batch_rows,
             "num_shards": self.num_shards,
         }
 

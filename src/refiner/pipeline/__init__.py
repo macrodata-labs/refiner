@@ -7,6 +7,7 @@ _LAZY_ATTRS = {
     "AddColumns": "refiner.pipeline.sinks.lance",
     "Append": "refiner.pipeline.sinks.lance",
     "Create": "refiner.pipeline.sinks.lance",
+    "LanceIOConfig": "refiner.pipeline.sinks.lance",
     "Overwrite": "refiner.pipeline.sinks.lance",
     "Row": "refiner.pipeline.data.row",
     "Shard": "refiner.pipeline.data.shard",
@@ -39,6 +40,7 @@ __all__ = [
     "AddColumns",
     "Append",
     "Create",
+    "LanceIOConfig",
     "Overwrite",
     "CUDAVersion",
     "GPU",
@@ -83,7 +85,13 @@ def __dir__() -> list[str]:
 
 
 if TYPE_CHECKING:
-    from refiner.pipeline.sinks.lance import AddColumns, Append, Create, Overwrite
+    from refiner.pipeline.sinks.lance import (
+        AddColumns,
+        Append,
+        Create,
+        LanceIOConfig,
+        Overwrite,
+    )
     from refiner.pipeline.data.row import Row
     from refiner.pipeline.data.shard import Shard
     from refiner.pipeline.pipeline import (

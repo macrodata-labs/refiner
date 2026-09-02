@@ -19,6 +19,29 @@ pipeline = mdr.read_parquet(
 Parquet is the best general-purpose tabular format when you control the data.
 It preserves schema information and works well with vectorized transforms.
 
+For rows with large or variable-sized values, set the pipeline-wide execution
+block limit:
+
+```python
+pipeline = mdr.read_parquet("/data/episodes/*.parquet").with_max_block_rows(256)
+```
+
+Refiner passes this limit to the Parquet scanner and also enforces it on
+downstream execution blocks. Parquet may still emit smaller batches at file or
+row-group boundaries.
+
+To tune Parquet scanning independently, set `read_batch_rows`:
+
+```python
+pipeline = mdr.read_parquet(
+    "/data/episodes/*.parquet",
+    read_batch_rows=4_096,
+).with_max_block_rows(256)
+```
+
+The explicit read setting controls Parquet scanner batches; the pipeline limit
+continues to cap downstream execution blocks.
+
 ## JSON and JSONL
 
 ```python
@@ -58,4 +81,3 @@ See [Schemas and DTypes](../transforms/schemas-and-dtypes.md).
 
 - [Vectorized Transforms](../transforms/vectorized-transforms.md)
 - [Parquet and JSONL Writers](../writing-data/parquet-and-jsonl.md)
-

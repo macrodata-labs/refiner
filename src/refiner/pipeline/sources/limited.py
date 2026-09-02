@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from copy import copy
 from typing import Any
 
 import pyarrow as pa
@@ -25,10 +26,17 @@ class LimitedSource(BaseSource):
     def __init__(self, source: BaseSource, *, max_rows: int) -> None:
         if max_rows < 0:
             raise ValueError("max_rows must be >= 0")
-        self.source = source
         self.max_rows = int(max_rows)
+        self.source = source.with_max_read_batch_rows(max(1, self.max_rows))
         self.name = source.name
         self._source_shards: tuple[Shard, ...] | None = None
+
+    def with_read_batch_rows(self, max_rows: int | None) -> "LimitedSource":
+        source = copy(self)
+        source.source = self.source.with_read_batch_rows(
+            max_rows
+        ).with_max_read_batch_rows(max(1, self.max_rows))
+        return source
 
     @property
     def schema(self) -> pa.Schema | None:

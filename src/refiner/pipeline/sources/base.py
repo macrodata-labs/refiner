@@ -45,6 +45,20 @@ class BaseSource(ABC):
         for shard in self.list_shards():
             yield from self.iter_shard_units(shard)
 
+    def with_read_batch_rows(self, max_rows: int | None) -> "BaseSource":
+        """Return a source configured for the pipeline's execution block limit.
+
+        Sources that stream native record batches can override this hook to avoid
+        materializing batches larger than the execution engine will accept.
+        Other sources may ignore the hint and rely on the engine's hard output
+        block limit.
+        """
+        return self
+
+    def with_max_read_batch_rows(self, max_rows: int) -> "BaseSource":
+        """Return a source whose existing scanner window is no larger than a cap."""
+        return self
+
     @property
     def schema(self) -> pa.Schema | None:
         return None
