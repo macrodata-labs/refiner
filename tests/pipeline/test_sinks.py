@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from collections.abc import Mapping
 from typing import cast
 
@@ -225,6 +225,61 @@ def test_lance_streaming_writer_writes_oversized_single_row_alone(monkeypatch) -
     assert [batch.num_rows for batch in captured] == [1, 1]
     assert captured[0].nbytes > 5 * 1024 * 1024
     assert captured[1].nbytes <= 5 * 1024 * 1024
+
+
+def test_lance_streaming_writer_allows_only_one_oversized_batch_in_flight(
+    monkeypatch,
+) -> None:
+    first_batch_consumed = threading.Event()
+    release_first_batch = threading.Event()
+    writer_pool = ThreadPoolExecutor(max_workers=1)
+    monkeypatch.setattr(lance_sink_module, "_LANCE_WRITER_POOL", writer_pool)
+    monkeypatch.setattr(lance_sink_module, "_LANCE_PROCESS_UPLOAD_CONFIG", None)
+
+    def consume_batches(
+        _writer: _StreamingShardWriter,
+        reader: pa.RecordBatchReader,
+    ) -> list[str]:
+        iterator = iter(reader)
+        next(iterator)
+        first_batch_consumed.set()
+        assert release_first_batch.wait(timeout=2)
+        next(iterator)
+        with pytest.raises(StopIteration):
+            next(iterator)
+        return []
+
+    monkeypatch.setattr(_StreamingShardWriter, "_write_reader", consume_batches)
+    schema = pa.schema([pa.field("payload", pa.binary())])
+    config = LanceIOConfig(
+        upload_concurrency=1,
+        multipart_part_bytes=5 * 1024 * 1024,
+        target_batch_bytes=5 * 1024 * 1024,
+        max_buffered_bytes=20 * 1024 * 1024,
+    )
+    writer = _StreamingShardWriter(
+        dataset_uri="unused",
+        schema=schema,
+        mode="create",
+        io_config=config,
+    )
+    oversized = pa.record_batch([pa.array([b"x" * (15 * 1024 * 1024)])], schema=schema)
+
+    try:
+        writer.put_batches([oversized])
+        assert first_batch_consumed.wait(timeout=2)
+
+        with ThreadPoolExecutor(max_workers=1) as producer:
+            future = producer.submit(writer.put_batches, [oversized])
+            with pytest.raises(TimeoutError):
+                future.result(timeout=0.1)
+            release_first_batch.set()
+            future.result(timeout=2)
+
+        assert writer.finish() == []
+    finally:
+        release_first_batch.set()
+        writer_pool.shutdown(wait=True)
 
 
 class _PartialMissingStream:

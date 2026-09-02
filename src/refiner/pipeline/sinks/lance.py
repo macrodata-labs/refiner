@@ -219,8 +219,69 @@ class _ByteAwareBatcher:
         return [] if not self._pending else [self.flush()]
 
 
-def _lance_queue_slots(config: LanceIOConfig) -> int:
-    return max(1, config.max_buffered_bytes // config.target_batch_bytes - 3)
+@dataclass(frozen=True, slots=True)
+class _QueuedBatch:
+    batch: pa.RecordBatch
+    bytes: int
+
+
+class _ByteBoundedBatchQueue:
+    """Keep queued and Lance-consumed batches within one byte budget."""
+
+    def __init__(self, config: LanceIOConfig) -> None:
+        self.max_bytes = config.max_buffered_bytes - 2 * config.target_batch_bytes
+        self.maxsize = max(
+            1,
+            config.max_buffered_bytes // config.target_batch_bytes - 3,
+        )
+        self._bytes_in_flight = 0
+        self._condition = threading.Condition()
+        self._queue: queue_module.Queue[_QueuedBatch | object] = queue_module.Queue()
+
+    def put(
+        self,
+        item: pa.RecordBatch | object,
+        *,
+        timeout: float | None = None,
+    ) -> None:
+        if item is _QUEUE_CLOSED:
+            self._queue.put(item)
+            return
+        assert isinstance(item, pa.RecordBatch)
+        item_bytes = item.nbytes
+        with self._condition:
+            fits = (
+                self._bytes_in_flight == 0
+                if item_bytes > self.max_bytes
+                else self._bytes_in_flight + item_bytes <= self.max_bytes
+            )
+            if not fits:
+                self._condition.wait(timeout)
+                raise queue_module.Full
+            self._bytes_in_flight += item_bytes
+        self._queue.put(_QueuedBatch(item, item_bytes))
+
+    def iter_batches(self):
+        previous_bytes = 0
+        try:
+            while True:
+                if previous_bytes:
+                    self._release(previous_bytes)
+                    previous_bytes = 0
+                item = self._queue.get()
+                if item is _QUEUE_CLOSED:
+                    return
+                assert isinstance(item, _QueuedBatch)
+                previous_bytes = item.bytes
+                yield item.batch
+        finally:
+            if previous_bytes:
+                self._release(previous_bytes)
+
+    def _release(self, released_bytes: int) -> None:
+        with self._condition:
+            self._bytes_in_flight -= released_bytes
+            self._condition.notify_all()
 
 
 def _import_lance() -> Any:
@@ -619,9 +680,7 @@ class _StreamingShardWriter:
         self.mode = mode
         self.io_config = io_config
         self._batcher = _ByteAwareBatcher(io_config.target_batch_bytes)
-        self.queue: queue_module.Queue[pa.RecordBatch | object] = queue_module.Queue(
-            maxsize=_lance_queue_slots(io_config)
-        )
+        self.queue = _ByteBoundedBatchQueue(io_config)
         self.closed = False
         self.task_future = _LANCE_WRITER_POOL.submit(self._run)
         self._spool_path: str | None = None
@@ -635,11 +694,7 @@ class _StreamingShardWriter:
             self._spool_writer = pa.ipc.new_stream(self._spool_sink, self.schema)
 
     def _iter_batches(self):
-        while True:
-            item = self.queue.get()
-            if item is _QUEUE_CLOSED:
-                return
-            yield item
+        yield from self.queue.iter_batches()
 
     def _write_reader(self, reader: pa.RecordBatchReader) -> list[str]:
         lance = _import_lance()
@@ -732,9 +787,7 @@ class _StreamingAddColumnsWriter:
         self.io_config = io_config
         self._batcher = _ByteAwareBatcher(io_config.target_batch_bytes)
         self.base_json = _json_dumps(fragment.metadata.to_json())
-        self.queue: queue_module.Queue[pa.RecordBatch | object] = queue_module.Queue(
-            maxsize=_lance_queue_slots(io_config)
-        )
+        self.queue = _ByteBoundedBatchQueue(io_config)
         self.closed = False
         self.next_position = 0
         self.pending: dict[int, tuple[int, pa.Table]] = {}
@@ -752,11 +805,7 @@ class _StreamingAddColumnsWriter:
             self._spool_writer = pa.ipc.new_stream(self._spool_sink, self.schema)
 
     def _iter_batches(self):
-        while True:
-            item = self.queue.get()
-            if item is _QUEUE_CLOSED:
-                return
-            yield item
+        yield from self.queue.iter_batches()
 
     def _merge_reader(self, reader: pa.RecordBatchReader) -> tuple[Any, Any]:
         return self.fragment.merge_columns(reader, reader_schema=self.schema)
