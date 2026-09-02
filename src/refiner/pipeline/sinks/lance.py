@@ -225,17 +225,47 @@ class _QueuedBatch:
     bytes: int
 
 
+class _ByteBudget:
+    """A byte-weighted, oversized-item-aware budget shared by writer queues."""
+
+    def __init__(self, max_bytes: int) -> None:
+        self.max_bytes = max_bytes
+        self._bytes_in_flight = 0
+        self._condition = threading.Condition()
+
+    def acquire(self, item_bytes: int, timeout: float | None) -> None:
+        with self._condition:
+            fits = (
+                self._bytes_in_flight == 0
+                if item_bytes > self.max_bytes
+                else self._bytes_in_flight + item_bytes <= self.max_bytes
+            )
+            if not fits:
+                self._condition.wait(timeout)
+                raise queue_module.Full
+            self._bytes_in_flight += item_bytes
+
+    def release(self, released_bytes: int) -> None:
+        with self._condition:
+            self._bytes_in_flight -= released_bytes
+            self._condition.notify_all()
+
+
 class _ByteBoundedBatchQueue:
     """Keep queued and Lance-consumed batches within one byte budget."""
 
-    def __init__(self, config: LanceIOConfig) -> None:
+    def __init__(
+        self,
+        config: LanceIOConfig,
+        *,
+        budget: _ByteBudget | None = None,
+    ) -> None:
         self.max_bytes = config.max_buffered_bytes - 2 * config.target_batch_bytes
         self.maxsize = max(
             1,
             config.max_buffered_bytes // config.target_batch_bytes - 3,
         )
-        self._bytes_in_flight = 0
-        self._condition = threading.Condition()
+        self._budget = budget or _ByteBudget(self.max_bytes)
         self._queue: queue_module.Queue[_QueuedBatch | object] = queue_module.Queue()
 
     def put(
@@ -249,16 +279,7 @@ class _ByteBoundedBatchQueue:
             return
         assert isinstance(item, pa.RecordBatch)
         item_bytes = item.nbytes
-        with self._condition:
-            fits = (
-                self._bytes_in_flight == 0
-                if item_bytes > self.max_bytes
-                else self._bytes_in_flight + item_bytes <= self.max_bytes
-            )
-            if not fits:
-                self._condition.wait(timeout)
-                raise queue_module.Full
-            self._bytes_in_flight += item_bytes
+        self._budget.acquire(item_bytes, timeout)
         self._queue.put(_QueuedBatch(item, item_bytes))
 
     def iter_batches(self):
@@ -279,9 +300,7 @@ class _ByteBoundedBatchQueue:
                 self._release(previous_bytes)
 
     def _release(self, released_bytes: int) -> None:
-        with self._condition:
-            self._bytes_in_flight -= released_bytes
-            self._condition.notify_all()
+        self._budget.release(released_bytes)
 
 
 def _import_lance() -> Any:
@@ -775,6 +794,7 @@ class _StreamingAddColumnsWriter:
         fill_missing: bool = False,
         fill: object | Mapping[str, object] = None,
         io_config: LanceIOConfig = LanceIOConfig(),
+        byte_budget: _ByteBudget | None = None,
     ) -> None:
         _configure_lance_process(io_config)
         self.fragment = fragment
@@ -787,7 +807,7 @@ class _StreamingAddColumnsWriter:
         self.io_config = io_config
         self._batcher = _ByteAwareBatcher(io_config.target_batch_bytes)
         self.base_json = _json_dumps(fragment.metadata.to_json())
-        self.queue = _ByteBoundedBatchQueue(io_config)
+        self.queue = _ByteBoundedBatchQueue(io_config, budget=byte_budget)
         self.closed = False
         self.next_position = 0
         self.pending: dict[int, tuple[int, pa.Table]] = {}
@@ -918,6 +938,8 @@ class _StreamingAddColumnsWriter:
             )
             run_start = index
         self._emit_ready()
+        for batch in self._batcher.finish():
+            self._write_batch(batch)
 
     def _close_input(self) -> None:
         if self.closed:
@@ -1066,6 +1088,7 @@ class LanceDatasetSink(BaseSink):
         self._add_columns_writers_by_shard: dict[
             str, dict[int, _StreamingAddColumnsWriter]
         ] = {}
+        self._add_columns_budget_by_shard: dict[str, _ByteBudget] = {}
         self._add_columns_schema: pa.Schema | None = None
         self._planned_output_schema: pa.Schema | None = None
         self._declared_output_columns: frozenset[str] = frozenset()
@@ -1201,6 +1224,10 @@ class LanceDatasetSink(BaseSink):
             [row_addresses, pa.scalar(_LANCE_ROW_ADDRESS_FRAGMENT_SHIFT, pa.uint64())],
         )
         writers = self._add_columns_writers_by_shard.setdefault(shard_id, {})
+        byte_budget = self._add_columns_budget_by_shard.setdefault(
+            shard_id,
+            _ByteBudget(self.io.max_buffered_bytes - 2 * self.io.target_batch_bytes),
+        )
         unique_fragment_ids = pc.call_function("unique", [fragment_ids])
         for fragment_id_raw in unique_fragment_ids.to_pylist():
             fragment_id = int(fragment_id_raw)
@@ -1225,6 +1252,7 @@ class LanceDatasetSink(BaseSink):
                     fill_missing=self.fill_missing,
                     fill=self.fill,
                     io_config=self.io,
+                    byte_budget=byte_budget,
                 )
                 writers[fragment_id] = writer
             positions = pc.call_function(
@@ -1348,6 +1376,7 @@ class LanceDatasetSink(BaseSink):
 
     def _complete_add_columns_shard(self, shard_id: str) -> None:
         writers = self._add_columns_writers_by_shard.pop(shard_id, None)
+        self._add_columns_budget_by_shard.pop(shard_id, None)
         if not writers:
             self._write_empty_sidecar(shard_id)
             return
@@ -1425,6 +1454,7 @@ class LanceDatasetSink(BaseSink):
                     if first_error is None:
                         first_error = err
         self._add_columns_writers_by_shard.clear()
+        self._add_columns_budget_by_shard.clear()
         if first_error is not None:
             raise first_error
 

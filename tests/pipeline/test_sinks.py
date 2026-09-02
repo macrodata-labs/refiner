@@ -974,6 +974,7 @@ def test_lance_add_columns_reorders_fragment_outputs(tmp_path) -> None:
 
 
 def test_lance_add_columns_orders_contiguous_reordered_batches(tmp_path) -> None:
+    first_batch_consumed = threading.Event()
     consumed: list[int] = []
 
     class _Metadata:
@@ -987,6 +988,7 @@ def test_lance_add_columns_orders_contiguous_reordered_batches(tmp_path) -> None
             assert reader_schema == pa.schema([("y", pa.int64())])
             for batch in reader:
                 consumed.extend(batch.column("y").to_pylist())
+                first_batch_consumed.set()
             return "updated", "schema"
 
     writer = _StreamingAddColumnsWriter(
@@ -1006,7 +1008,7 @@ def test_lance_add_columns_orders_contiguous_reordered_batches(tmp_path) -> None
         pa.chunked_array([[1, 0]], type=pa.uint64()),
         pa.table({"y": [20, 10]}),
     )
-    assert consumed == []
+    assert first_batch_consumed.wait(timeout=2)
     assert writer.finish() == ("updated", "schema")
     assert consumed == [10, 20, 30, 40]
 
@@ -1046,18 +1048,74 @@ def test_lance_add_columns_honors_byte_aware_buffer_limits(
     )
 
     assert writer.queue.maxsize == 1
-    for index in range(12):
-        writer.put(
-            pa.chunked_array([[index]], type=pa.uint64()),
-            pa.table({"payload": [bytes([index]) * 1024 * 1024]}),
-        )
+    writer.put(
+        pa.chunked_array([list(range(12))], type=pa.uint64()),
+        pa.table(
+            {
+                "payload": pa.chunked_array(
+                    [pa.array([bytes([index]) * 1024 * 1024]) for index in range(12)]
+                )
+            }
+        ),
+    )
 
     assert writer.finish() == ("updated", "schema")
-    assert len(captured) == 3
+    assert len(captured) == 4
     assert all(batch.nbytes <= target_bytes for batch in captured)
     assert [
         value[0] for batch in captured for value in batch["payload"].to_pylist()
     ] == [*range(12)]
+
+
+def test_lance_add_columns_shares_buffer_budget_across_fragment_writers(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    budgets = []
+
+    class _Fragment:
+        num_deletions = 0
+        physical_rows = 1
+
+    class _Dataset:
+        def get_fragment(self, _fragment_id):
+            return _Fragment()
+
+    class _Writer:
+        def __init__(self, **kwargs):
+            budgets.append(kwargs["byte_budget"])
+
+        def put(self, _positions, _output):
+            return None
+
+    monkeypatch.setattr(lance_sink_module, "_StreamingAddColumnsWriter", _Writer)
+    dataset_uri = tmp_path / "shared-budget.lance"
+    sink = LanceDatasetSink(
+        dataset_uri,
+        mode="add_columns",
+        columns=["y"],
+        source_uri=str(dataset_uri),
+        source_version=1,
+    )
+    sink._source_dataset_cache = _Dataset()
+
+    sink.write_shard_block(
+        "shard",
+        Tabular(
+            pa.table(
+                {
+                    "y": [10, 20],
+                    SOURCE_ROW_ID_COLUMN: pa.array(
+                        [0, 1 << 32],
+                        type=pa.uint64(),
+                    ),
+                }
+            )
+        ),
+    )
+
+    assert len(budgets) == 2
+    assert budgets[0] is budgets[1]
 
 
 def test_lance_add_columns_preserves_existing_field_ids(tmp_path) -> None:
