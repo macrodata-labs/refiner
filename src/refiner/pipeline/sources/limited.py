@@ -27,18 +27,15 @@ class LimitedSource(BaseSource):
         if max_rows < 0:
             raise ValueError("max_rows must be >= 0")
         self.max_rows = int(max_rows)
-        self.source = source.with_read_batch_rows(max(1, self.max_rows))
+        self.source = source.with_max_read_batch_rows(max(1, self.max_rows))
         self.name = source.name
         self._source_shards: tuple[Shard, ...] | None = None
 
     def with_read_batch_rows(self, max_rows: int | None) -> "LimitedSource":
-        read_batch_rows = self.max_rows
-        if max_rows is not None:
-            read_batch_rows = min(read_batch_rows, max_rows)
         source = copy(self)
         source.source = self.source.with_read_batch_rows(
-            max(1, read_batch_rows),
-        )
+            max_rows
+        ).with_max_read_batch_rows(max(1, self.max_rows))
         return source
 
     @property

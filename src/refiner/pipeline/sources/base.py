@@ -55,6 +55,10 @@ class BaseSource(ABC):
         """
         return self
 
+    def with_max_read_batch_rows(self, max_rows: int) -> "BaseSource":
+        """Return a source whose existing scanner window is no larger than a cap."""
+        return self
+
     @property
     def schema(self) -> pa.Schema | None:
         return None

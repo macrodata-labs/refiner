@@ -146,6 +146,18 @@ def test_load_lance_max_rows_uses_limited_source_and_slices_final_batch(
     assert pipeline.source.describe()["max_rows"] == 3
 
 
+def test_load_lance_large_max_rows_preserves_default_scanner_batch(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "large-limit.lance"
+    lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+
+    pipeline = load_lance(dataset_uri, max_rows=1_000_000)
+
+    assert isinstance(pipeline.source, LimitedSource)
+    assert isinstance(pipeline.source.source, LanceSource)
+    assert pipeline.source.source._read_batch_rows == 65_536
+
+
 def test_load_lance_max_rows_zero_and_negative(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "zero.lance"

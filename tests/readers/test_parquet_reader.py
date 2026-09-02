@@ -6,6 +6,7 @@ from refiner import read_parquet
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.data import datatype
 from refiner.pipeline.expressions import col
+from refiner.pipeline.sources.limited import LimitedSource
 from refiner.pipeline.sources.readers import ParquetReader
 from refiner.worker.context import set_active_run_context
 from refiner.worker.metrics.emitter import UserMetricsEmitter
@@ -166,6 +167,16 @@ def test_parquet_reader_copy_does_not_share_open_file_caches(tmp_path):
     list(derived.source.read_shard(shards[-1]))
     assert not original_handle.closed
     assert list(source.read_shard(shards[0]))
+
+
+def test_parquet_large_max_rows_preserves_default_scanner_batch(tmp_path):
+    path = _write_parquet(tmp_path)
+
+    pipeline = read_parquet(path, max_rows=1_000_000)
+
+    assert isinstance(pipeline.source, LimitedSource)
+    assert isinstance(pipeline.source.source, ParquetReader)
+    assert pipeline.source.source.arrow_batch_size == 65_536
 
 
 def test_read_parquet_rejects_invalid_read_batch_rows(tmp_path):

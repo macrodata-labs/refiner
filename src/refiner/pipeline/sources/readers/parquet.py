@@ -157,6 +157,11 @@ class ParquetReader(BaseReader):
         reader._open_fragment = None
         return reader
 
+    def with_max_read_batch_rows(self, max_rows: int) -> "ParquetReader":
+        reader = self.with_read_batch_rows(self.arrow_batch_size)
+        reader.arrow_batch_size = min(reader.arrow_batch_size, max_rows)
+        return reader
+
     def _get_parquet_file(self, source_file: DataFile) -> pq.ParquetFile:
         """Get or open a cached ParquetFile for the current path (single-open-file policy)."""
         fh, opened_new = self._get_file_handle(source_file, mode="rb")

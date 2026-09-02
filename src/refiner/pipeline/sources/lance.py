@@ -143,6 +143,11 @@ class LanceSource(BaseSource):
         )
         return source
 
+    def with_max_read_batch_rows(self, max_rows: int) -> "LanceSource":
+        source = copy(self)
+        source._read_batch_rows = min(source._read_batch_rows, max_rows)
+        return source
+
     @property
     def schema(self) -> pa.Schema:
         return self._schema
