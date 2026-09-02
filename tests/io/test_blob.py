@@ -19,12 +19,16 @@ class RecordingMemoryFileSystem(MemoryFileSystem):
     def __init__(
         self,
         *,
+        block_reads: bool = False,
         failure: BaseException | None = None,
         max_read_bytes: int | None = None,
     ) -> None:
         super().__init__(skip_instance_cache=True)
+        self.block_reads = block_reads
         self.failure = failure
         self.max_read_bytes = max_read_bytes
+        self.read_started = threading.Event()
+        self.release_reads = threading.Event()
         self.ranges: list[tuple[int | None, int | None]] = []
         self.second_read = threading.Event()
         self.source_closed = threading.Event()
@@ -68,6 +72,9 @@ class _RecordingReader:
         return self._source.seek(offset, whence)
 
     def read(self, size: int = -1) -> bytes:
+        if self._fs.block_reads:
+            self._fs.read_started.set()
+            self._fs.release_reads.wait()
         if self._fs.max_read_bytes is not None:
             size = (
                 min(size, self._fs.max_read_bytes)
@@ -88,10 +95,12 @@ def use_filesystem(
     monkeypatch: pytest.MonkeyPatch,
     data: bytes,
     *,
+    block_reads: bool = False,
     failure: BaseException | None = None,
     max_read_bytes: int | None = None,
 ) -> Iterator[RecordingMemoryFileSystem]:
     fs = RecordingMemoryFileSystem(
+        block_reads=block_reads,
         failure=failure,
         max_read_bytes=max_read_bytes,
     )
@@ -188,6 +197,28 @@ def test_open_blob_stream_early_close_stops_blocked_producer(monkeypatch) -> Non
 
     assert not thread.is_alive()
     assert fs.ranges == [(0, 1), (1, 2)]
+    assert fs.source_closed.is_set()
+
+
+def test_open_blob_stream_close_does_not_wait_for_blocked_storage(monkeypatch) -> None:
+    monkeypatch.setattr("refiner.io.blob._CLOSE_JOIN_SECONDS", 0.01)
+    with use_filesystem(monkeypatch, b"payload", block_reads=True) as fs:
+        stream = open_blob_stream({"path": "unused", "offset": 0, "size": 7})
+        producer = getattr(stream, "_thread")
+        assert fs.read_started.wait(timeout=1)
+
+        closer = threading.Thread(target=stream.close)
+        closer.start()
+        closer.join(timeout=1)
+        try:
+            assert not closer.is_alive()
+            assert producer.is_alive()
+        finally:
+            fs.release_reads.set()
+            closer.join(timeout=1)
+            producer.join(timeout=1)
+
+    assert not producer.is_alive()
     assert fs.source_closed.is_set()
 
 

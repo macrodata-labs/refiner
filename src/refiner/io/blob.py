@@ -12,6 +12,7 @@ from refiner.io.datafile import DataFile
 DEFAULT_BLOB_STREAM_CHUNK_BYTES = 8 * 1024 * 1024
 DEFAULT_BLOB_STREAM_PREFETCH_CHUNKS = 4
 _QUEUE_POLL_SECONDS = 0.05
+_CLOSE_JOIN_SECONDS = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,7 +118,10 @@ class _BlobStream(io.RawIOBase):
         if self.closed:
             return
         self._cancelled.set()
-        self._thread.join()
+        # A storage backend can block indefinitely inside open() or read(). The
+        # daemon producer will close its source when that call returns, but a
+        # consumer closing early must not be held hostage by the backend.
+        self._thread.join(timeout=_CLOSE_JOIN_SECONDS)
         self._current = memoryview(b"")
         while True:
             try:
