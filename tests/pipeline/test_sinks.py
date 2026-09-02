@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Mapping
 from typing import cast
 
@@ -11,6 +12,7 @@ import pyarrow.parquet as pq
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
 
+import refiner.pipeline.sinks.lance as lance_sink_module
 from refiner import AddColumns, Append, Create, Overwrite, col, read_blob
 from refiner.io import DataFolder
 from refiner.pipeline.data import datatype
@@ -28,7 +30,9 @@ from refiner.pipeline.sinks.assets import (
 from refiner.pipeline.sinks.lance import (
     LanceDatasetCommitReducerSink,
     LanceDatasetSink,
+    LanceIOConfig,
     _StreamingAddColumnsWriter,
+    _StreamingShardWriter,
     _cast_to_planned_schema,
     _job_token,
     _schema_to_base64,
@@ -57,6 +61,170 @@ class _FinalizedWorkersRuntime:
 )
 def test_lance_write_mode_dataclasses_normalize(mode, expected, tmp_path) -> None:
     assert LanceDatasetSink(tmp_path / "output.lance", mode=mode).mode == expected
+
+
+def test_lance_dataset_sink_uses_byte_aware_batching_defaults(tmp_path) -> None:
+    sink = LanceDatasetSink(tmp_path / "output.lance")
+
+    assert sink.io == LanceIOConfig()
+    assert sink.describe()[2]["io"] == {
+        "upload_concurrency": 32,
+        "multipart_part_bytes": 5 * 1024 * 1024,
+        "target_batch_bytes": 256 * 1024 * 1024,
+        "max_buffered_bytes": 1024 * 1024 * 1024,
+    }
+
+
+def test_lance_io_config_sets_process_upload_controls_once(monkeypatch) -> None:
+    monkeypatch.setattr(lance_sink_module, "_LANCE_PROCESS_UPLOAD_CONFIG", None)
+    monkeypatch.delenv("LANCE_UPLOAD_CONCURRENCY", raising=False)
+    monkeypatch.delenv("LANCE_INITIAL_UPLOAD_SIZE", raising=False)
+    config = LanceIOConfig()
+
+    lance_sink_module._configure_lance_process(config)
+    lance_sink_module._configure_lance_process(config)
+
+    assert lance_sink_module._LANCE_PROCESS_UPLOAD_CONFIG == (
+        config.upload_concurrency,
+        config.multipart_part_bytes,
+    )
+    assert lance_sink_module.os.environ["LANCE_UPLOAD_CONCURRENCY"] == "32"
+    assert lance_sink_module.os.environ["LANCE_INITIAL_UPLOAD_SIZE"] == str(
+        5 * 1024 * 1024
+    )
+    with pytest.raises(RuntimeError, match="start a fresh worker"):
+        lance_sink_module._configure_lance_process(
+            LanceIOConfig(
+                upload_concurrency=8,
+                multipart_part_bytes=16 * 1024 * 1024,
+                target_batch_bytes=128 * 1024 * 1024,
+                max_buffered_bytes=512 * 1024 * 1024,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"upload_concurrency": 0}, "upload_concurrency"),
+        ({"multipart_part_bytes": 1024}, "between 5 MiB and 5 GiB"),
+        ({"target_batch_bytes": 0}, "target_batch_bytes"),
+        (
+            {"upload_concurrency": 2, "target_batch_bytes": 8 * 1024 * 1024},
+            "upload_concurrency times",
+        ),
+        ({"max_buffered_bytes": 1024}, "four times"),
+    ],
+)
+def test_lance_io_config_validates_limits(kwargs, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        LanceIOConfig(**kwargs)
+
+
+def _capture_lance_writer_batches(
+    monkeypatch,
+    batches: list[pa.RecordBatch],
+    *,
+    target_batch_bytes: int = 5 * 1024 * 1024,
+) -> tuple[list[pa.RecordBatch], int]:
+    captured: list[pa.RecordBatch] = []
+    writer_pool = ThreadPoolExecutor(max_workers=1)
+    monkeypatch.setattr(lance_sink_module, "_LANCE_WRITER_POOL", writer_pool)
+    monkeypatch.setattr(lance_sink_module, "_LANCE_PROCESS_UPLOAD_CONFIG", None)
+
+    def capture_batches(
+        _writer: _StreamingShardWriter, reader: pa.RecordBatchReader
+    ) -> list[str]:
+        captured.extend(reader)
+        return []
+
+    monkeypatch.setattr(_StreamingShardWriter, "_write_reader", capture_batches)
+    writer = _StreamingShardWriter(
+        dataset_uri="unused",
+        schema=batches[0].schema,
+        mode="create",
+        io_config=LanceIOConfig(
+            upload_concurrency=1,
+            multipart_part_bytes=5 * 1024 * 1024,
+            target_batch_bytes=target_batch_bytes,
+            max_buffered_bytes=4 * target_batch_bytes,
+        ),
+    )
+    try:
+        writer.put_batches(batches)
+        queue_maxsize = writer.queue.maxsize
+        writer.finish()
+        return captured, queue_maxsize
+    finally:
+        writer_pool.shutdown(wait=True)
+
+
+def test_lance_streaming_writer_coalesces_and_splits_batches_by_bytes(
+    monkeypatch,
+) -> None:
+    schema = pa.schema([pa.field("payload", pa.binary())])
+    source = [
+        pa.record_batch([pa.array([bytes([index]) * 1024 * 1024])], schema=schema)
+        for index in range(12)
+    ]
+
+    captured, queue_maxsize = _capture_lance_writer_batches(monkeypatch, source)
+
+    assert queue_maxsize == 1
+    assert [
+        value[0] for batch in captured for value in batch["payload"].to_pylist()
+    ] == [*range(12)]
+    assert len(captured) == 3
+    assert all(batch.nbytes <= 5 * 1024 * 1024 for batch in captured)
+
+    captured, _ = _capture_lance_writer_batches(
+        monkeypatch,
+        [
+            pa.record_batch(
+                [pa.array([bytes([index]) * 20 for index in range(8)])],
+                schema=schema,
+            )
+        ],
+    )
+
+    assert len(captured) == 1
+    assert all(batch.nbytes <= 5 * 1024 * 1024 for batch in captured)
+    assert [
+        value[0] for batch in captured for value in batch["payload"].to_pylist()
+    ] == [*range(8)]
+
+    captured, _ = _capture_lance_writer_batches(
+        monkeypatch,
+        [
+            pa.record_batch(
+                [pa.array([bytes([index]) * 1024 * 1024 for index in range(8)])],
+                schema=schema,
+            )
+        ],
+    )
+
+    assert len(captured) == 2
+    assert all(batch.nbytes <= 5 * 1024 * 1024 for batch in captured)
+    assert [
+        value[0] for batch in captured for value in batch["payload"].to_pylist()
+    ] == [*range(8)]
+
+
+def test_lance_streaming_writer_writes_oversized_single_row_alone(monkeypatch) -> None:
+    schema = pa.schema([pa.field("payload", pa.binary())])
+    captured, _ = _capture_lance_writer_batches(
+        monkeypatch,
+        [
+            pa.record_batch(
+                [pa.array([b"x" * (6 * 1024 * 1024), b"small"])],
+                schema=schema,
+            )
+        ],
+    )
+
+    assert [batch.num_rows for batch in captured] == [1, 1]
+    assert captured[0].nbytes > 5 * 1024 * 1024
+    assert captured[1].nbytes <= 5 * 1024 * 1024
 
 
 class _PartialMissingStream:
@@ -417,7 +585,6 @@ def test_lance_add_columns_packs_assets_as_generic_blob_references(tmp_path) -> 
             dataset_uri,
             version=base.version,
             columns=["x"],
-            batch_size=1,
         )
         .map(
             lambda row: {"image": bytes([int(row["x"])])},
@@ -525,7 +692,6 @@ def test_launch_local_adds_lance_columns_without_rewriting_base_files(tmp_path) 
             dataset_uri,
             version=base.version,
             columns=["x"],
-            batch_size=1,
             num_shards=1,
         )
         .map(
@@ -574,7 +740,6 @@ def test_lance_add_columns_handles_more_fragments_than_io_threads(tmp_path) -> N
         load_lance(
             dataset_uri,
             version=base.version,
-            batch_size=1,
             num_shards=1,
         )
         .map(lambda row: {"y": int(row["x"]) * 10}, dtypes={"y": datatype.int64()})
@@ -728,7 +893,7 @@ def test_lance_add_columns_reorders_fragment_outputs(tmp_path) -> None:
             yield row.update({"y": int(row["x"]) * 10})
 
     pipeline = (
-        load_lance(dataset_uri, version=base.version, columns=["x"], batch_size=3)
+        load_lance(dataset_uri, version=base.version, columns=["x"])
         .batch_map(
             reverse_batch,
             batch_size=3,

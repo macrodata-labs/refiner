@@ -221,6 +221,13 @@ def test_builtin_reader_functions_expose_max_rows(reader) -> None:
     assert "max_rows" in inspect.signature(reader).parameters
 
 
+def test_lance_and_parquet_use_pipeline_block_sizing_api() -> None:
+    assert "batch_size" not in inspect.signature(load_lance).parameters
+    assert "arrow_batch_size" not in inspect.signature(read_parquet).parameters
+    assert "read_batch_rows" in inspect.signature(load_lance).parameters
+    assert "read_batch_rows" in inspect.signature(read_parquet).parameters
+
+
 def test_parquet_max_rows_is_global_and_applies_after_reader_filter(
     tmp_path: Path,
 ) -> None:

@@ -43,6 +43,7 @@ from refiner.pipeline.sinks import (
     Create,
     JsonlSink,
     LanceDatasetSink,
+    LanceIOConfig,
     LanceSink,
     LanceWriteConfig,
     ParquetSink,
@@ -114,6 +115,7 @@ class RefinerPipeline:
     source: BaseSource
     pipeline_steps: tuple[RefinerStep, ...]
     _compiled_segments: tuple[Segment, ...] | None
+    read_batch_rows: int | None
     max_block_rows: int | None
     max_vectorized_block_bytes: int | None
     sink: BaseSink | None
@@ -123,6 +125,7 @@ class RefinerPipeline:
         source: BaseSource,
         pipeline_steps: Sequence[RefinerStep] | None = None,
         *,
+        read_batch_rows: int | None = None,
         max_block_rows: int | None = None,
         max_vectorized_block_bytes: int | None = None,
         sink: BaseSink | None = None,
@@ -132,19 +135,27 @@ class RefinerPipeline:
         Args:
             source: Source that plans shards and emits source rows or blocks.
             pipeline_steps: Ordered transform steps applied after the source.
+            read_batch_rows: Optional source-scanner batch size override. When
+                omitted, cooperative readers inherit ``max_block_rows``.
             max_block_rows: Optional maximum rows emitted in one execution block.
             max_vectorized_block_bytes: Optional soft byte cap for vectorized
                 Arrow blocks. Python row blocks are controlled by
                 ``max_block_rows`` instead.
             sink: Optional writer sink attached by a ``write_*`` method.
         """
+        if read_batch_rows is not None and read_batch_rows <= 0:
+            raise ValueError("read_batch_rows must be > 0 when provided")
         if max_block_rows is not None and max_block_rows <= 0:
             raise ValueError("max_block_rows must be > 0 when provided")
         if max_vectorized_block_bytes is not None and max_vectorized_block_bytes <= 0:
             raise ValueError("max_vectorized_block_bytes must be > 0 when provided")
-        self.source = source
+        source_batch_rows = (
+            read_batch_rows if read_batch_rows is not None else max_block_rows
+        )
+        self.source = source.with_read_batch_rows(source_batch_rows)
         self.pipeline_steps = tuple(pipeline_steps) if pipeline_steps else ()
         self._compiled_segments = None
+        self.read_batch_rows = read_batch_rows
         self.max_block_rows = max_block_rows
         self.max_vectorized_block_bytes = max_vectorized_block_bytes
         self.sink = sink
@@ -159,6 +170,7 @@ class RefinerPipeline:
         return self.__class__(
             self.source,
             self.pipeline_steps + (step,),
+            read_batch_rows=self.read_batch_rows,
             max_block_rows=self.max_block_rows,
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             sink=self.sink,
@@ -192,6 +204,7 @@ class RefinerPipeline:
             return self.__class__(
                 self.source,
                 self.pipeline_steps[:-1] + (merged,),
+                read_batch_rows=self.read_batch_rows,
                 max_block_rows=self.max_block_rows,
                 max_vectorized_block_bytes=self.max_vectorized_block_bytes,
                 sink=self.sink,
@@ -207,6 +220,7 @@ class RefinerPipeline:
         return self.__class__(
             self.source,
             self.pipeline_steps,
+            read_batch_rows=self.read_batch_rows,
             max_block_rows=max_block_rows,
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             sink=self.sink,
@@ -225,6 +239,7 @@ class RefinerPipeline:
         return self.__class__(
             self.source,
             self.pipeline_steps,
+            read_batch_rows=self.read_batch_rows,
             max_block_rows=self.max_block_rows,
             max_vectorized_block_bytes=max_vectorized_block_bytes,
             sink=self.sink,
@@ -240,6 +255,7 @@ class RefinerPipeline:
         return self.__class__(
             self.source,
             self.pipeline_steps,
+            read_batch_rows=self.read_batch_rows,
             max_block_rows=self.max_block_rows,
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             sink=sink,
@@ -764,6 +780,7 @@ class RefinerPipeline:
         mode: LanceWriteConfig = Create(),
         columns: Sequence[str] | None = None,
         assets: AssetWriteConfig | None = None,
+        io: LanceIOConfig = LanceIOConfig(),
     ) -> "RefinerPipeline":
         """Attach a distributed Lance dataset writer or schema-evolution sink.
 
@@ -772,6 +789,11 @@ class RefinerPipeline:
         omitted rows receive the configured scalar or per-column fill value.
         The legacy ``mode="add_columns"`` remains strict and requires exactly
         one output for every source row.
+
+        Input blocks are coalesced into byte-sized Arrow batches before Lance
+        writes them. This keeps multipart uploads busy even when upstream emits
+        small blocks. Pass ``LanceIOConfig`` to control multipart concurrency,
+        part size, batch size, and the per-shard logical memory bound.
         """
         source_uri: str | None = None
         source_version: int | None = None
@@ -799,6 +821,7 @@ class RefinerPipeline:
                 source_uri=source_uri,
                 source_version=source_version,
                 assets=assets,
+                io=io,
             )
         )
 
@@ -1491,7 +1514,7 @@ def read_parquet(
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
     max_rows: int | None = None,
-    arrow_batch_size: int = 65536,
+    read_batch_rows: int | None = None,
     columns_to_read: Sequence[str] | None = None,
     filter: Expr | None = None,
     split_row_groups: bool = False,
@@ -1505,6 +1528,8 @@ def read_parquet(
     to row groups or row ranges at read time. `filter` uses Arrow expressions
     for row-group pruning plus row-level filtering during reads. `max_rows`
     applies after that reader-level filter and before pipeline transforms.
+    ``read_batch_rows`` overrides the Parquet scanner batch size independently
+    of downstream execution block sizing.
     """
     max_rows = _validated_max_rows(max_rows)
     return RefinerPipeline(
@@ -1516,7 +1541,6 @@ def read_parquet(
                 recursive=recursive,
                 target_shard_bytes=target_shard_bytes,
                 num_shards=num_shards,
-                arrow_batch_size=_bounded_reader_window(arrow_batch_size, max_rows),
                 columns_to_read=columns_to_read,
                 filter=filter,
                 split_row_groups=split_row_groups,
@@ -1524,7 +1548,8 @@ def read_parquet(
                 dtypes=dtypes,
             ),
             max_rows,
-        )
+        ),
+        read_batch_rows=read_batch_rows,
     )
 
 
@@ -1533,15 +1558,17 @@ def load_lance(
     *,
     version: int | str | None = None,
     columns: Sequence[str] | None = None,
-    batch_size: int = 65_536,
     num_shards: int | None = None,
     max_rows: int | None = None,
+    read_batch_rows: int | None = None,
 ) -> RefinerPipeline:
     """Create a pipeline over one immutable version of a Lance dataset.
 
     ``num_shards`` groups whole, adjacent Lance fragments into the requested
     number of scheduling shards without splitting individual fragments.
     ``max_rows`` reads at most that many leading rows from the pinned version.
+    ``read_batch_rows`` overrides Lance's scanner batch size independently of
+    downstream execution block sizing.
     """
     max_rows = _validated_max_rows(max_rows)
     return RefinerPipeline(
@@ -1550,11 +1577,11 @@ def load_lance(
                 input,
                 version=version,
                 columns=columns,
-                batch_size=_bounded_reader_window(batch_size, max_rows),
                 num_shards=num_shards,
             ),
             max_rows,
-        )
+        ),
+        read_batch_rows=read_batch_rows,
     )
 
 

@@ -64,6 +64,30 @@ the dataset writer uses Lance for fragments and fsspec for attempt handoff
 metadata. Credential-bearing URIs and URI query parameters are rejected so
 pipeline plans do not serialize secrets.
 
+Refiner coalesces small pipeline blocks into approximately 256 MiB Arrow
+batches before handing them to Lance. This is the default for efficient
+object-store writes. For unusual memory budgets, configure both the target and
+the per-shard logical Arrow buffer limit:
+
+```python
+pipeline.write_lance_dataset(
+    "s3://my-bucket/clean.lance",
+    io=mdr.LanceIOConfig(
+        upload_concurrency=32,
+        multipart_part_bytes=5 * 1024 * 1024,
+        target_batch_bytes=256 * 1024 * 1024,
+        max_buffered_bytes=1024 * 1024 * 1024,
+    ),
+)
+```
+
+The buffer limit must be at least four times the target to cover one batch in
+Lance, one queued batch, rows being accumulated, and the transient coalesced
+batch. A single row larger than the target is necessarily written alone.
+The target must also contain at least one part per upload slot. Upload
+concurrency and part size are process-wide Lance settings; a retained worker
+must be restarted before using different values.
+
 ## Adding columns
 
 Use `AddColumns()` for row-preserving enrichment such as model inference:
@@ -147,3 +171,11 @@ a mapping to use per-column defaults instead:
 ```python
 mode=mdr.AddColumns(fill={"embedding": None, "status": "not_processed"})
 ```
+
+## Internal Notes
+
+Lance drains multipart uploads at input-batch boundaries. Byte-aware
+coalescing gives each boundary enough data to use the configured upload
+concurrency without requiring an upstream Lance change. The buffer calculation
+covers one batch in Lance, one or more queued batches, rows being accumulated,
+and the transient Arrow concatenation.

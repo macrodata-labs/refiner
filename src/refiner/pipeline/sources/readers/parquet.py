@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import bisect
 from collections.abc import Iterator, Mapping, Sequence
+from copy import copy
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -96,7 +97,8 @@ class ParquetReader(BaseReader):
             file_path_column=file_path_column,
             dtypes=dtypes,
         )
-        self.arrow_batch_size = int(arrow_batch_size)
+        self._default_arrow_batch_size = int(arrow_batch_size)
+        self.arrow_batch_size = self._default_arrow_batch_size
         self.split_row_groups = split_row_groups
 
         ## filter
@@ -129,6 +131,7 @@ class ParquetReader(BaseReader):
                 "columns_to_read cannot include the synthetic file_path_column; "
                 "omit it from columns_to_read and let the reader append it"
             )
+
         # the columns we will actually load into memory. requested+needed for filtering
         self._scan_columns: list[str] | None = (
             None
@@ -140,6 +143,13 @@ class ParquetReader(BaseReader):
         self._open_metadata: _ParquetMetadata | None = None
         self._open_fragment_file: DataFile | None = None
         self._open_fragment: ds.ParquetFileFragment | None = None
+
+    def with_read_batch_rows(self, max_rows: int | None) -> "ParquetReader":
+        reader = copy(self)
+        reader.arrow_batch_size = (
+            self._default_arrow_batch_size if max_rows is None else max_rows
+        )
+        return reader
 
     def _get_parquet_file(self, source_file: DataFile) -> pq.ParquetFile:
         """Get or open a cached ParquetFile for the current path (single-open-file policy)."""
@@ -172,6 +182,7 @@ class ParquetReader(BaseReader):
                 "columns_to_read": list(self.columns_to_read)
                 if self.columns_to_read is not None
                 else None,
+                "read_batch_rows": self.arrow_batch_size,
                 "split_row_groups": self.split_row_groups,
                 "filter": self.filter.to_code() if self.filter is not None else None,
                 "dtypes": list(self.dtypes) if self.dtypes else None,
