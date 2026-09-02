@@ -188,7 +188,6 @@ def test_lance_streaming_writer_coalesces_and_splits_batches_by_bytes(
             )
         ],
     )
-
     assert len(captured) == 1
     assert all(batch.nbytes <= 5 * 1024 * 1024 for batch in captured)
     assert [
@@ -210,6 +209,25 @@ def test_lance_streaming_writer_coalesces_and_splits_batches_by_bytes(
     assert [
         value[0] for batch in captured for value in batch["payload"].to_pylist()
     ] == [*range(8)]
+
+
+def test_lance_byte_batcher_consumes_split_batches_incrementally(monkeypatch) -> None:
+    schema = pa.schema([pa.field("payload", pa.binary())])
+    source = pa.record_batch([pa.array([b"a", b"b", b"c"])], schema=schema)
+    consumed: list[int] = []
+
+    def tracked_splits(_batch, _target_bytes):
+        for index in range(source.num_rows):
+            consumed.append(index)
+            yield source.slice(index, 1)
+
+    monkeypatch.setattr(lance_sink_module, "_split_batch_by_bytes", tracked_splits)
+    batcher = lance_sink_module._ByteAwareBatcher(target_bytes=1)
+    ready = batcher.add(source)
+
+    assert consumed == []
+    assert next(ready).to_pydict() == {"payload": [b"a"]}
+    assert consumed == [0]
 
 
 def test_lance_streaming_writer_writes_oversized_single_row_alone(monkeypatch) -> None:

@@ -10,7 +10,7 @@ import queue as queue_module
 import re
 import tempfile
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
@@ -169,17 +169,16 @@ def _configure_lance_process(config: LanceIOConfig) -> None:
 def _split_batch_by_bytes(
     batch: pa.RecordBatch,
     target_bytes: int,
-) -> list[pa.RecordBatch]:
+) -> Iterator[pa.RecordBatch]:
     """Split a batch until each multi-row slice fits the target byte size."""
     if batch.num_rows <= 1 or batch.nbytes <= target_bytes:
-        return [batch]
+        yield batch
+        return
     split_at = max(1, min(batch.num_rows - 1, batch.num_rows // 2))
-    return [
-        *_split_batch_by_bytes(batch.slice(0, split_at), target_bytes),
-        *_split_batch_by_bytes(
-            batch.slice(split_at, batch.num_rows - split_at), target_bytes
-        ),
-    ]
+    yield from _split_batch_by_bytes(batch.slice(0, split_at), target_bytes)
+    yield from _split_batch_by_bytes(
+        batch.slice(split_at, batch.num_rows - split_at), target_bytes
+    )
 
 
 class _ByteAwareBatcher:
@@ -190,19 +189,17 @@ class _ByteAwareBatcher:
         self._pending: list[pa.RecordBatch] = []
         self._pending_bytes = 0
 
-    def add(self, batch: pa.RecordBatch) -> list[pa.RecordBatch]:
-        ready: list[pa.RecordBatch] = []
+    def add(self, batch: pa.RecordBatch) -> Iterator[pa.RecordBatch]:
         for split_batch in _split_batch_by_bytes(batch, self.target_bytes):
             if (
                 self._pending
                 and self._pending_bytes + split_batch.nbytes > self.target_bytes
             ):
-                ready.append(self.flush())
+                yield self.flush()
             self._pending.append(split_batch)
             self._pending_bytes += split_batch.nbytes
             if self._pending_bytes >= self.target_bytes:
-                ready.append(self.flush())
-        return ready
+                yield self.flush()
 
     def flush(self) -> pa.RecordBatch:
         if not self._pending:
