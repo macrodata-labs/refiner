@@ -16,9 +16,15 @@ from refiner.io.datafile import DataFile
 class RecordingMemoryFileSystem(MemoryFileSystem):
     cachable = False
 
-    def __init__(self, *, failure: BaseException | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        failure: BaseException | None = None,
+        max_read_bytes: int | None = None,
+    ) -> None:
         super().__init__(skip_instance_cache=True)
         self.failure = failure
+        self.max_read_bytes = max_read_bytes
         self.ranges: list[tuple[int | None, int | None]] = []
         self.second_read = threading.Event()
         self.source_closed = threading.Event()
@@ -62,6 +68,12 @@ class _RecordingReader:
         return self._source.seek(offset, whence)
 
     def read(self, size: int = -1) -> bytes:
+        if self._fs.max_read_bytes is not None:
+            size = (
+                min(size, self._fs.max_read_bytes)
+                if size >= 0
+                else self._fs.max_read_bytes
+            )
         start = self._source.tell()
         self._fs.ranges.append((start, None if size < 0 else start + size))
         if len(self._fs.ranges) >= 2:
@@ -77,8 +89,12 @@ def use_filesystem(
     data: bytes,
     *,
     failure: BaseException | None = None,
+    max_read_bytes: int | None = None,
 ) -> Iterator[RecordingMemoryFileSystem]:
-    fs = RecordingMemoryFileSystem(failure=failure)
+    fs = RecordingMemoryFileSystem(
+        failure=failure,
+        max_read_bytes=max_read_bytes,
+    )
     fs.pipe_file("blocks/data.bin", data)
     data_file = DataFile(fs=fs, path="blocks/data.bin")
     monkeypatch.setattr(DataFile, "resolve", lambda path: data_file)
@@ -140,6 +156,21 @@ def test_open_blob_stream_supports_partial_consumer_reads(monkeypatch) -> None:
 
     assert b"".join(parts) == payload
     assert [len(part) for part in parts] == [1, 3, 2, 9, 4, 12, 0]
+
+
+def test_open_blob_stream_supports_partial_producer_reads(monkeypatch) -> None:
+    with use_filesystem(
+        monkeypatch,
+        b"xxpayloadyy",
+        max_read_bytes=2,
+    ) as fs:
+        with open_blob_stream(
+            {"path": "unused", "offset": 2, "size": 7},
+            chunk_bytes=5,
+        ) as stream:
+            assert stream.read() == b"payload"
+
+    assert fs.ranges == [(2, 4), (4, 6), (6, 8), (8, 9)]
 
 
 def test_open_blob_stream_early_close_stops_blocked_producer(monkeypatch) -> None:

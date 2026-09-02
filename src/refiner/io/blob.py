@@ -140,11 +140,11 @@ class _BlobStream(io.RawIOBase):
                         raise OSError(
                             "Storage backend returned bytes outside the requested blob range"
                         )
-                    if data and not self._put(data):
+                    if not data:
+                        raise _short_blob_error(self._blob, received)
+                    if not self._put(data):
                         return
                     received += len(data)
-                    if len(data) != requested:
-                        raise _short_blob_error(self._blob, received)
             if not self._cancelled.is_set():
                 self._put(_END_OF_BLOB)
         except BaseException as error:
