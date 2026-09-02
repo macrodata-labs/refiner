@@ -77,14 +77,3 @@ it. A reader may still need to load one indivisible physical unit to produce a
 row—for example, one whole-file JSON document, HDF5 group, MCAP episode, or
 LeRobot episode. The limit bounds later work but cannot make that first logical
 row smaller.
-
-## Internal Notes
-
-Spark, Daft, and Ray Data can represent a limit as a distributed logical-plan
-node, with their schedulers coordinating partitions and ordering. Beam/Dataflow
-treats collections as unordered, so a deterministic leading-row limit requires
-additional ordering or runner-specific behavior. Hugging Face Datasets offers
-simple local selection or iterable `take` operations. Refiner follows the latter
-DX but exposes one deterministic scheduling shard for limited runs. This trades
-parallelism—which is not useful for a small smoke test—for an exact global cap
-without adding distributed limit coordination to the worker protocol.
