@@ -37,6 +37,7 @@ _LAZY_ATTRS = {
     "read_json": "refiner.pipeline",
     "read_jsonl": "refiner.pipeline",
     "read_lerobot": "refiner.pipeline",
+    "open_blob_stream": "refiner.io",
     "read_blob": "refiner.io",
     "read_mcap": "refiner.pipeline",
     "read_parquet": "refiner.pipeline",
@@ -80,6 +81,7 @@ __all__ = [
     "read_json",
     "read_jsonl",
     "read_lerobot",
+    "open_blob_stream",
     "read_blob",
     "load_lance",
     "read_mcap",
@@ -148,7 +150,7 @@ if TYPE_CHECKING:
         LanceIOConfig,
         Overwrite,
     )
-    from refiner.io import read_blob
+    from refiner.io import open_blob_stream, read_blob
     from refiner.pipeline import (
         CUDAVersion,
         GPU,

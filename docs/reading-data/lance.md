@@ -82,6 +82,23 @@ encoded = mdr.read_blob(row["image"])
 
 Each reference contains `path`, `offset`, and `size`. `read_blob(...)` performs
 an exact byte-range read, so scanning rows does not materialize the blob bytes.
+For large assets such as video, stream the byte range into a consumer instead:
+
+```python
+import av
+
+with mdr.open_blob_stream(row["video"]) as stream:
+    with av.open(stream, mode="r") as container:
+        frames = list(container.decode(video=0))
+```
+
+`open_blob_stream(...)` is non-seekable and context-managed. It reads 8 MiB
+chunks by default and buffers at most four queued chunks, applying backpressure
+when the consumer is slower than storage. Set `chunk_bytes` and
+`prefetch_chunks` when a workload needs different bounds. Closing the stream
+early signals cancellation and waits for the producer for a bounded time. If a
+storage backend remains blocked in `open()` or `read()`, close still returns;
+producer and source cleanup completes if and when that backend call returns.
 The reference remains valid only while the pinned dataset version's data files
 are retained.
 Lance Blob V2 columns are currently rejected because packed and dedicated V2
