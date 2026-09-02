@@ -34,6 +34,7 @@ from refiner.pipeline.sources.base import BaseSource, SourceUnit
 from refiner.pipeline.sources.limited import LimitedSource, limit_source
 from refiner.pipeline.sources.readers.files import FilesReader
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
+from refiner.pipeline.sources.readers.mcap import McapReader
 from refiner.pipeline.sources.readers.parquet import ParquetReader
 from refiner.pipeline.sources.readers.tfrecord import TfrecordReader
 
@@ -288,6 +289,26 @@ def test_lerobot_max_rows_bounds_episode_hydration_batch(tmp_path: Path) -> None
     assert isinstance(pipeline.source, LimitedSource)
     assert isinstance(pipeline.source.source, LeRobotEpisodeReader)
     assert pipeline.source.source.arrow_batch_size == 3
+
+
+def test_mcap_max_rows_streams_split_episodes(tmp_path: Path) -> None:
+    pipeline = read_mcap(
+        tmp_path / "unused.mcap",
+        max_rows=1,
+        episode_splitting={"time_gap_s": 0.5},
+    )
+
+    assert isinstance(pipeline.source, LimitedSource)
+    assert isinstance(pipeline.source.source, McapReader)
+    assert pipeline.source.source.stream_episodes is True
+
+
+def test_mcap_max_rows_does_not_stream_single_episode(tmp_path: Path) -> None:
+    pipeline = read_mcap(tmp_path / "unused.mcap", max_rows=1)
+
+    assert isinstance(pipeline.source, LimitedSource)
+    assert isinstance(pipeline.source.source, McapReader)
+    assert pipeline.source.source.stream_episodes is False
 
 
 def test_tfrecord_max_rows_bounds_eager_input_windows(tmp_path: Path) -> None:

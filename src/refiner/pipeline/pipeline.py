@@ -1467,7 +1467,8 @@ def read_mcap(
                 num_shards=num_shards,
                 file_path_column=file_path_column,
                 episode_splitting=episode_splitting,
-                stream_episodes=stream_episodes,
+                stream_episodes=stream_episodes
+                or (max_rows is not None and episode_splitting != "single"),
                 assume_log_time_order=assume_log_time_order,
                 fields=fields,
                 videos=videos,
