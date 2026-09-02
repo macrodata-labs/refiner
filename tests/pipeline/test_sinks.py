@@ -123,6 +123,19 @@ def test_lance_io_config_validates_limits(kwargs, message) -> None:
         LanceIOConfig(**kwargs)
 
 
+def test_lance_io_config_accepts_five_gib_multipart_endpoint() -> None:
+    five_gib = 5 * 1024 * 1024 * 1024
+
+    config = LanceIOConfig(
+        upload_concurrency=1,
+        multipart_part_bytes=five_gib,
+        target_batch_bytes=five_gib,
+        max_buffered_bytes=4 * five_gib,
+    )
+
+    assert config.multipart_part_bytes == five_gib
+
+
 def _capture_lance_writer_batches(
     monkeypatch,
     batches: list[pa.RecordBatch],
