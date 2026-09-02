@@ -974,7 +974,6 @@ def test_lance_add_columns_reorders_fragment_outputs(tmp_path) -> None:
 
 
 def test_lance_add_columns_orders_contiguous_reordered_batches(tmp_path) -> None:
-    first_batch_consumed = threading.Event()
     consumed: list[int] = []
 
     class _Metadata:
@@ -988,7 +987,6 @@ def test_lance_add_columns_orders_contiguous_reordered_batches(tmp_path) -> None
             assert reader_schema == pa.schema([("y", pa.int64())])
             for batch in reader:
                 consumed.extend(batch.column("y").to_pylist())
-                first_batch_consumed.set()
             return "updated", "schema"
 
     writer = _StreamingAddColumnsWriter(
@@ -1008,7 +1006,7 @@ def test_lance_add_columns_orders_contiguous_reordered_batches(tmp_path) -> None
         pa.chunked_array([[1, 0]], type=pa.uint64()),
         pa.table({"y": [20, 10]}),
     )
-    assert first_batch_consumed.wait(timeout=2)
+    assert consumed == []
     assert writer.finish() == ("updated", "schema")
     assert consumed == [10, 20, 30, 40]
 
@@ -1048,19 +1046,14 @@ def test_lance_add_columns_honors_byte_aware_buffer_limits(
     )
 
     assert writer.queue.maxsize == 1
-    writer.put(
-        pa.chunked_array([list(range(12))], type=pa.uint64()),
-        pa.table(
-            {
-                "payload": pa.chunked_array(
-                    [pa.array([bytes([index]) * 1024 * 1024]) for index in range(12)]
-                )
-            }
-        ),
-    )
+    for index in range(12):
+        writer.put(
+            pa.chunked_array([[index]], type=pa.uint64()),
+            pa.table({"payload": [bytes([index]) * 1024 * 1024]}),
+        )
 
     assert writer.finish() == ("updated", "schema")
-    assert len(captured) == 4
+    assert len(captured) == 3
     assert all(batch.nbytes <= target_bytes for batch in captured)
     assert [
         value[0] for batch in captured for value in batch["payload"].to_pylist()
@@ -1083,7 +1076,7 @@ def test_lance_add_columns_shares_buffer_budget_across_fragment_writers(
 
     class _Writer:
         def __init__(self, **kwargs):
-            budgets.append(kwargs["byte_budget"])
+            budgets.append(kwargs["batch_coordinator"])
 
         def put(self, _positions, _output):
             return None

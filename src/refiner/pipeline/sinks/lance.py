@@ -218,6 +218,10 @@ class _ByteAwareBatcher:
     def finish(self) -> list[pa.RecordBatch]:
         return [] if not self._pending else [self.flush()]
 
+    @property
+    def pending_bytes(self) -> int:
+        return self._pending_bytes
+
 
 @dataclass(frozen=True, slots=True)
 class _QueuedBatch:
@@ -301,6 +305,39 @@ class _ByteBoundedBatchQueue:
 
     def _release(self, released_bytes: int) -> None:
         self._budget.release(released_bytes)
+
+
+class _AddColumnsBatchCoordinator:
+    """Bound pending batches and transport bytes across one add-columns shard."""
+
+    def __init__(self, config: LanceIOConfig) -> None:
+        self.target_bytes = config.target_batch_bytes
+        self.byte_budget = _ByteBudget(
+            config.max_buffered_bytes - 2 * config.target_batch_bytes
+        )
+        self._writers: list[_StreamingAddColumnsWriter] = []
+
+    def register(self, writer: _StreamingAddColumnsWriter) -> None:
+        self._writers.append(writer)
+
+    def prepare(self, active_writer: _StreamingAddColumnsWriter, incoming: int) -> None:
+        while self._pending_bytes() + incoming > self.target_bytes:
+            candidate = next(
+                (
+                    writer
+                    for writer in self._writers
+                    if writer is not active_writer and writer._batcher.pending_bytes > 0
+                ),
+                None,
+            )
+            if candidate is None and active_writer._batcher.pending_bytes > 0:
+                candidate = active_writer
+            if candidate is None:
+                return
+            candidate._flush_buffered_batches()
+
+    def _pending_bytes(self) -> int:
+        return sum(writer._batcher.pending_bytes for writer in self._writers)
 
 
 def _import_lance() -> Any:
@@ -794,7 +831,7 @@ class _StreamingAddColumnsWriter:
         fill_missing: bool = False,
         fill: object | Mapping[str, object] = None,
         io_config: LanceIOConfig = LanceIOConfig(),
-        byte_budget: _ByteBudget | None = None,
+        batch_coordinator: _AddColumnsBatchCoordinator | None = None,
     ) -> None:
         _configure_lance_process(io_config)
         self.fragment = fragment
@@ -806,8 +843,15 @@ class _StreamingAddColumnsWriter:
         self.fill = fill
         self.io_config = io_config
         self._batcher = _ByteAwareBatcher(io_config.target_batch_bytes)
+        self._batch_coordinator = batch_coordinator or _AddColumnsBatchCoordinator(
+            io_config
+        )
+        self._batch_coordinator.register(self)
         self.base_json = _json_dumps(fragment.metadata.to_json())
-        self.queue = _ByteBoundedBatchQueue(io_config, budget=byte_budget)
+        self.queue = _ByteBoundedBatchQueue(
+            io_config,
+            budget=self._batch_coordinator.byte_budget,
+        )
         self.closed = False
         self.next_position = 0
         self.pending: dict[int, tuple[int, pa.Table]] = {}
@@ -843,8 +887,13 @@ class _StreamingAddColumnsWriter:
             raise RuntimeError("Lance add-columns writer failed") from error
 
     def _put_batch(self, batch: pa.RecordBatch) -> None:
+        self._batch_coordinator.prepare(self, batch.nbytes)
         for ready_batch in self._batcher.add(batch):
             self._write_batch(ready_batch)
+
+    def _flush_buffered_batches(self) -> None:
+        for batch in self._batcher.finish():
+            self._write_batch(batch)
 
     def _write_batch(self, batch: pa.RecordBatch) -> None:
         if self._spool_writer is not None:
@@ -938,15 +987,12 @@ class _StreamingAddColumnsWriter:
             )
             run_start = index
         self._emit_ready()
-        for batch in self._batcher.finish():
-            self._write_batch(batch)
 
     def _close_input(self) -> None:
         if self.closed:
             return
         self.closed = True
-        for batch in self._batcher.finish():
-            self._write_batch(batch)
+        self._flush_buffered_batches()
         if self._spool_writer is not None:
             assert self._spool_sink is not None
             self._spool_writer.close()
@@ -1088,7 +1134,9 @@ class LanceDatasetSink(BaseSink):
         self._add_columns_writers_by_shard: dict[
             str, dict[int, _StreamingAddColumnsWriter]
         ] = {}
-        self._add_columns_budget_by_shard: dict[str, _ByteBudget] = {}
+        self._add_columns_coordinator_by_shard: dict[
+            str, _AddColumnsBatchCoordinator
+        ] = {}
         self._add_columns_schema: pa.Schema | None = None
         self._planned_output_schema: pa.Schema | None = None
         self._declared_output_columns: frozenset[str] = frozenset()
@@ -1224,9 +1272,9 @@ class LanceDatasetSink(BaseSink):
             [row_addresses, pa.scalar(_LANCE_ROW_ADDRESS_FRAGMENT_SHIFT, pa.uint64())],
         )
         writers = self._add_columns_writers_by_shard.setdefault(shard_id, {})
-        byte_budget = self._add_columns_budget_by_shard.setdefault(
+        batch_coordinator = self._add_columns_coordinator_by_shard.setdefault(
             shard_id,
-            _ByteBudget(self.io.max_buffered_bytes - 2 * self.io.target_batch_bytes),
+            _AddColumnsBatchCoordinator(self.io),
         )
         unique_fragment_ids = pc.call_function("unique", [fragment_ids])
         for fragment_id_raw in unique_fragment_ids.to_pylist():
@@ -1252,7 +1300,7 @@ class LanceDatasetSink(BaseSink):
                     fill_missing=self.fill_missing,
                     fill=self.fill,
                     io_config=self.io,
-                    byte_budget=byte_budget,
+                    batch_coordinator=batch_coordinator,
                 )
                 writers[fragment_id] = writer
             positions = pc.call_function(
@@ -1376,7 +1424,7 @@ class LanceDatasetSink(BaseSink):
 
     def _complete_add_columns_shard(self, shard_id: str) -> None:
         writers = self._add_columns_writers_by_shard.pop(shard_id, None)
-        self._add_columns_budget_by_shard.pop(shard_id, None)
+        self._add_columns_coordinator_by_shard.pop(shard_id, None)
         if not writers:
             self._write_empty_sidecar(shard_id)
             return
@@ -1454,7 +1502,7 @@ class LanceDatasetSink(BaseSink):
                     if first_error is None:
                         first_error = err
         self._add_columns_writers_by_shard.clear()
-        self._add_columns_budget_by_shard.clear()
+        self._add_columns_coordinator_by_shard.clear()
         if first_error is not None:
             raise first_error
 
