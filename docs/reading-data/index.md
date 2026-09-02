@@ -66,15 +66,17 @@ cannot each emit the requested number of rows. Consequently,
 
 The option is available on `read_csv`, `read_json`, `read_jsonl`, `read_files`,
 `read_videos`, `read_hdf5`, `read_zarr`, `read_mcap`, `read_parquet`,
-`read_hf_dataset`, `read_lerobot`, `read_tfrecords`, and `read_tfds`.
-`load_lance` provides the same public option through its native indexed limit.
+`read_hf_dataset`, `read_lerobot`, `read_tfrecords`, `read_tfds`, and
+`load_lance`. All use the same bounded-source wrapper.
 
 Readers stop before opening later source shards and slice the final Arrow batch.
-Refiner also reduces configurable batch or concurrency windows for Parquet,
-Hugging Face, file-content, Zarr, TFRecord, and TFDS readers. A reader may still
-need to load one indivisible physical unit to produce a row—for example, one
-whole-file JSON document, HDF5 group, MCAP episode, or LeRobot episode. The
-limit bounds later work but cannot make that first logical row smaller.
+Refiner also reduces configurable batch or concurrency windows for Lance,
+Parquet, Hugging Face, file-content, Zarr, LeRobot, TFRecord, and TFDS readers;
+bounded split MCAP reads stream one episode at a time when the input supports
+it. A reader may still need to load one indivisible physical unit to produce a
+row—for example, one whole-file JSON document, HDF5 group, MCAP episode, or
+LeRobot episode. The limit bounds later work but cannot make that first logical
+row smaller.
 
 ## Internal Notes
 
