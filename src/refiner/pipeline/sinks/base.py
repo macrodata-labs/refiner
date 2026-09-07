@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 from abc import ABC
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 import pyarrow as pa
 
 from refiner.execution.tracking.shards import count_block_by_shard
 from refiner.pipeline.data.block import Block, split_block_by_shard
 from refiner.worker.metrics.api import log_throughput
-
-if TYPE_CHECKING:
-    from refiner.pipeline.sequence import FollowupStage
 
 
 class BaseSink(ABC):
@@ -79,10 +76,6 @@ class BaseSink(ABC):
         if not hasattr(self, "output"):
             return ()
         return cast(Any, self).output.required_refiner_extras()
-
-    def followup_stages(self) -> tuple[FollowupStage, ...]:
-        """Return writer-owned stages that run after this sink completes."""
-        return ()
 
     def set_input_schema(self, schema: pa.Schema | None) -> None:
         """Receive the schema expected at this sink boundary before writing starts."""

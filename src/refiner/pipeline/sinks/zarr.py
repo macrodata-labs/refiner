@@ -13,7 +13,6 @@ from refiner.io.datafolder import DataFolder, DataFolderLike
 from refiner.pipeline.data.block import Block
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.sinks.base import BaseSink
-from refiner.pipeline.sequence import FollowupStage
 from refiner.robotics.row import RoboticsRow
 from refiner.utils import check_required_dependencies
 from refiner.video import VideoSource
@@ -401,22 +400,6 @@ class ZarrSink(BaseSink):
                 "array_chunk_bytes": self.array_chunk_bytes,
                 "reduce_to_single_store": self.reduce_to_single_store,
             },
-        )
-
-    def followup_stages(self) -> tuple[FollowupStage, ...]:
-        from refiner.pipeline.sinks.reducer.zarr import ZarrReducerSink
-
-        return (
-            FollowupStage.from_sink(
-                name="finalize",
-                sink=ZarrReducerSink(
-                    output=self.output,
-                    store_template=self.store_template,
-                    episode_ends_path=self.episode_ends_path,
-                    array_chunk_bytes=self.array_chunk_bytes,
-                    reduce_to_single_store=self.reduce_to_single_store,
-                ),
-            ),
         )
 
 

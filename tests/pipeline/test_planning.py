@@ -6,7 +6,7 @@ import refiner as rf
 import pytest
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner import col
-from refiner.pipeline import FollowupStage, RefinerPipeline, from_items
+from refiner.pipeline import RefinerPipeline, from_items
 from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.sinks.base import BaseSink
@@ -41,19 +41,6 @@ class UndescribedSink(BaseSink):
     def write_block(self, block):
         del block
         return {}, 0
-
-
-class MultiStageSink(UndescribedSink):
-    def followup_stages(self) -> tuple[FollowupStage, ...]:
-        return (
-            FollowupStage.from_sink(
-                name="index",
-                sink=UndescribedSink(),
-                num_workers=2,
-                cpus_per_worker=4,
-            ),
-            FollowupStage.from_sink(name="publish", sink=UndescribedSink()),
-        )
 
 
 def _score_filter_lambda():
@@ -261,8 +248,8 @@ def test_compile_pipeline_plan_includes_jsonl_reducer_steps() -> None:
     stages = compile_pipeline_plan(pipeline)["stages"]
 
     assert len(stages) == 2
-    assert stages[0]["name"] == "write_jsonl_stage_0"
-    assert stages[1]["name"] == "write_jsonl_stage_1"
+    assert stages[0]["name"] == "write_jsonl"
+    assert stages[1]["name"] == "write_jsonl_finalize"
     assert [step["name"] for step in stages[1]["steps"]] == [
         "task",
         "write_jsonl_reduce",
@@ -342,11 +329,11 @@ def test_plan_pipeline_stages_adds_writer_reducer_stage() -> None:
 
     assert len(stages) == 2
     assert stages[0].index == 0
-    assert stages[0].name == "write_parquet_stage_0"
-    assert stages[0].pipeline is pipeline
+    assert stages[0].name == "write_parquet"
+    assert stages[0].pipeline is pipeline.stages[0].pipeline
     assert stages[0].compute.num_workers == 3
     assert stages[1].index == 1
-    assert stages[1].name == "write_parquet_stage_1"
+    assert stages[1].name == "write_parquet_finalize"
     assert stages[1].compute.num_workers == 1
     assert stages[1].compute.inherit_launcher_resources is False
     assert stages[1].pipeline.source.name == "task"
@@ -407,23 +394,25 @@ def test_plan_pipeline_sequence_keeps_generated_finalizer_adjacent() -> None:
     assert stages[1].compute.inherit_launcher_resources is False
 
 
-def test_writer_can_declare_multiple_followup_stages() -> None:
-    pipeline = RefinerPipeline(FakeReader(), sink=MultiStageSink())
-    sequence = pipeline.as_stage(name="write", num_workers=8)
+def test_then_flattens_writer_created_sequence() -> None:
+    writer = from_items([{"x": 1}]).write_parquet("/tmp/output")
+    sequence = (
+        from_items([{"x": 0}])
+        .as_stage(name="prepare")
+        .then(writer, name="write", num_workers=8, cpus_per_worker=4)
+    )
 
     stages = plan_pipeline_stages(sequence, default_num_workers=99)
 
     assert [stage.index for stage in stages] == [0, 1, 2]
     assert [stage.name for stage in stages] == [
+        "prepare",
         "write",
-        "write_index",
-        "write_publish",
+        "write_finalize",
     ]
-    assert [stage.compute.num_workers for stage in stages] == [8, 2, 1]
-    assert stages[1].pipeline.source.describe()["num_tasks"] == 2
+    assert [stage.compute.num_workers for stage in stages] == [1, 8, 1]
     assert stages[1].compute.cpus_per_worker == 4
-    assert stages[1].compute.inherit_launcher_resources is False
-    assert stages[2].compute.inherit_launcher_resources is False
+    assert stages[2].pipeline.source.describe()["num_tasks"] == 1
 
 
 def test_pipeline_sequence_rejects_invalid_or_duplicate_stage_configuration() -> None:
@@ -436,16 +425,11 @@ def test_pipeline_sequence_rejects_invalid_or_duplicate_stage_configuration() ->
     with pytest.raises(ValueError, match="stage names must be unique"):
         sequence.then(pipeline, name="prepare")
 
-    finalizing = (
-        pipeline.write_parquet("/tmp/output")
-        .as_stage(name="prepare")
-        .then(
+    with pytest.raises(ValueError, match="stage names must be unique"):
+        pipeline.write_parquet("/tmp/output").as_stage(name="prepare").then(
             pipeline,
             name="prepare_finalize",
         )
-    )
-    with pytest.raises(ValueError, match="writer follow-up stage"):
-        plan_pipeline_stages(finalizing, default_num_workers=1)
 
 
 def test_pipeline_sequence_preserves_auto_worker_count() -> None:

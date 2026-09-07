@@ -123,9 +123,9 @@ Use `"error"` for training data. Missing media should usually fail the job.
 
 ## Automatic writer stages
 
-Some writers automatically add one or more follow-up stages after workers
-finish shard-local writes. You do not need to construct these stages with
-`then(...)`; calling the writer normally is enough.
+Some writer methods return a complete `PipelineSequence` containing the primary
+write and any required finalization stages. You do not need to construct these
+stages with `then(...)`; calling the writer normally is enough.
 
 | Writer | Follow-up purpose |
 | --- | --- |

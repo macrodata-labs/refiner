@@ -507,7 +507,6 @@ def plan_pipeline_stages(
     """Return the ordered execution stages for a pipeline.
 
     Configured sequences preserve their declared order and resource profiles.
-    A pipeline sink may transparently add writer-owned follow-up stages.
     """
     if default_num_workers != "auto" and (
         not isinstance(default_num_workers, int) or default_num_workers <= 0
@@ -517,88 +516,36 @@ def plan_pipeline_stages(
     from refiner.pipeline.sequence import PipelineSequence
 
     if isinstance(pipeline, PipelineSequence):
-        planned: list[PlannedStage] = []
-        for configured_stage in pipeline.stages:
-            stage_parts = _expand_pipeline_stage(
-                configured_stage.pipeline,
+        return [
+            PlannedStage(
+                index=index,
                 name=configured_stage.name,
+                pipeline=configured_stage.pipeline,
                 compute=StageComputeRequirements(
-                    num_workers=configured_stage.num_workers,
+                    num_workers=(
+                        default_num_workers
+                        if configured_stage.inherit_launcher_resources
+                        else configured_stage.num_workers
+                    ),
                     cpus_per_worker=configured_stage.cpus_per_worker,
                     memory_mb_per_worker=configured_stage.mem_mb_per_worker,
                     gpu=configured_stage.gpu,
-                    inherit_launcher_resources=False,
+                    inherit_launcher_resources=(
+                        configured_stage.inherit_launcher_resources
+                    ),
                 ),
             )
-            for stage_part in stage_parts:
-                planned.append(
-                    PlannedStage(
-                        index=len(planned),
-                        name=stage_part.name,
-                        pipeline=stage_part.pipeline,
-                        compute=stage_part.compute,
-                    )
-                )
-        planned_names = [stage.name for stage in planned]
-        if len(set(planned_names)) != len(planned_names):
-            raise ValueError("stage names conflict with a writer follow-up stage")
-        return planned
+            for index, configured_stage in enumerate(pipeline.stages)
+        ]
 
-    planned = _expand_pipeline_stage(
-        pipeline,
-        name="stage_0",
-        compute=StageComputeRequirements(num_workers=default_num_workers),
-    )
-    if len(planned) == 1:
-        return planned
-
-    sink = pipeline.sink
-    sink_description = sink.describe() if sink is not None else None
-    stage_base_name = sink_description[0] if sink_description is not None else "writer"
     return [
         PlannedStage(
-            index=index,
-            name=f"{stage_base_name}_stage_{index}",
-            pipeline=stage.pipeline,
-            compute=stage.compute,
-        )
-        for index, stage in enumerate(planned)
-    ]
-
-
-def _expand_pipeline_stage(
-    pipeline: "RefinerPipeline",
-    *,
-    name: str,
-    compute: StageComputeRequirements,
-) -> list[PlannedStage]:
-    """Expand one pipeline and any follow-up stages declared by its sink."""
-    planned = [
-        PlannedStage(
             index=0,
-            name=name,
+            name="stage_0",
             pipeline=pipeline,
-            compute=compute,
+            compute=StageComputeRequirements(num_workers=default_num_workers),
         )
     ]
-    if pipeline.sink is None:
-        return planned
-
-    for generated_stage in pipeline.sink.followup_stages():
-        planned.extend(
-            _expand_pipeline_stage(
-                generated_stage.pipeline,
-                name=f"{name}_{generated_stage.name}",
-                compute=StageComputeRequirements(
-                    num_workers=generated_stage.num_workers,
-                    cpus_per_worker=generated_stage.cpus_per_worker,
-                    memory_mb_per_worker=generated_stage.mem_mb_per_worker,
-                    gpu=generated_stage.gpu,
-                    inherit_launcher_resources=False,
-                ),
-            )
-        )
-    return planned
 
 
 def compile_planned_stages(

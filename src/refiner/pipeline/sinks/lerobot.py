@@ -20,8 +20,6 @@ from refiner.pipeline.data.block import Block, strip_internal_columns
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.data.tabular import Tabular, set_or_append_column
 from refiner.pipeline.sinks.base import BaseSink
-from refiner.pipeline.sinks.reducer.lerobot import LeRobotMetaReduceSink
-from refiner.pipeline.sequence import FollowupStage
 from refiner.robotics.lerobot_format import (
     LeRobotFeatureInfo,
     LeRobotFeatureStats,
@@ -708,14 +706,6 @@ class LeRobotWriterSink(BaseSink):
                 "video_files_size_in_mb": self.video_files_size_in_mb,
                 "max_video_prepare_in_flight": self.max_video_prepare_in_flight,
             },
-        )
-
-    def followup_stages(self) -> tuple[FollowupStage, ...]:
-        return (
-            FollowupStage.from_sink(
-                name="finalize",
-                sink=LeRobotMetaReduceSink(output=self.output),
-            ),
         )
 
 

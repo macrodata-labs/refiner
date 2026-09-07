@@ -21,7 +21,6 @@ from refiner.pipeline.data.shard import SHARD_ID_COLUMN, SOURCE_ROW_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline import from_items, load_lance
 from refiner.pipeline.sinks import JsonlSink
-from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.assets import (
     AssetUploadManager,
     BlobAssetConfig,
@@ -58,12 +57,18 @@ class _FinalizedWorkersRuntime:
         return self._rows
 
 
-def _followup_sink(sink: BaseSink) -> BaseSink:
-    stages = sink.followup_stages()
-    assert len(stages) == 1
-    followup_sink = stages[0].pipeline.sink
-    assert followup_sink is not None
-    return followup_sink
+def _followup_sink(sink: LanceDatasetSink) -> LanceDatasetCommitReducerSink:
+    return LanceDatasetCommitReducerSink(
+        sink.output,
+        mode=sink.mode,
+        source_version=sink.source_version,
+        source_version_source=sink._source_version_source,
+        assets_subdir=sink.assets.subdir if sink.assets is not None else None,
+        columns=sink.columns,
+        fill_missing=sink.fill_missing,
+        fill=sink.fill,
+        io=sink.io,
+    )
 
 
 @pytest.mark.parametrize(
@@ -3022,7 +3027,7 @@ def test_jsonl_reducer_keeps_only_finalized_worker_outputs(tmp_path) -> None:
             sink.write_block([DictRow({"x": value}, shard_id=shard_id)])
             sink.on_shard_complete(shard_id)
 
-    reducer = JsonlSink(output_dir).followup_stages()[0].pipeline.sink
+    reducer = from_items([]).write_jsonl(output_dir).stages[1].pipeline.sink
     assert reducer is not None
     with set_active_run_context(
         job_id="job",
@@ -3068,7 +3073,7 @@ def test_parquet_reducer_keeps_only_finalized_worker_outputs(tmp_path) -> None:
             sink.write_block([DictRow({"x": value}, shard_id=shard_id)])
             sink.on_shard_complete(shard_id)
 
-    reducer = ParquetSink(output_dir).followup_stages()[0].pipeline.sink
+    reducer = from_items([]).write_parquet(output_dir).stages[1].pipeline.sink
     assert reducer is not None
     with set_active_run_context(
         job_id="job",
@@ -3100,7 +3105,7 @@ def test_lance_reducer_keeps_only_finalized_worker_outputs(tmp_path) -> None:
     worker_ids = ["worker-1", "worker-2"]
 
     for worker_id, value in zip(worker_ids, [1, 9], strict=True):
-        sink = from_items([]).write_lance(output_dir).sink
+        sink = from_items([]).write_lance(output_dir).stages[0].pipeline.sink
         assert sink is not None
         with set_active_run_context(
             job_id="job",
@@ -3117,9 +3122,7 @@ def test_lance_reducer_keeps_only_finalized_worker_outputs(tmp_path) -> None:
             sink.write_block([DictRow({"x": value}, shard_id=shard_id)])
             sink.on_shard_complete(shard_id)
 
-    reducer = from_items([]).write_lance(output_dir).sink
-    assert reducer is not None
-    reducer = _followup_sink(reducer)
+    reducer = from_items([]).write_lance(output_dir).stages[1].pipeline.sink
     assert reducer is not None
     with set_active_run_context(
         job_id="job",
@@ -3886,13 +3889,11 @@ def test_file_cleanup_reducer_tolerates_duplicate_listed_paths(
 
 
 def test_jsonl_sink_rejects_unsupported_cleanup_filename_template(tmp_path) -> None:
-    sink = JsonlSink(
-        tmp_path / "jsonl-custom",
-        filename_template="{shard_id}.jsonl",
-    )
-
     with pytest.raises(ValueError, match="requires fields"):
-        sink.followup_stages()
+        from_items([]).write_jsonl(
+            tmp_path / "jsonl-custom",
+            filename_template="{shard_id}.jsonl",
+        )
 
 
 def test_jsonl_sink_rejects_asset_subdir_filename_template(tmp_path) -> None:
@@ -3912,10 +3913,8 @@ def test_jsonl_sink_rejects_asset_subdir_filename_template(tmp_path) -> None:
 
 
 def test_parquet_sink_rejects_unsupported_cleanup_filename_template(tmp_path) -> None:
-    sink = ParquetSink(
-        tmp_path / "parquet-custom",
-        filename_template="{shard_id:>12}.parquet",
-    )
-
     with pytest.raises(ValueError, match="without conversion or format specifiers"):
-        sink.followup_stages()
+        from_items([]).write_parquet(
+            tmp_path / "parquet-custom",
+            filename_template="{shard_id:>12}.parquet",
+        )

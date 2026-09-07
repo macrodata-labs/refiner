@@ -826,7 +826,7 @@ def test_worker_metrics_use_correct_step_indexes_for_all_block_types(
     )
 
     worker = Worker(
-        pipeline=pipeline,
+        pipeline=pipeline.primary_pipeline,
         job_id="job",
         stage_index=0,
         worker_id=runtime_lifecycle.worker_id,

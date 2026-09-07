@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from refiner.pipeline.resources import GPU
 from refiner.pipeline.planning import WorkerCount
@@ -12,7 +12,9 @@ if TYPE_CHECKING:
     from refiner.launchers.local import LaunchStats
     from refiner.launchers.secrets import SecretInput
     from refiner.pipeline.pipeline import RefinerPipeline
+    from refiner.pipeline.data.row import Row
     from refiner.pipeline.sinks.base import BaseSink
+    from refiner.pipeline.sources.base import BaseSource
     from refiner.platform.client import CloudProvider, CloudRegion
 
 
@@ -45,6 +47,7 @@ class ConfiguredStage:
     cpus_per_worker: int | None
     mem_mb_per_worker: int | None
     gpu: GPU | None
+    inherit_launcher_resources: bool = False
 
     def __post_init__(self) -> None:
         normalized_name = _validate_stage_configuration(
@@ -54,53 +57,6 @@ class ConfiguredStage:
             mem_mb_per_worker=self.mem_mb_per_worker,
         )
         object.__setattr__(self, "name", normalized_name)
-
-
-@dataclass(frozen=True, slots=True)
-class FollowupStage:
-    """A writer-owned stage that runs after its parent stage succeeds."""
-
-    pipeline: RefinerPipeline
-    name: str
-    num_workers: int = 1
-    cpus_per_worker: int | None = None
-    mem_mb_per_worker: int | None = None
-    gpu: GPU | None = None
-
-    def __post_init__(self) -> None:
-        normalized_name = _validate_stage_configuration(
-            name=self.name,
-            num_workers=self.num_workers,
-            cpus_per_worker=self.cpus_per_worker,
-            mem_mb_per_worker=self.mem_mb_per_worker,
-        )
-        object.__setattr__(self, "name", normalized_name)
-
-    @classmethod
-    def from_sink(
-        cls,
-        *,
-        name: str,
-        sink: BaseSink,
-        num_workers: int = 1,
-        cpus_per_worker: int | None = None,
-        mem_mb_per_worker: int | None = None,
-        gpu: GPU | None = None,
-    ) -> FollowupStage:
-        """Create a task-backed follow-up stage for a finalizer sink."""
-        from refiner.pipeline.pipeline import RefinerPipeline
-        from refiner.pipeline.sources.task import TaskSource
-
-        return cls(
-            pipeline=RefinerPipeline(
-                source=TaskSource(num_tasks=num_workers), sink=sink
-            ),
-            name=name,
-            num_workers=num_workers,
-            cpus_per_worker=cpus_per_worker,
-            mem_mb_per_worker=mem_mb_per_worker,
-            gpu=gpu,
-        )
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -118,9 +74,37 @@ class PipelineSequence:
             raise ValueError("stage names must be unique")
         object.__setattr__(self, "stages", normalized_stages)
 
+    @property
+    def primary_pipeline(self) -> RefinerPipeline:
+        """Return the pipeline that produces the writer's primary output."""
+        return self.stages[0].pipeline
+
+    @property
+    def source(self) -> BaseSource:
+        return self.primary_pipeline.source
+
+    @property
+    def sink(self) -> BaseSink | None:
+        return self.primary_pipeline.sink
+
+    def iter_rows(self) -> Iterable[Row]:
+        """Inspect rows from the primary pipeline without executing its writer."""
+        return self.primary_pipeline.iter_rows()
+
+    def __iter__(self) -> Iterator[Row]:
+        return iter(self.iter_rows())
+
+    def execute(
+        self, rows: Iterable[Any], *, on_shard_delta: Any = None
+    ) -> Iterable[Any]:
+        return self.primary_pipeline.execute(rows, on_shard_delta=on_shard_delta)
+
+    def output_schema(self) -> Any:
+        return self.primary_pipeline.output_schema()
+
     def then(
         self,
-        pipeline: RefinerPipeline,
+        pipeline: RefinerPipeline | PipelineSequence,
         *,
         name: str,
         num_workers: WorkerCount = 1,
@@ -129,9 +113,16 @@ class PipelineSequence:
         gpu: GPU | None = None,
     ) -> PipelineSequence:
         """Return a sequence with one named pipeline stage appended."""
-        return PipelineSequence(
-            (
-                *self.stages,
+        if isinstance(pipeline, PipelineSequence):
+            appended = pipeline.as_stage(
+                name=name,
+                num_workers=num_workers,
+                cpus_per_worker=cpus_per_worker,
+                mem_mb_per_worker=mem_mb_per_worker,
+                gpu=gpu,
+            ).stages
+        else:
+            appended = (
                 ConfiguredStage(
                     pipeline=pipeline,
                     name=name,
@@ -141,13 +132,52 @@ class PipelineSequence:
                     gpu=gpu,
                 ),
             )
-        )
+        return PipelineSequence((*self.stages, *appended))
+
+    def as_stage(
+        self,
+        *,
+        name: str,
+        num_workers: WorkerCount = 1,
+        cpus_per_worker: int | None = None,
+        mem_mb_per_worker: int | None = None,
+        gpu: GPU | None = None,
+    ) -> PipelineSequence:
+        """Rename and configure a writer-created sequence as one logical stage."""
+        first, *remaining = self.stages
+        renamed = [
+            ConfiguredStage(
+                pipeline=first.pipeline,
+                name=name,
+                num_workers=num_workers,
+                cpus_per_worker=cpus_per_worker,
+                mem_mb_per_worker=mem_mb_per_worker,
+                gpu=gpu,
+            )
+        ]
+        prefix = f"{first.name}_"
+        for stage in remaining:
+            suffix = stage.name.removeprefix(prefix)
+            renamed.append(
+                ConfiguredStage(
+                    pipeline=stage.pipeline,
+                    name=f"{name}_{suffix}",
+                    num_workers=stage.num_workers,
+                    cpus_per_worker=stage.cpus_per_worker,
+                    mem_mb_per_worker=stage.mem_mb_per_worker,
+                    gpu=stage.gpu,
+                    inherit_launcher_resources=stage.inherit_launcher_resources,
+                )
+            )
+        return PipelineSequence(renamed)
 
     def launch_local(
         self,
         *,
         name: str,
+        num_workers: WorkerCount = 1,
         rundir: str | None = None,
+        gpu: GPU | None = None,
     ) -> LaunchStats:
         """Run the configured stages sequentially on the local machine."""
         from refiner.launchers.local import LocalLauncher
@@ -155,7 +185,9 @@ class PipelineSequence:
         return LocalLauncher(
             pipeline=self,
             name=name,
+            num_workers=num_workers,
             rundir=rundir,
+            gpu=gpu,
         ).launch()
 
     def launch_cloud(
@@ -163,6 +195,10 @@ class PipelineSequence:
         *,
         name: str,
         provider: str = "modal",
+        num_workers: WorkerCount = 1,
+        cpus_per_worker: int | None = None,
+        mem_mb_per_worker: int | None = None,
+        gpu: GPU | None = None,
         cloud: CloudProvider = "aws",
         region: CloudRegion | Sequence[CloudRegion] = ("us", "eu", "ca"),
         sync_local_dependencies: bool = False,
@@ -180,6 +216,10 @@ class PipelineSequence:
             pipeline=self,
             name=name,
             provider=provider,
+            num_workers=num_workers,
+            cpus_per_worker=cpus_per_worker,
+            mem_mb_per_worker=mem_mb_per_worker,
+            gpu=gpu,
             cloud=cloud,
             region=region,
             sync_local_dependencies=sync_local_dependencies,
@@ -192,4 +232,4 @@ class PipelineSequence:
         ).launch()
 
 
-__all__ = ["ConfiguredStage", "FollowupStage", "PipelineSequence"]
+__all__ = ["ConfiguredStage", "PipelineSequence"]

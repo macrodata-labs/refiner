@@ -262,6 +262,40 @@ class RefinerPipeline:
             sink=sink,
         )
 
+    def _with_writer_stages(
+        self,
+        *,
+        name: str,
+        sink: BaseSink,
+        finalizer: BaseSink,
+    ) -> "PipelineSequence":
+        """Build the complete physical sequence for a multistage writer."""
+        from refiner.pipeline.sequence import ConfiguredStage, PipelineSequence
+
+        return PipelineSequence(
+            (
+                ConfiguredStage(
+                    pipeline=self.with_sink(sink),
+                    name=name,
+                    num_workers=1,
+                    cpus_per_worker=None,
+                    mem_mb_per_worker=None,
+                    gpu=None,
+                    inherit_launcher_resources=True,
+                ),
+                ConfiguredStage(
+                    pipeline=RefinerPipeline(
+                        source=TaskSource(num_tasks=1), sink=finalizer
+                    ),
+                    name=f"{name}_finalize",
+                    num_workers=1,
+                    cpus_per_worker=None,
+                    mem_mb_per_worker=None,
+                    gpu=None,
+                ),
+            )
+        )
+
     def _get_compiled_segments(self) -> tuple[Segment, ...]:
         """Compile and cache execution segments for the current step sequence.
 
@@ -712,7 +746,7 @@ class RefinerPipeline:
         *,
         filename_template: str = "{shard_id}__w{worker_id}.jsonl",
         assets: AssetWriteConfig | None = None,
-    ) -> "RefinerPipeline":
+    ) -> "PipelineSequence":
         """Attach a JSONL writer sink.
 
         Args:
@@ -721,12 +755,22 @@ class RefinerPipeline:
                 fields include ``shard_id`` and ``worker_id``.
             assets: Optional individual-file or packed-blob asset configuration.
         """
-        return self.with_sink(
-            JsonlSink(
-                output=output,
-                filename_template=filename_template,
-                assets=assets,
-            )
+        from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
+
+        sink = JsonlSink(
+            output=output,
+            filename_template=filename_template,
+            assets=assets,
+        )
+        return self._with_writer_stages(
+            name="write_jsonl",
+            sink=sink,
+            finalizer=FileCleanupReducerSink(
+                output=sink.output,
+                filename_template=sink.filename_template,
+                reducer_name="write_jsonl_reduce",
+                assets_subdir=sink.assets.subdir if sink.assets is not None else None,
+            ),
         )
 
     def write_parquet(
@@ -737,7 +781,7 @@ class RefinerPipeline:
         compression: str | None = None,
         assets: AssetWriteConfig | None = None,
         dtypes: DTypeMapping | None = None,
-    ) -> "RefinerPipeline":
+    ) -> "PipelineSequence":
         """Attach a Parquet writer sink.
 
         Args:
@@ -748,14 +792,24 @@ class RefinerPipeline:
             assets: Optional individual-file or packed-blob asset configuration.
             dtypes: Optional dtype overrides for written columns.
         """
-        return self.with_sink(
-            ParquetSink(
-                output=output,
-                filename_template=filename_template,
-                compression=compression,
-                assets=assets,
-                dtypes=dtypes,
-            )
+        from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
+
+        sink = ParquetSink(
+            output=output,
+            filename_template=filename_template,
+            compression=compression,
+            assets=assets,
+            dtypes=dtypes,
+        )
+        return self._with_writer_stages(
+            name="write_parquet",
+            sink=sink,
+            finalizer=FileCleanupReducerSink(
+                output=sink.output,
+                filename_template=sink.filename_template,
+                reducer_name="write_parquet_reduce",
+                assets_subdir=sink.assets.subdir if sink.assets is not None else None,
+            ),
         )
 
     def write_lance(
@@ -764,14 +818,24 @@ class RefinerPipeline:
         *,
         filename_template: str = "{shard_id}__w{worker_id}.lance",
         assets: AssetWriteConfig | None = None,
-    ) -> "RefinerPipeline":
+    ) -> "PipelineSequence":
         """Attach a writer that creates one standalone Lance file per shard."""
-        return self.with_sink(
-            LanceSink(
-                output=output,
-                filename_template=filename_template,
-                assets=assets,
-            )
+        from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
+
+        sink = LanceSink(
+            output=output,
+            filename_template=filename_template,
+            assets=assets,
+        )
+        return self._with_writer_stages(
+            name="write_lance",
+            sink=sink,
+            finalizer=FileCleanupReducerSink(
+                output=sink.output,
+                filename_template=sink.filename_template,
+                reducer_name="write_lance_reduce",
+                assets_subdir=sink.assets.subdir if sink.assets is not None else None,
+            ),
         )
 
     def write_lance_dataset(
@@ -782,7 +846,7 @@ class RefinerPipeline:
         columns: Sequence[str] | None = None,
         assets: AssetWriteConfig | None = None,
         io: LanceIOConfig = LanceIOConfig(),
-    ) -> "RefinerPipeline":
+    ) -> "PipelineSequence":
         """Attach a distributed Lance dataset writer or schema-evolution sink.
 
         Use ``mode=AddColumns(fill=...)`` with a bounded or filtered
@@ -814,17 +878,32 @@ class RefinerPipeline:
                 raise ValueError("add_columns does not support a limited Lance source")
             source_uri = source.dataset_uri
             source_version = source.resolved_version
-        return self.with_sink(
-            LanceDatasetSink(
-                output=output,
-                mode=mode,
-                columns=columns,
-                source_uri=source_uri,
-                source_version=source_version,
+        from refiner.pipeline.sinks.lance import LanceDatasetCommitReducerSink
+
+        sink = LanceDatasetSink(
+            output=output,
+            mode=mode,
+            columns=columns,
+            source_uri=source_uri,
+            source_version=source_version,
+            source_version_source=source if is_add_columns else None,
+            assets=assets,
+            io=io,
+        )
+        return self._with_writer_stages(
+            name="write_lance_dataset",
+            sink=sink,
+            finalizer=LanceDatasetCommitReducerSink(
+                sink.output,
+                mode=sink.mode,
+                source_version=sink.source_version,
                 source_version_source=source if is_add_columns else None,
-                assets=assets,
-                io=io,
-            )
+                assets_subdir=sink.assets.subdir if sink.assets is not None else None,
+                columns=sink.columns,
+                fill_missing=sink.fill_missing,
+                fill=sink.fill,
+                io=sink.io,
+            ),
         )
 
     def write_zarr(
@@ -838,7 +917,7 @@ class RefinerPipeline:
         video_frame_batch_size: int = 8,
         array_chunk_bytes: int = 8 * 1024 * 1024,
         reduce_to_single_store: bool = True,
-    ) -> "RefinerPipeline":
+    ) -> "PipelineSequence":
         """Write rows to Zarr array stores.
 
         Args:
@@ -861,17 +940,28 @@ class RefinerPipeline:
                 shard-local stores into one Zarr group at ``output``. Defaults
                 to True.
         """
-        return self.with_sink(
-            ZarrSink(
-                output=output,
-                arrays=arrays,
-                attrs=attrs,
-                episode_ends_path=episode_ends_path,
-                store_template=store_template,
-                video_frame_batch_size=video_frame_batch_size,
-                array_chunk_bytes=array_chunk_bytes,
-                reduce_to_single_store=reduce_to_single_store,
-            )
+        from refiner.pipeline.sinks.reducer.zarr import ZarrReducerSink
+
+        sink = ZarrSink(
+            output=output,
+            arrays=arrays,
+            attrs=attrs,
+            episode_ends_path=episode_ends_path,
+            store_template=store_template,
+            video_frame_batch_size=video_frame_batch_size,
+            array_chunk_bytes=array_chunk_bytes,
+            reduce_to_single_store=reduce_to_single_store,
+        )
+        return self._with_writer_stages(
+            name="write_zarr",
+            sink=sink,
+            finalizer=ZarrReducerSink(
+                output=sink.output,
+                store_template=sink.store_template,
+                episode_ends_path=sink.episode_ends_path,
+                array_chunk_bytes=sink.array_chunk_bytes,
+                reduce_to_single_store=sink.reduce_to_single_store,
+            ),
         )
 
     def __iter__(self) -> Iterator[Row]:
@@ -1038,7 +1128,7 @@ class RefinerPipeline:
         encoder_options: Mapping[str, str] | None = _DEFAULT_LEROBOT_ENCODER_OPTIONS,
         quantile_bins: int = 5000,
         force_recompute_video_stats: bool = False,
-    ) -> "RefinerPipeline":
+    ) -> "PipelineSequence":
         """Append a LeRobot writer sink.
 
         The writer expects ``LeRobotRow`` or ``RoboticsRow`` inputs. It writes
@@ -1062,20 +1152,24 @@ class RefinerPipeline:
                 LeRobot stats are available.
         """
         from refiner.pipeline.sinks.lerobot import LeRobotWriterSink
+        from refiner.pipeline.sinks.reducer.lerobot import LeRobotMetaReduceSink
 
-        return self.with_sink(
-            LeRobotWriterSink(
-                output=output,
-                data_files_size_in_mb=data_files_size_in_mb,
-                video_files_size_in_mb=video_files_size_in_mb,
-                max_video_prepare_in_flight=max_video_prepare_in_flight,
-                codec=codec,
-                pix_fmt=pix_fmt,
-                transencoding_threads=transencoding_threads,
-                encoder_options=encoder_options,
-                quantile_bins=quantile_bins,
-                force_recompute_video_stats=force_recompute_video_stats,
-            )
+        sink = LeRobotWriterSink(
+            output=output,
+            data_files_size_in_mb=data_files_size_in_mb,
+            video_files_size_in_mb=video_files_size_in_mb,
+            max_video_prepare_in_flight=max_video_prepare_in_flight,
+            codec=codec,
+            pix_fmt=pix_fmt,
+            transencoding_threads=transencoding_threads,
+            encoder_options=encoder_options,
+            quantile_bins=quantile_bins,
+            force_recompute_video_stats=force_recompute_video_stats,
+        )
+        return self._with_writer_stages(
+            name="write_lerobot",
+            sink=sink,
+            finalizer=LeRobotMetaReduceSink(output=sink.output),
         )
 
 
