@@ -130,6 +130,10 @@ results are filled with null by default. The legacy string
 `mode="add_columns"` retains its strict behavior and fails if any result is
 missing.
 
+In an ordered workflow, `load_lance(...)` and `AddColumns()` may target a
+dataset created by an earlier stage. Leave `version` unset and Refiner pins the
+source version when the add-columns stage starts.
+
 Every finalized shard emits coordination metadata, including shards that
 produce no rows. The reducer requires complete metadata coverage before it
 commits, so a missing worker result fails explicitly instead of silently

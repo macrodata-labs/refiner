@@ -813,7 +813,7 @@ class RefinerPipeline:
             if is_limited and not isinstance(mode, AddColumns):
                 raise ValueError("add_columns does not support a limited Lance source")
             source_uri = source.dataset_uri
-            source_version = source.version
+            source_version = source.resolved_version
         return self.with_sink(
             LanceDatasetSink(
                 output=output,
@@ -821,6 +821,7 @@ class RefinerPipeline:
                 columns=columns,
                 source_uri=source_uri,
                 source_version=source_version,
+                source_version_source=source if is_add_columns else None,
                 assets=assets,
                 io=io,
             )

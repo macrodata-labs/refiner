@@ -92,15 +92,17 @@ def test_load_lance_defers_and_pins_latest_version_until_first_use(tmp_path) -> 
 def test_multistage_workflow_plans_lance_input_before_it_exists(tmp_path) -> None:
     pytest.importorskip("lance")
     dataset_uri = tmp_path / "produced.lance"
-    workflow = (
-        from_items([{"x": 1}])
-        .write_lance_dataset(dataset_uri)
-        .as_stage(name="produce")
-        .then(
-            load_lance(dataset_uri),
-            name="consume",
+    produce = from_items([{"x": 1}]).write_lance_dataset(dataset_uri)
+    consume = (
+        load_lance(dataset_uri)
+        .map(lambda row: {"y": row["x"] + 1}, dtypes={"y": datatype.int64()})
+        .write_lance_dataset(
+            dataset_uri,
+            mode=AddColumns(),
+            columns=["y"],
         )
     )
+    workflow = produce.as_stage(name="produce").then(consume, name="consume")
 
     stages = compile_pipeline_plan(workflow)["stages"]
 
@@ -108,6 +110,7 @@ def test_multistage_workflow_plans_lance_input_before_it_exists(tmp_path) -> Non
         "produce",
         "produce_finalize",
         "consume",
+        "consume_finalize",
     ]
     assert stages[2]["steps"][0]["args"]["version"] is None
 

@@ -1456,6 +1456,32 @@ def test_lance_overwrite_followup_does_not_open_dataset(tmp_path, monkeypatch) -
     assert reducer.source_version is None
 
 
+def test_lance_multistage_create_then_add_columns(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "staged-add-columns.lance"
+    produce = from_items([{"x": 1}, {"x": 2}]).write_lance_dataset(dataset_uri)
+    enrich = (
+        load_lance(dataset_uri)
+        .map(lambda row: {"y": row["x"] + 10}, dtypes={"y": datatype.int64()})
+        .write_lance_dataset(
+            dataset_uri,
+            mode=AddColumns(),
+            columns=["y"],
+        )
+    )
+    workflow = produce.as_stage(name="produce").then(enrich, name="enrich")
+
+    workflow.launch_local(
+        name="staged-lance-add-columns",
+        rundir=str(tmp_path / "run"),
+    )
+
+    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
+        "x": [1, 2],
+        "y": [11, 12],
+    }
+
+
 def test_lance_empty_create_and_overwrite_fail(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     input_uri = tmp_path / "empty-input.lance"

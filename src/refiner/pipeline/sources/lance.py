@@ -88,7 +88,9 @@ class LanceSource(BaseSource):
         self.num_shards = num_shards
         self._dataset_cache: Any | None = None
         self._requested_version = version
-        self._version: int | None = None
+        # Shallow pipeline copies share this reference, so a sink derived from
+        # this source observes the exact version pinned by stage-time planning.
+        self._version_ref: list[int | None] = [None]
         self._schema: pa.Schema | None = None
         self._blob_field_ids: dict[str, int] = {}
         if version is not None:
@@ -98,7 +100,7 @@ class LanceSource(BaseSource):
 
     def _initialize_from_dataset(self, dataset: Any) -> None:
         """Pin the opened dataset version and validate its projected schema."""
-        self._version = int(dataset.version)
+        self._version_ref[0] = int(dataset.version)
         self._dataset_cache = dataset
         source_schema = dataset.schema
         selected_columns = set(self.columns) if self.columns is not None else None
@@ -150,9 +152,14 @@ class LanceSource(BaseSource):
     def version(self) -> int:
         """Return the pinned version, resolving the latest version on first use."""
         self._dataset()
-        if self._version is None:
+        if self._version_ref[0] is None:
             raise RuntimeError("Lance dataset version was not resolved")
-        return self._version
+        return self._version_ref[0]
+
+    @property
+    def resolved_version(self) -> int | None:
+        """Return the pinned version without opening an unresolved dataset."""
+        return self._version_ref[0]
 
     def with_read_batch_rows(self, max_rows: int | None) -> "LanceSource":
         source = copy(self)
@@ -184,8 +191,8 @@ class LanceSource(BaseSource):
             dataset = _import_lance().dataset(
                 self.dataset_uri,
                 version=(
-                    self._version
-                    if self._version is not None
+                    self._version_ref[0]
+                    if self._version_ref[0] is not None
                     else self._requested_version
                 ),
             )
@@ -448,7 +455,9 @@ class LanceSource(BaseSource):
         return {
             "path": self.dataset_uri,
             "version": (
-                self._version if self._version is not None else self._requested_version
+                self._version_ref[0]
+                if self._version_ref[0] is not None
+                else self._requested_version
             ),
             "columns": list(self.columns) if self.columns is not None else None,
             "read_batch_rows": self._read_batch_rows,
