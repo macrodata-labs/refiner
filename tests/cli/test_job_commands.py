@@ -83,9 +83,10 @@ class _FakeClient:
                     "index": 0,
                     "status": "running",
                     "shardDone": 3,
+                    "shardRunning": 2,
+                    "shardPending": 5,
                     "shardTotal": 10,
                     "runningWorkers": 2,
-                    "completedWorkers": 1,
                     "totalWorkers": 4,
                     "name": "stage-0",
                     "runtimeConfig": {
@@ -298,12 +299,11 @@ def test_jobs_get_plain_output(monkeypatch, capsys) -> None:
     assert "Workers:" not in out.out
     assert "Stages" in out.out
     assert "Steps" in out.out
-    assert "run=2 done=1 tot=4" in out.out
-    assert "Req" in out.out
+    assert "active=2 requested=4" in out.out
+    assert "c=3 a=2 p=5 t=10" in out.out
     assert "CPU" in out.out
     assert "Memory" in out.out
     assert "GPU" in out.out
-    assert "  4  " in out.out
     assert "  8  " in out.out
     assert "16384" in out.out
     assert "1 a10g" in out.out
@@ -311,6 +311,26 @@ def test_jobs_get_plain_output(monkeypatch, capsys) -> None:
     assert "columns=18" in out.out
     assert "__meta" not in out.out
     assert "\x1b[" not in out.out
+
+
+def test_jobs_get_plain_output_shows_unknown_requested_capacity(
+    monkeypatch, capsys
+) -> None:
+    class UnknownCapacityClient(_FakeClient):
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            payload = super().cli_get_job(job_id=job_id)
+            stages = cast(list[dict[str, object]], payload["stages"])
+            stages[0]["totalWorkers"] = None
+            return payload
+
+    _patch_job_client(monkeypatch, UnknownCapacityClient)
+    monkeypatch.setattr("refiner.cli.jobs.common.stdout_is_interactive", lambda: False)
+
+    rc = jobs.cmd_jobs_get(Namespace(job_id="job-1", json=False))
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "active=2 requested=N/A" in out.out
 
 
 def test_jobs_get_json_output_prints_job_object(monkeypatch, capsys) -> None:

@@ -18,6 +18,7 @@ _LAZY_ATTRS = {
     "AddColumns": "refiner.pipeline.sinks.lance",
     "Append": "refiner.pipeline.sinks.lance",
     "Create": "refiner.pipeline.sinks.lance",
+    "LanceIOConfig": "refiner.pipeline.sinks.lance",
     "Overwrite": "refiner.pipeline.sinks.lance",
     "CUDAVersion": "refiner.pipeline",
     "BlobAssetConfig": "refiner.pipeline.sinks.assets",
@@ -36,6 +37,7 @@ _LAZY_ATTRS = {
     "read_json": "refiner.pipeline",
     "read_jsonl": "refiner.pipeline",
     "read_lerobot": "refiner.pipeline",
+    "open_blob_stream": "refiner.io",
     "read_blob": "refiner.io",
     "read_mcap": "refiner.pipeline",
     "read_parquet": "refiner.pipeline",
@@ -62,6 +64,7 @@ __all__ = [
     "AddColumns",
     "Append",
     "Create",
+    "LanceIOConfig",
     "Overwrite",
     "CUDAVersion",
     "BlobAssetConfig",
@@ -78,6 +81,7 @@ __all__ = [
     "read_json",
     "read_jsonl",
     "read_lerobot",
+    "open_blob_stream",
     "read_blob",
     "load_lance",
     "read_mcap",
@@ -139,8 +143,14 @@ if TYPE_CHECKING:
     import refiner.text as text
     import refiner.video as video
     from refiner.launchers.secrets import Secrets
-    from refiner.pipeline.sinks.lance import AddColumns, Append, Create, Overwrite
-    from refiner.io import read_blob
+    from refiner.pipeline.sinks.lance import (
+        AddColumns,
+        Append,
+        Create,
+        LanceIOConfig,
+        Overwrite,
+    )
+    from refiner.io import open_blob_stream, read_blob
     from refiner.pipeline import (
         CUDAVersion,
         GPU,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from copy import copy
 import posixpath
 from typing import Any
 
@@ -25,6 +26,7 @@ from refiner.utils import check_required_dependencies
 
 _LANCE_ROW_ADDRESS_COLUMN = "_rowaddr"
 _LANCE_BLOB_METADATA_KEY = b"lance-encoding:blob"
+_DEFAULT_READ_BATCH_ROWS = 65_536
 
 
 def _import_lance() -> Any:
@@ -67,17 +69,11 @@ class LanceSource(BaseSource):
         *,
         version: int | str | None = None,
         columns: Sequence[str] | None = None,
-        batch_size: int = 65_536,
         num_shards: int | None = None,
-        max_rows: int | None = None,
     ) -> None:
-        if batch_size <= 0:
-            raise ValueError("batch_size must be > 0")
         if columns is not None and len(set(columns)) != len(columns):
             raise ValueError("Lance columns must be unique")
         validate_explicit_num_shards(num_shards)
-        if max_rows is not None and max_rows < 0:
-            raise ValueError("max_rows must be >= 0")
 
         self.input = DataFolder.resolve(input)
         if self.input.has_explicit_filesystem_configuration:
@@ -88,11 +84,9 @@ class LanceSource(BaseSource):
         self.dataset_uri = self.input.abs_path()
         validate_lance_uri(self.dataset_uri)
         self.columns = tuple(columns) if columns is not None else None
-        self.batch_size = int(batch_size)
+        self._read_batch_rows = _DEFAULT_READ_BATCH_ROWS
         self.num_shards = num_shards
-        self.max_rows = int(max_rows) if max_rows is not None else None
         self._dataset_cache: Any | None = None
-        self._planned_rows_by_fragment: tuple[int, ...] | None = None
 
         dataset = _import_lance().dataset(self.dataset_uri, version=version)
         self.version = int(dataset.version)
@@ -142,6 +136,18 @@ class LanceSource(BaseSource):
             )
         self._schema = projected_schema
 
+    def with_read_batch_rows(self, max_rows: int | None) -> "LanceSource":
+        source = copy(self)
+        source._read_batch_rows = (
+            _DEFAULT_READ_BATCH_ROWS if max_rows is None else max_rows
+        )
+        return source
+
+    def with_max_read_batch_rows(self, max_rows: int) -> "LanceSource":
+        source = copy(self)
+        source._read_batch_rows = min(source._read_batch_rows, max_rows)
+        return source
+
     @property
     def schema(self) -> pa.Schema:
         return self._schema
@@ -164,31 +170,8 @@ class LanceSource(BaseSource):
         state["_dataset_cache"] = None
         return state
 
-    def _planned_fragment_rows(self) -> tuple[int, ...]:
-        if self._planned_rows_by_fragment is not None:
-            return self._planned_rows_by_fragment
-        fragments = self._dataset().get_fragments()
-        if self.max_rows is None:
-            limits = tuple(-1 for _ in fragments)
-        else:
-            remaining = self.max_rows
-            planned: list[int] = []
-            for fragment in fragments:
-                if remaining <= 0:
-                    break
-                rows = int(fragment.count_rows())
-                if rows <= 0:
-                    planned.append(0)
-                    continue
-                take_rows = min(rows, remaining)
-                planned.append(take_rows)
-                remaining -= take_rows
-            limits = tuple(planned)
-        self._planned_rows_by_fragment = limits
-        return limits
-
     def list_shards(self) -> list[Shard]:
-        fragment_count = len(self._planned_fragment_rows())
+        fragment_count = len(self._dataset().get_fragments())
         if fragment_count == 0:
             return []
         shard_count = (
@@ -306,7 +289,7 @@ class LanceSource(BaseSource):
         rows_read = 0
         for address_batch in fragment.to_batches(
             columns=blob_columns,
-            batch_size=self.batch_size,
+            batch_size=self._read_batch_rows,
             batch_readahead=1,
             limit=row_count,
             with_row_address=True,
@@ -355,7 +338,11 @@ class LanceSource(BaseSource):
                 f"expected {row_count}"
             )
 
-    def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
+    def _read_shard(
+        self,
+        shard: Shard,
+        max_rows: int | None,
+    ) -> Iterator[SourceUnit]:
         descriptor = shard.descriptor
         if not isinstance(descriptor, RowRangeDescriptor):
             raise TypeError("LanceSource requires row-range shards")
@@ -366,12 +353,17 @@ class LanceSource(BaseSource):
             or descriptor.end > len(fragments)
         ):
             raise ValueError("Lance shard fragment range is invalid")
-        planned_fragment_rows = self._planned_fragment_rows()
+        remaining_rows = max_rows
         for fragment_index in range(descriptor.start, descriptor.end):
+            if remaining_rows is not None and remaining_rows == 0:
+                break
             fragment = fragments[fragment_index]
-            planned_rows = planned_fragment_rows[fragment_index]
             fragment_rows = int(fragment.count_rows())
-            expected_rows = fragment_rows if planned_rows < 0 else planned_rows
+            expected_rows = (
+                fragment_rows
+                if remaining_rows is None
+                else min(fragment_rows, remaining_rows)
+            )
             if expected_rows == 0:
                 continue
             blob_paths = self._fragment_blob_paths(fragment)
@@ -381,41 +373,52 @@ class LanceSource(BaseSource):
                     expected_rows,
                     blob_paths,
                 )
-                continue
-            rows_read = 0
-            for batch in fragment.to_batches(
-                columns=list(self.columns) if self.columns is not None else None,
-                batch_size=self.batch_size,
-                with_row_address=True,
-                blob_handling="blobs_descriptions",
-            ):
-                table = self._normalize_blob_columns(
-                    pa.Table.from_batches([batch]),
-                    blob_paths,
-                )
-                row_addresses = table.column(_LANCE_ROW_ADDRESS_COLUMN)
-                rows_read += batch.num_rows
-                yield Tabular(
-                    set_or_append_column(
-                        table.drop_columns([_LANCE_ROW_ADDRESS_COLUMN]),
-                        SOURCE_ROW_ID_COLUMN,
-                        row_addresses,
+            else:
+                rows_read = 0
+                for batch in fragment.to_batches(
+                    columns=list(self.columns) if self.columns is not None else None,
+                    batch_size=self._read_batch_rows,
+                    with_row_address=True,
+                    blob_handling="blobs_descriptions",
+                ):
+                    table = self._normalize_blob_columns(
+                        pa.Table.from_batches([batch]),
+                        blob_paths,
                     )
-                )
-            if rows_read != expected_rows:
-                raise ValueError(
-                    f"Lance fragment {fragment.fragment_id} yielded {rows_read} rows; "
-                    f"expected {expected_rows}"
-                )
+                    row_addresses = table.column(_LANCE_ROW_ADDRESS_COLUMN)
+                    rows_read += batch.num_rows
+                    yield Tabular(
+                        set_or_append_column(
+                            table.drop_columns([_LANCE_ROW_ADDRESS_COLUMN]),
+                            SOURCE_ROW_ID_COLUMN,
+                            row_addresses,
+                        )
+                    )
+                if rows_read != expected_rows:
+                    raise ValueError(
+                        f"Lance fragment {fragment.fragment_id} yielded "
+                        f"{rows_read} rows; expected {expected_rows}"
+                    )
+            if remaining_rows is not None:
+                remaining_rows -= expected_rows
+
+    def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
+        return self._read_shard(shard, None)
+
+    def read_shard_prefix(
+        self,
+        shard: Shard,
+        max_rows: int,
+    ) -> Iterator[SourceUnit]:
+        return self._read_shard(shard, max_rows)
 
     def describe(self) -> dict[str, object]:
         return {
             "path": self.dataset_uri,
             "version": self.version,
             "columns": list(self.columns) if self.columns is not None else None,
-            "batch_size": self.batch_size,
+            "read_batch_rows": self._read_batch_rows,
             "num_shards": self.num_shards,
-            "max_rows": self.max_rows,
         }
 
 

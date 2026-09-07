@@ -38,6 +38,10 @@ shard registration. Pass a positive integer when you want a fixed worker count.
 
 Modal remains the default. For a CPU-only run on AWS Batch, pass `provider="aws"`:
 
+After a successful Modal submission, Refiner reminds you that Modal workers are
+preemptible. For more resilient runs, target approximately 25 minutes per shard
+for CPU-only workloads and 2 hours per shard for GPU workloads.
+
 ```python
 pipeline.launch_cloud(
     name="aws-normalization",

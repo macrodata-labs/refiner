@@ -317,6 +317,7 @@ def test_read_videos_forwards_file_listing_options(
         recursive=True,
         target_shard_bytes=123,
         num_shards=4,
+        max_rows=2,
         file_path_column="clip",
         size_column=None,
         dtypes={"label": datatype.large_string()},
@@ -330,6 +331,7 @@ def test_read_videos_forwards_file_listing_options(
         "recursive": True,
         "target_shard_bytes": 123,
         "num_shards": 4,
+        "max_rows": 2,
         "file_path_column": "clip",
         "size_column": None,
         "dtypes": {

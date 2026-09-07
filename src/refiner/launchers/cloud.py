@@ -626,6 +626,13 @@ class CloudLauncher(BaseLauncher):
             stage_index=resp.stage_index,
         )
         print(f"Cloud job launched. View job:\n  {tracking_url}", flush=True)
+        if self.provider == "modal":
+            print(
+                "Hint: Modal workers are preemptible. For resilient runs, target about "
+                "25 minutes per shard for CPU-only workloads and 2 hours per shard for "
+                "GPU workloads.",
+                flush=True,
+            )
         if debug:
             return CloudLaunchResult(
                 job_id=resp.job_id,

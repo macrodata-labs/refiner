@@ -9,7 +9,8 @@ import posixpath
 import queue as queue_module
 import re
 import tempfile
-from collections.abc import Mapping, Sequence
+import threading
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
@@ -95,6 +96,263 @@ _LANCE_WRITER_POOL = concurrent.futures.ThreadPoolExecutor(
 _LANCE_ROW_ADDRESS_FRAGMENT_SHIFT = 32
 _LANCE_ROW_ADDRESS_POSITION_MASK = (1 << _LANCE_ROW_ADDRESS_FRAGMENT_SHIFT) - 1
 _ADD_COLUMNS_FILL_BATCH_ROWS = 65_536
+_MIN_MULTIPART_PART_BYTES = 5 * 1024 * 1024
+_MAX_MULTIPART_PART_BYTES = 5 * 1024 * 1024 * 1024
+_LANCE_PROCESS_CONFIG_LOCK = threading.Lock()
+_LANCE_PROCESS_UPLOAD_CONFIG: tuple[int, int] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LanceIOConfig:
+    """Performance and memory controls for Lance dataset writers."""
+
+    upload_concurrency: int = 32
+    multipart_part_bytes: int = 5 * 1024 * 1024
+    target_batch_bytes: int = 256 * 1024 * 1024
+    max_buffered_bytes: int = 1024 * 1024 * 1024
+
+    def __post_init__(self) -> None:
+        if self.upload_concurrency <= 0:
+            raise ValueError("upload_concurrency must be greater than zero")
+        if not (
+            _MIN_MULTIPART_PART_BYTES
+            <= self.multipart_part_bytes
+            <= _MAX_MULTIPART_PART_BYTES
+        ):
+            raise ValueError("multipart_part_bytes must be between 5 MiB and 5 GiB")
+        if self.target_batch_bytes <= 0:
+            raise ValueError("target_batch_bytes must be greater than zero")
+        required_batch_bytes = self.upload_concurrency * self.multipart_part_bytes
+        if self.target_batch_bytes < required_batch_bytes:
+            raise ValueError(
+                "target_batch_bytes must be at least upload_concurrency times "
+                "multipart_part_bytes"
+            )
+        if self.max_buffered_bytes < 4 * self.target_batch_bytes:
+            raise ValueError(
+                "max_buffered_bytes must be at least four times target_batch_bytes"
+            )
+
+    def to_plan(self) -> dict[str, int]:
+        return {
+            "upload_concurrency": self.upload_concurrency,
+            "multipart_part_bytes": self.multipart_part_bytes,
+            "target_batch_bytes": self.target_batch_bytes,
+            "max_buffered_bytes": self.max_buffered_bytes,
+        }
+
+
+def _configure_lance_process(config: LanceIOConfig) -> None:
+    """Set Lance's process-global writer controls before its first upload."""
+    global _LANCE_PROCESS_UPLOAD_CONFIG
+    requested = (config.upload_concurrency, config.multipart_part_bytes)
+    with _LANCE_PROCESS_CONFIG_LOCK:
+        if _LANCE_PROCESS_UPLOAD_CONFIG is not None:
+            if _LANCE_PROCESS_UPLOAD_CONFIG != requested:
+                raise RuntimeError(
+                    "This worker process already initialized Lance with "
+                    f"upload_concurrency={_LANCE_PROCESS_UPLOAD_CONFIG[0]} and "
+                    f"multipart_part_bytes={_LANCE_PROCESS_UPLOAD_CONFIG[1]}; "
+                    "start a fresh worker to use different Lance I/O settings"
+                )
+            return
+        os.environ["LANCE_UPLOAD_CONCURRENCY"] = str(config.upload_concurrency)
+        os.environ["LANCE_INITIAL_UPLOAD_SIZE"] = str(config.multipart_part_bytes)
+        _LANCE_PROCESS_UPLOAD_CONFIG = requested
+        logger.info(
+            "Configured Lance uploads concurrency={} part_bytes={}",
+            config.upload_concurrency,
+            config.multipart_part_bytes,
+        )
+
+
+def _split_batch_by_bytes(
+    batch: pa.RecordBatch,
+    target_bytes: int,
+) -> Iterator[pa.RecordBatch]:
+    """Split a batch until each multi-row slice fits the target byte size."""
+    if batch.num_rows <= 1 or batch.nbytes <= target_bytes:
+        yield batch
+        return
+    split_at = max(1, min(batch.num_rows - 1, batch.num_rows // 2))
+    yield from _split_batch_by_bytes(batch.slice(0, split_at), target_bytes)
+    yield from _split_batch_by_bytes(
+        batch.slice(split_at, batch.num_rows - split_at), target_bytes
+    )
+
+
+class _ByteAwareBatcher:
+    """Coalesce ordered Arrow batches without exceeding a target byte size."""
+
+    def __init__(self, target_bytes: int) -> None:
+        self.target_bytes = target_bytes
+        self._pending: list[pa.RecordBatch] = []
+        self._pending_bytes = 0
+
+    def add(self, batch: pa.RecordBatch) -> Iterator[pa.RecordBatch]:
+        for split_batch in _split_batch_by_bytes(batch, self.target_bytes):
+            if (
+                self._pending
+                and self._pending_bytes + split_batch.nbytes > self.target_bytes
+            ):
+                yield self.flush()
+            self._pending.append(split_batch)
+            self._pending_bytes += split_batch.nbytes
+            if self._pending_bytes >= self.target_bytes:
+                yield self.flush()
+
+    def flush(self) -> pa.RecordBatch:
+        if not self._pending:
+            raise RuntimeError("Cannot flush an empty Lance batch buffer")
+        if len(self._pending) == 1:
+            batch = self._pending[0]
+        else:
+            batch = pa.concat_batches(self._pending)
+        self._pending = []
+        self._pending_bytes = 0
+        return batch
+
+    def finish(self) -> list[pa.RecordBatch]:
+        return [] if not self._pending else [self.flush()]
+
+    @property
+    def pending_bytes(self) -> int:
+        return self._pending_bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _QueuedBatch:
+    batch: pa.RecordBatch
+    bytes: int
+
+
+class _ByteBudget:
+    """A byte-weighted, oversized-item-aware budget shared by writer queues."""
+
+    def __init__(self, max_bytes: int) -> None:
+        self.max_bytes = max_bytes
+        self._bytes_in_flight = 0
+        self._condition = threading.Condition()
+
+    def acquire(self, item_bytes: int, timeout: float | None) -> None:
+        with self._condition:
+            fits = (
+                self._bytes_in_flight == 0
+                if item_bytes > self.max_bytes
+                else self._bytes_in_flight + item_bytes <= self.max_bytes
+            )
+            if not fits:
+                self._condition.wait(timeout)
+                raise queue_module.Full
+            self._bytes_in_flight += item_bytes
+
+    def release(self, released_bytes: int) -> None:
+        with self._condition:
+            self._bytes_in_flight -= released_bytes
+            self._condition.notify_all()
+
+
+class _ByteBoundedBatchQueue:
+    """Keep queued and Lance-consumed batches within one byte budget."""
+
+    def __init__(
+        self,
+        config: LanceIOConfig,
+        *,
+        budget: _ByteBudget | None = None,
+    ) -> None:
+        self.max_bytes = config.max_buffered_bytes - 2 * config.target_batch_bytes
+        self.maxsize = max(
+            1,
+            config.max_buffered_bytes // config.target_batch_bytes - 3,
+        )
+        self._budget = budget or _ByteBudget(self.max_bytes)
+        self._closed = False
+        self._state_lock = threading.Lock()
+        self._queue: queue_module.Queue[_QueuedBatch | object] = queue_module.Queue()
+
+    def put(
+        self,
+        item: pa.RecordBatch | object,
+        *,
+        timeout: float | None = None,
+    ) -> None:
+        if item is _QUEUE_CLOSED:
+            with self._state_lock:
+                if self._closed:
+                    raise queue_module.Full
+                self._queue.put(item)
+            return
+        assert isinstance(item, pa.RecordBatch)
+        item_bytes = item.nbytes
+        self._budget.acquire(item_bytes, timeout)
+        with self._state_lock:
+            if self._closed:
+                self._budget.release(item_bytes)
+                raise queue_module.Full
+            self._queue.put(_QueuedBatch(item, item_bytes))
+
+    def iter_batches(self):
+        previous_bytes = 0
+        try:
+            while True:
+                if previous_bytes:
+                    self._release(previous_bytes)
+                    previous_bytes = 0
+                item = self._queue.get()
+                if item is _QUEUE_CLOSED:
+                    return
+                assert isinstance(item, _QueuedBatch)
+                previous_bytes = item.bytes
+                yield item.batch
+        finally:
+            with self._state_lock:
+                self._closed = True
+                if previous_bytes:
+                    self._release(previous_bytes)
+                while True:
+                    try:
+                        queued = self._queue.get_nowait()
+                    except queue_module.Empty:
+                        break
+                    if isinstance(queued, _QueuedBatch):
+                        self._release(queued.bytes)
+
+    def _release(self, released_bytes: int) -> None:
+        self._budget.release(released_bytes)
+
+
+class _AddColumnsBatchCoordinator:
+    """Bound pending batches and transport bytes across one add-columns shard."""
+
+    def __init__(self, config: LanceIOConfig) -> None:
+        self.target_bytes = config.target_batch_bytes
+        self.byte_budget = _ByteBudget(
+            config.max_buffered_bytes - 2 * config.target_batch_bytes
+        )
+        self._writers: list[_StreamingAddColumnsWriter] = []
+
+    def register(self, writer: _StreamingAddColumnsWriter) -> None:
+        self._writers.append(writer)
+
+    def prepare(self, active_writer: _StreamingAddColumnsWriter, incoming: int) -> None:
+        while self._pending_bytes() + incoming > self.target_bytes:
+            candidate = next(
+                (
+                    writer
+                    for writer in self._writers
+                    if writer is not active_writer and writer._batcher.pending_bytes > 0
+                ),
+                None,
+            )
+            if candidate is None and active_writer._batcher.pending_bytes > 0:
+                candidate = active_writer
+            if candidate is None:
+                return
+            candidate._flush_buffered_batches()
+
+    def _pending_bytes(self) -> int:
+        return sum(writer._batcher.pending_bytes for writer in self._writers)
 
 
 def _import_lance() -> Any:
@@ -485,13 +743,15 @@ class _StreamingShardWriter:
         dataset_uri: str,
         schema: pa.Schema,
         mode: LanceWriteModeName,
+        io_config: LanceIOConfig,
     ) -> None:
+        _configure_lance_process(io_config)
         self.dataset_uri = dataset_uri
         self.schema = schema
         self.mode = mode
-        self.queue: queue_module.Queue[pa.RecordBatch | object] = queue_module.Queue(
-            maxsize=8
-        )
+        self.io_config = io_config
+        self._batcher = _ByteAwareBatcher(io_config.target_batch_bytes)
+        self.queue = _ByteBoundedBatchQueue(io_config)
         self.closed = False
         self.task_future = _LANCE_WRITER_POOL.submit(self._run)
         self._spool_path: str | None = None
@@ -505,11 +765,7 @@ class _StreamingShardWriter:
             self._spool_writer = pa.ipc.new_stream(self._spool_sink, self.schema)
 
     def _iter_batches(self):
-        while True:
-            item = self.queue.get()
-            if item is _QUEUE_CLOSED:
-                return
-            yield item
+        yield from self.queue.iter_batches()
 
     def _write_reader(self, reader: pa.RecordBatchReader) -> list[str]:
         lance = _import_lance()
@@ -548,14 +804,20 @@ class _StreamingShardWriter:
         if self.closed:
             raise RuntimeError("Cannot write to a closed Lance shard writer.")
         for batch in batches:
-            if self._spool_writer is not None:
-                self._spool_writer.write_batch(batch)
-            else:
-                self._put(batch)
+            for ready_batch in self._batcher.add(batch):
+                self._write_batch(ready_batch)
+
+    def _write_batch(self, batch: pa.RecordBatch) -> None:
+        if self._spool_writer is not None:
+            self._spool_writer.write_batch(batch)
+        else:
+            self._put(batch)
 
     def finish(self) -> list[str]:
         if not self.closed:
             self.closed = True
+            for batch in self._batcher.finish():
+                self._write_batch(batch)
             if self._spool_writer is None:
                 self._put(_QUEUE_CLOSED)
         if self._spool_writer is not None:
@@ -583,7 +845,10 @@ class _StreamingAddColumnsWriter:
         output: DataFolder,
         fill_missing: bool = False,
         fill: object | Mapping[str, object] = None,
+        io_config: LanceIOConfig = LanceIOConfig(),
+        batch_coordinator: _AddColumnsBatchCoordinator | None = None,
     ) -> None:
+        _configure_lance_process(io_config)
         self.fragment = fragment
         self.fragment_id = fragment_id
         self.num_rows = num_rows
@@ -591,13 +856,20 @@ class _StreamingAddColumnsWriter:
         self.output = output
         self.fill_missing = fill_missing
         self.fill = fill
+        self.io_config = io_config
+        self._batcher = _ByteAwareBatcher(io_config.target_batch_bytes)
+        self._batch_coordinator = batch_coordinator or _AddColumnsBatchCoordinator(
+            io_config
+        )
+        self._batch_coordinator.register(self)
         self.base_json = _json_dumps(fragment.metadata.to_json())
-        self.queue: queue_module.Queue[pa.RecordBatch | object] = queue_module.Queue(
-            maxsize=8
+        self.queue = _ByteBoundedBatchQueue(
+            io_config,
+            budget=self._batch_coordinator.byte_budget,
         )
         self.closed = False
         self.next_position = 0
-        self.pending: dict[int, tuple[int, pa.Table]] = {}
+        self.pending: dict[int, tuple[int, str]] = {}
         self.task_future = _LANCE_WRITER_POOL.submit(self._run)
         self._spool_path: str | None = None
         self._spool_sink: pa.OSFile | None = None
@@ -612,11 +884,7 @@ class _StreamingAddColumnsWriter:
             self._spool_writer = pa.ipc.new_stream(self._spool_sink, self.schema)
 
     def _iter_batches(self):
-        while True:
-            item = self.queue.get()
-            if item is _QUEUE_CLOSED:
-                return
-            yield item
+        yield from self.queue.iter_batches()
 
     def _merge_reader(self, reader: pa.RecordBatchReader) -> tuple[Any, Any]:
         return self.fragment.merge_columns(reader, reader_schema=self.schema)
@@ -634,6 +902,15 @@ class _StreamingAddColumnsWriter:
             raise RuntimeError("Lance add-columns writer failed") from error
 
     def _put_batch(self, batch: pa.RecordBatch) -> None:
+        self._batch_coordinator.prepare(self, batch.nbytes)
+        for ready_batch in self._batcher.add(batch):
+            self._write_batch(ready_batch)
+
+    def _flush_buffered_batches(self) -> None:
+        for batch in self._batcher.finish():
+            self._write_batch(batch)
+
+    def _write_batch(self, batch: pa.RecordBatch) -> None:
         if self._spool_writer is not None:
             self._spool_writer.write_batch(batch)
             return
@@ -647,10 +924,38 @@ class _StreamingAddColumnsWriter:
 
     def _emit_ready(self) -> None:
         while self.next_position in self.pending:
-            end, table = self.pending.pop(self.next_position)
-            for batch in table.to_batches():
-                self._put_batch(batch)
+            end, path = self.pending.pop(self.next_position)
+            try:
+                with pa.memory_map(path, "r") as source:
+                    for batch in pa.ipc.open_stream(source):
+                        self._put_batch(batch)
+            finally:
+                os.unlink(path)
             self.next_position = end
+
+    def _spool_pending_table(self, table: pa.Table) -> str:
+        tmp = tempfile.NamedTemporaryFile(
+            prefix="refiner-lance-columns-pending-",
+            delete=False,
+        )
+        path = tmp.name
+        tmp.close()
+        try:
+            with pa.OSFile(path, "wb") as sink:
+                with pa.ipc.new_stream(sink, table.schema) as writer:
+                    writer.write_table(table)
+        except Exception:
+            os.unlink(path)
+            raise
+        return path
+
+    def _cleanup_pending_spools(self) -> None:
+        for _, path in self.pending.values():
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+        self.pending.clear()
 
     def _emit_fill(self, end: int) -> None:
         while self.next_position < end:
@@ -719,17 +1024,24 @@ class _StreamingAddColumnsWriter:
                     f"Lance fragment {self.fragment_id} has invalid or duplicate "
                     "row positions"
                 )
-            self.pending[start] = (
-                end,
-                sorted_output.slice(run_start, index - run_start),
-            )
+            run_table = sorted_output.slice(run_start, index - run_start)
+            if start == self.next_position:
+                for batch in run_table.to_batches():
+                    self._put_batch(batch)
+                self.next_position = end
+                self._emit_ready()
+            else:
+                self.pending[start] = (
+                    end,
+                    self._spool_pending_table(run_table),
+                )
             run_start = index
-        self._emit_ready()
 
     def _close_input(self) -> None:
         if self.closed:
             return
         self.closed = True
+        self._flush_buffered_batches()
         if self._spool_writer is not None:
             assert self._spool_sink is not None
             self._spool_writer.close()
@@ -764,6 +1076,7 @@ class _StreamingAddColumnsWriter:
         complete = self.next_position == self.num_rows and not self.pending
         self._close_input()
         if not complete:
+            self._cleanup_pending_spools()
             if self._spool_path is None:
                 try:
                     result = self.task_future.result()
@@ -786,6 +1099,7 @@ class _StreamingAddColumnsWriter:
 
     def abort(self) -> None:
         self._close_input()
+        self._cleanup_pending_spools()
         if self._spool_path is not None:
             os.unlink(self._spool_path)
             return
@@ -807,6 +1121,7 @@ class LanceDatasetSink(BaseSink):
         source_uri: str | None = None,
         source_version: int | None = None,
         assets: AssetWriteConfig | None = None,
+        io: LanceIOConfig = LanceIOConfig(),
     ) -> None:
         mode, fill_missing, fill = _normalize_write_mode(mode)
         if mode == "add_columns" and not columns:
@@ -846,6 +1161,7 @@ class LanceDatasetSink(BaseSink):
         self.source_uri = source_uri
         self.source_version = source_version
         self.assets = assets
+        self.io = io
         if mode == "add_columns" and self.output.abs_path() != source_uri:
             raise ValueError("add_columns must write back to the loaded Lance dataset")
         if isinstance(assets, FileAssetConfig):
@@ -868,6 +1184,9 @@ class LanceDatasetSink(BaseSink):
         self._schema_by_shard: dict[str, pa.Schema] = {}
         self._add_columns_writers_by_shard: dict[
             str, dict[int, _StreamingAddColumnsWriter]
+        ] = {}
+        self._add_columns_coordinator_by_shard: dict[
+            str, _AddColumnsBatchCoordinator
         ] = {}
         self._add_columns_schema: pa.Schema | None = None
         self._planned_output_schema: pa.Schema | None = None
@@ -1004,6 +1323,10 @@ class LanceDatasetSink(BaseSink):
             [row_addresses, pa.scalar(_LANCE_ROW_ADDRESS_FRAGMENT_SHIFT, pa.uint64())],
         )
         writers = self._add_columns_writers_by_shard.setdefault(shard_id, {})
+        batch_coordinator = self._add_columns_coordinator_by_shard.setdefault(
+            shard_id,
+            _AddColumnsBatchCoordinator(self.io),
+        )
         unique_fragment_ids = pc.call_function("unique", [fragment_ids])
         for fragment_id_raw in unique_fragment_ids.to_pylist():
             fragment_id = int(fragment_id_raw)
@@ -1027,6 +1350,8 @@ class LanceDatasetSink(BaseSink):
                     output=self.output,
                     fill_missing=self.fill_missing,
                     fill=self.fill,
+                    io_config=self.io,
+                    batch_coordinator=batch_coordinator,
                 )
                 writers[fragment_id] = writer
             positions = pc.call_function(
@@ -1072,6 +1397,7 @@ class LanceDatasetSink(BaseSink):
                 dataset_uri=self._dataset_uri(),
                 schema=table.schema,
                 mode=self.mode,
+                io_config=self.io,
             )
             self._writers_by_shard[shard_id] = writer
         writer.put_batches(table.to_batches())
@@ -1149,6 +1475,7 @@ class LanceDatasetSink(BaseSink):
 
     def _complete_add_columns_shard(self, shard_id: str) -> None:
         writers = self._add_columns_writers_by_shard.pop(shard_id, None)
+        self._add_columns_coordinator_by_shard.pop(shard_id, None)
         if not writers:
             self._write_empty_sidecar(shard_id)
             return
@@ -1226,6 +1553,7 @@ class LanceDatasetSink(BaseSink):
                     if first_error is None:
                         first_error = err
         self._add_columns_writers_by_shard.clear()
+        self._add_columns_coordinator_by_shard.clear()
         if first_error is not None:
             raise first_error
 
@@ -1242,6 +1570,7 @@ class LanceDatasetSink(BaseSink):
             args["fill_missing"] = True
         if self.assets is not None:
             args["assets"] = asset_config_to_plan(self.assets)
+        args["io"] = self.io.to_plan()
         return ("write_lance_dataset", "writer", args)
 
     def build_reducer(self) -> BaseSink | None:
@@ -1253,6 +1582,7 @@ class LanceDatasetSink(BaseSink):
             columns=self.columns,
             fill_missing=self.fill_missing,
             fill=self.fill,
+            io=self.io,
         )
 
 
@@ -1267,6 +1597,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
         columns: Sequence[str] | None = None,
         fill_missing: bool = False,
         fill: object | Mapping[str, object] = None,
+        io: LanceIOConfig = LanceIOConfig(),
     ) -> None:
         _validate_write_mode(mode)
         self.output = DataFolder.resolve(output)
@@ -1277,6 +1608,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
         self.columns = tuple(columns) if columns is not None else None
         self.fill_missing = fill_missing
         self.fill = fill
+        self.io = io
         _validate_fill_mapping(fill, columns)
         self._managed_path_pattern = _compile_output_path_patterns(
             _METADATA_FILENAME_TEMPLATE
@@ -1305,6 +1637,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
             args["assets_subdir"] = self.assets_subdir
         if self.fill_missing:
             args["fill_missing"] = True
+        args["io"] = self.io.to_plan()
         return ("write_lance_dataset_commit", "writer", args)
 
     def write_shard_block(self, shard_id: str, block: Block) -> None:
@@ -1577,6 +1910,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
                     output=self.output,
                     fill_missing=True,
                     fill=self.fill,
+                    io_config=self.io,
                 )
                 updated_fragment, next_schema = active_writer.finish()
                 active_writer = None

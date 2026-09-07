@@ -43,6 +43,7 @@ from refiner.pipeline.sinks import (
     Create,
     JsonlSink,
     LanceDatasetSink,
+    LanceIOConfig,
     LanceSink,
     LanceWriteConfig,
     ParquetSink,
@@ -57,6 +58,8 @@ from refiner.pipeline.sources import (
     Hdf5Reader,
     JsonReader,
     LanceSource,
+    LimitedSource,
+    limit_source,
     McapReader,
     ParquetReader,
     TfdsReader,
@@ -112,6 +115,7 @@ class RefinerPipeline:
     source: BaseSource
     pipeline_steps: tuple[RefinerStep, ...]
     _compiled_segments: tuple[Segment, ...] | None
+    read_batch_rows: int | None
     max_block_rows: int | None
     max_vectorized_block_bytes: int | None
     sink: BaseSink | None
@@ -121,6 +125,7 @@ class RefinerPipeline:
         source: BaseSource,
         pipeline_steps: Sequence[RefinerStep] | None = None,
         *,
+        read_batch_rows: int | None = None,
         max_block_rows: int | None = None,
         max_vectorized_block_bytes: int | None = None,
         sink: BaseSink | None = None,
@@ -130,19 +135,27 @@ class RefinerPipeline:
         Args:
             source: Source that plans shards and emits source rows or blocks.
             pipeline_steps: Ordered transform steps applied after the source.
+            read_batch_rows: Optional source-scanner batch size override. When
+                omitted, cooperative readers inherit ``max_block_rows``.
             max_block_rows: Optional maximum rows emitted in one execution block.
             max_vectorized_block_bytes: Optional soft byte cap for vectorized
                 Arrow blocks. Python row blocks are controlled by
                 ``max_block_rows`` instead.
             sink: Optional writer sink attached by a ``write_*`` method.
         """
+        if read_batch_rows is not None and read_batch_rows <= 0:
+            raise ValueError("read_batch_rows must be > 0 when provided")
         if max_block_rows is not None and max_block_rows <= 0:
             raise ValueError("max_block_rows must be > 0 when provided")
         if max_vectorized_block_bytes is not None and max_vectorized_block_bytes <= 0:
             raise ValueError("max_vectorized_block_bytes must be > 0 when provided")
-        self.source = source
+        source_batch_rows = (
+            read_batch_rows if read_batch_rows is not None else max_block_rows
+        )
+        self.source = source.with_read_batch_rows(source_batch_rows)
         self.pipeline_steps = tuple(pipeline_steps) if pipeline_steps else ()
         self._compiled_segments = None
+        self.read_batch_rows = read_batch_rows
         self.max_block_rows = max_block_rows
         self.max_vectorized_block_bytes = max_vectorized_block_bytes
         self.sink = sink
@@ -157,6 +170,7 @@ class RefinerPipeline:
         return self.__class__(
             self.source,
             self.pipeline_steps + (step,),
+            read_batch_rows=self.read_batch_rows,
             max_block_rows=self.max_block_rows,
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             sink=self.sink,
@@ -190,6 +204,7 @@ class RefinerPipeline:
             return self.__class__(
                 self.source,
                 self.pipeline_steps[:-1] + (merged,),
+                read_batch_rows=self.read_batch_rows,
                 max_block_rows=self.max_block_rows,
                 max_vectorized_block_bytes=self.max_vectorized_block_bytes,
                 sink=self.sink,
@@ -205,6 +220,7 @@ class RefinerPipeline:
         return self.__class__(
             self.source,
             self.pipeline_steps,
+            read_batch_rows=self.read_batch_rows,
             max_block_rows=max_block_rows,
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             sink=self.sink,
@@ -223,6 +239,7 @@ class RefinerPipeline:
         return self.__class__(
             self.source,
             self.pipeline_steps,
+            read_batch_rows=self.read_batch_rows,
             max_block_rows=self.max_block_rows,
             max_vectorized_block_bytes=max_vectorized_block_bytes,
             sink=self.sink,
@@ -238,6 +255,7 @@ class RefinerPipeline:
         return self.__class__(
             self.source,
             self.pipeline_steps,
+            read_batch_rows=self.read_batch_rows,
             max_block_rows=self.max_block_rows,
             max_vectorized_block_bytes=self.max_vectorized_block_bytes,
             sink=sink,
@@ -762,6 +780,7 @@ class RefinerPipeline:
         mode: LanceWriteConfig = Create(),
         columns: Sequence[str] | None = None,
         assets: AssetWriteConfig | None = None,
+        io: LanceIOConfig = LanceIOConfig(),
     ) -> "RefinerPipeline":
         """Attach a distributed Lance dataset writer or schema-evolution sink.
 
@@ -770,19 +789,30 @@ class RefinerPipeline:
         omitted rows receive the configured scalar or per-column fill value.
         The legacy ``mode="add_columns"`` remains strict and requires exactly
         one output for every source row.
+
+        Input blocks are coalesced into byte-sized Arrow batches before Lance
+        writes them. This keeps multipart uploads busy even when upstream emits
+        small blocks. Pass ``LanceIOConfig`` to control multipart concurrency,
+        part size, batch size, and the per-shard logical memory bound.
         """
         source_uri: str | None = None
         source_version: int | None = None
         is_add_columns = mode == "add_columns" or isinstance(mode, AddColumns)
         if is_add_columns:
-            if not isinstance(self.source, LanceSource):
+            source = self.source
+            if isinstance(source, LimitedSource):
+                is_limited = True
+                source = source.source
+            else:
+                is_limited = False
+            if not isinstance(source, LanceSource):
                 raise ValueError(
                     "add_columns requires a pipeline created by load_lance"
                 )
-            if self.source.max_rows is not None and not isinstance(mode, AddColumns):
+            if is_limited and not isinstance(mode, AddColumns):
                 raise ValueError("add_columns does not support a limited Lance source")
-            source_uri = self.source.dataset_uri
-            source_version = self.source.version
+            source_uri = source.dataset_uri
+            source_version = source.version
         return self.with_sink(
             LanceDatasetSink(
                 output=output,
@@ -791,6 +821,7 @@ class RefinerPipeline:
                 source_uri=source_uri,
                 source_version=source_version,
                 assets=assets,
+                io=io,
             )
         )
 
@@ -1010,6 +1041,27 @@ class RefinerPipeline:
 
 
 ## readers
+def _validated_max_rows(max_rows: int | None) -> int | None:
+    if max_rows is not None and max_rows < 0:
+        raise ValueError("max_rows must be >= 0")
+    return int(max_rows) if max_rows is not None else None
+
+
+def _bounded_reader_window(value: int, max_rows: int | None) -> int:
+    if max_rows is None:
+        return value
+    return min(value, max(1, int(max_rows)))
+
+
+def _bounded_optional_reader_window(
+    value: int | None, max_rows: int | None
+) -> int | None:
+    if max_rows is None:
+        return value
+    limit = max(1, int(max_rows))
+    return limit if value is None else min(value, limit)
+
+
 def read_csv(
     inputs: DataFileSetLike,
     *,
@@ -1018,6 +1070,7 @@ def read_csv(
     recursive: bool = False,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
+    max_rows: int | None = None,
     file_path_column: str | None = "file_path",
     multiline_rows: bool = False,
     encoding: str = "utf-8",
@@ -1028,20 +1081,25 @@ def read_csv(
 
     `num_shards` and `target_shard_bytes` affect input shard planning on the
     reader side. `parse_use_threads` controls Arrow's intra-shard CSV parsing.
+    `max_rows` caps emitted source rows before pipeline transforms.
     """
+    max_rows = _validated_max_rows(max_rows)
     return RefinerPipeline(
-        source=CsvReader(
-            inputs,
-            fs=fs,
-            storage_options=storage_options,
-            recursive=recursive,
-            target_shard_bytes=target_shard_bytes,
-            num_shards=num_shards,
-            file_path_column=file_path_column,
-            multiline_rows=multiline_rows,
-            encoding=encoding,
-            parse_use_threads=parse_use_threads,
-            dtypes=dtypes,
+        source=limit_source(
+            CsvReader(
+                inputs,
+                fs=fs,
+                storage_options=storage_options,
+                recursive=recursive,
+                target_shard_bytes=target_shard_bytes,
+                num_shards=num_shards,
+                file_path_column=file_path_column,
+                multiline_rows=multiline_rows,
+                encoding=encoding,
+                parse_use_threads=parse_use_threads,
+                dtypes=dtypes,
+            ),
+            max_rows,
         )
     )
 
@@ -1054,6 +1112,7 @@ def read_json(
     recursive: bool = False,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
+    max_rows: int | None = None,
     file_path_column: str | None = "file_path",
     parse_use_threads: bool = False,
     dtypes: DTypeMapping | None = None,
@@ -1063,20 +1122,25 @@ def read_json(
 
     `num_shards` and `target_shard_bytes` affect input shard planning on the
     reader side. `parse_use_threads` controls Arrow's intra-shard JSON parsing
-    when `lines=True`.
+    when `lines=True`. `max_rows` caps emitted source rows before pipeline
+    transforms.
     """
+    max_rows = _validated_max_rows(max_rows)
     return RefinerPipeline(
-        source=JsonReader(
-            inputs,
-            fs=fs,
-            storage_options=storage_options,
-            recursive=recursive,
-            target_shard_bytes=target_shard_bytes,
-            num_shards=num_shards,
-            file_path_column=file_path_column,
-            parse_use_threads=parse_use_threads,
-            dtypes=dtypes,
-            lines=lines,
+        source=limit_source(
+            JsonReader(
+                inputs,
+                fs=fs,
+                storage_options=storage_options,
+                recursive=recursive,
+                target_shard_bytes=target_shard_bytes,
+                num_shards=num_shards,
+                file_path_column=file_path_column,
+                parse_use_threads=parse_use_threads,
+                dtypes=dtypes,
+                lines=lines,
+            ),
+            max_rows,
         )
     )
 
@@ -1089,6 +1153,7 @@ def read_jsonl(
     recursive: bool = False,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
+    max_rows: int | None = None,
     file_path_column: str | None = "file_path",
     parse_use_threads: bool = False,
     dtypes: DTypeMapping | None = None,
@@ -1096,7 +1161,7 @@ def read_jsonl(
     """Create a pipeline with a JSON Lines reader source.
 
     This is equivalent to ``read_json(..., lines=True)`` and exposes the same
-    sharding, parsing, file path, and dtype options.
+    sharding, parsing, file path, dtype, and `max_rows` options.
     """
     return read_json(
         inputs,
@@ -1105,6 +1170,7 @@ def read_jsonl(
         recursive=recursive,
         target_shard_bytes=target_shard_bytes,
         num_shards=num_shards,
+        max_rows=max_rows,
         file_path_column=file_path_column,
         parse_use_threads=parse_use_threads,
         dtypes=dtypes,
@@ -1120,6 +1186,7 @@ def read_files(
     recursive: bool = False,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
+    max_rows: int | None = None,
     file_path_column: str | None = "file_path",
     content_column: str | None = None,
     size_column: str | None = "size",
@@ -1142,6 +1209,7 @@ def read_files(
         recursive: Whether directory inputs are listed recursively.
         target_shard_bytes: Approximate target bytes per planned shard.
         num_shards: Optional requested number of planned shards.
+        max_rows: Maximum emitted source rows for a bounded quick test.
         file_path_column: Path output column, or `None` to omit it.
         content_column: Raw bytes output column, or `None` for path-only rows.
         size_column: File size output column, or `None` to omit it.
@@ -1149,20 +1217,24 @@ def read_files(
         max_in_flight: Concurrent content reads per shard when reading bytes.
         dtypes: Optional dtype overrides exposed through the source schema.
     """
+    max_rows = _validated_max_rows(max_rows)
     return RefinerPipeline(
-        source=FilesReader(
-            inputs,
-            fs=fs,
-            storage_options=storage_options,
-            recursive=recursive,
-            target_shard_bytes=target_shard_bytes,
-            num_shards=num_shards,
-            file_path_column=file_path_column,
-            content_column=content_column,
-            size_column=size_column,
-            decode_fn=decode_fn,
-            max_in_flight=max_in_flight,
-            dtypes=dtypes,
+        source=limit_source(
+            FilesReader(
+                inputs,
+                fs=fs,
+                storage_options=storage_options,
+                recursive=recursive,
+                target_shard_bytes=target_shard_bytes,
+                num_shards=num_shards,
+                file_path_column=file_path_column,
+                content_column=content_column,
+                size_column=size_column,
+                decode_fn=decode_fn,
+                max_in_flight=_bounded_reader_window(max_in_flight, max_rows),
+                dtypes=dtypes,
+            ),
+            max_rows,
         )
     )
 
@@ -1175,6 +1247,7 @@ def read_videos(
     recursive: bool = False,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
+    max_rows: int | None = None,
     file_path_column: str | None = "video_path",
     size_column: str | None = "size",
     dtypes: DTypeMapping | None = None,
@@ -1191,6 +1264,7 @@ def read_videos(
         recursive: Whether directory inputs are listed recursively.
         target_shard_bytes: Approximate target bytes per planned shard.
         num_shards: Optional requested number of planned shards.
+        max_rows: Maximum emitted video rows for a bounded quick test.
         file_path_column: Path output column, or `None` to omit it.
         size_column: File size output column, or `None` to omit it.
         dtypes: Optional dtype overrides exposed through the source schema.
@@ -1205,6 +1279,7 @@ def read_videos(
         recursive=recursive,
         target_shard_bytes=target_shard_bytes,
         num_shards=num_shards,
+        max_rows=max_rows,
         file_path_column=file_path_column,
         size_column=size_column,
         dtypes=video_dtypes,
@@ -1219,6 +1294,7 @@ def read_hdf5(
     recursive: bool = False,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
+    max_rows: int | None = None,
     groups: str | Sequence[str] | None = None,
     datasets: PathSelection | None = None,
     attrs: PathSelection | None = None,
@@ -1241,6 +1317,7 @@ def read_hdf5(
         target_shard_bytes: Target shard size used when planning file shards.
         num_shards: Requested number of planned shards. HDF5 files are atomic,
             so readers may emit fewer shards when there are fewer files.
+        max_rows: Maximum emitted HDF5 group rows for a bounded quick test.
         groups: HDF5 group selector to emit as rows. Accepts `"/"`, one glob
             string, or a sequence of exact group paths. Defaults to the root group.
         datasets: Dataset selections relative to each matched group. Accepts a
@@ -1261,22 +1338,26 @@ def read_hdf5(
             reads against object stores at the cost of downloading each file once.
         dtypes: Optional dtype overrides for output columns.
     """
+    max_rows = _validated_max_rows(max_rows)
     return RefinerPipeline(
-        source=Hdf5Reader(
-            inputs,
-            fs=fs,
-            storage_options=storage_options,
-            recursive=recursive,
-            target_shard_bytes=target_shard_bytes,
-            num_shards=num_shards,
-            groups=groups,
-            datasets=datasets,
-            attrs=attrs,
-            file_path_column=file_path_column,
-            group_path_column=group_path_column,
-            missing_policy=missing_policy,
-            cache_remote_files=cache_remote_files,
-            dtypes=dtypes,
+        source=limit_source(
+            Hdf5Reader(
+                inputs,
+                fs=fs,
+                storage_options=storage_options,
+                recursive=recursive,
+                target_shard_bytes=target_shard_bytes,
+                num_shards=num_shards,
+                groups=groups,
+                datasets=datasets,
+                attrs=attrs,
+                file_path_column=file_path_column,
+                group_path_column=group_path_column,
+                missing_policy=missing_policy,
+                cache_remote_files=cache_remote_files,
+                dtypes=dtypes,
+            ),
+            max_rows,
         )
     )
 
@@ -1291,6 +1372,7 @@ def read_zarr(
     leading_axis_row_size: int = 1,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
+    max_rows: int | None = None,
     row_batch_size: int | None = None,
     index_column: str | None = "index",
     file_path_column: str | None = "file_path",
@@ -1310,21 +1392,28 @@ def read_zarr(
 
     Args:
         input: Zarr group path, glob, or sequence of Zarr group paths.
+        max_rows: Maximum emitted logical rows for a bounded quick test.
     """
+    max_rows = _validated_max_rows(max_rows)
     return RefinerPipeline(
-        source=ZarrReader(
-            input,
-            arrays=arrays,
-            attrs=attrs,
-            row_ends=row_ends,
-            split_leading_axis=split_leading_axis,
-            leading_axis_row_size=leading_axis_row_size,
-            target_shard_bytes=target_shard_bytes,
-            num_shards=num_shards,
-            row_batch_size=row_batch_size,
-            index_column=index_column,
-            file_path_column=file_path_column,
-            dtypes=dtypes,
+        source=limit_source(
+            ZarrReader(
+                input,
+                arrays=arrays,
+                attrs=attrs,
+                row_ends=row_ends,
+                split_leading_axis=split_leading_axis,
+                leading_axis_row_size=leading_axis_row_size,
+                target_shard_bytes=target_shard_bytes,
+                num_shards=num_shards,
+                row_batch_size=_bounded_optional_reader_window(
+                    row_batch_size, max_rows
+                ),
+                index_column=index_column,
+                file_path_column=file_path_column,
+                dtypes=dtypes,
+            ),
+            max_rows,
         )
     )
 
@@ -1337,6 +1426,7 @@ def read_mcap(
     recursive: bool = False,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
+    max_rows: int | None = None,
     file_path_column: str | None = "file_path",
     episode_splitting: str | Mapping[str, Any] = "single",
     stream_episodes: bool = False,
@@ -1364,6 +1454,7 @@ def read_mcap(
         target_shard_bytes: Target shard size used when planning files.
         num_shards: Requested number of planned shards. MCAP files are atomic,
             so readers may emit fewer shards when there are fewer files.
+        max_rows: Maximum emitted episode rows for a bounded quick test.
         file_path_column: Output column for the source file path, or `None` to
             omit it.
         episode_splitting: `"single"`, `{"time_gap_s": seconds}`, or
@@ -1387,24 +1478,29 @@ def read_mcap(
         fps: Positive explicit video/frame rate. If omitted, aligned reads infer
             it from `sync_primary` timestamps when possible.
     """
+    max_rows = _validated_max_rows(max_rows)
     return RefinerPipeline(
-        source=McapReader(
-            inputs,
-            fs=fs,
-            storage_options=storage_options,
-            recursive=recursive,
-            target_shard_bytes=target_shard_bytes,
-            num_shards=num_shards,
-            file_path_column=file_path_column,
-            episode_splitting=episode_splitting,
-            stream_episodes=stream_episodes,
-            assume_log_time_order=assume_log_time_order,
-            fields=fields,
-            videos=videos,
-            sync_primary=sync_primary,
-            sync_method=sync_method,
-            include_skew=include_skew,
-            fps=fps,
+        source=limit_source(
+            McapReader(
+                inputs,
+                fs=fs,
+                storage_options=storage_options,
+                recursive=recursive,
+                target_shard_bytes=target_shard_bytes,
+                num_shards=num_shards,
+                file_path_column=file_path_column,
+                episode_splitting=episode_splitting,
+                stream_episodes=stream_episodes
+                or (max_rows is not None and episode_splitting != "single"),
+                assume_log_time_order=assume_log_time_order,
+                fields=fields,
+                videos=videos,
+                sync_primary=sync_primary,
+                sync_method=sync_method,
+                include_skew=include_skew,
+                fps=fps,
+            ),
+            max_rows,
         )
     )
 
@@ -1417,7 +1513,8 @@ def read_parquet(
     recursive: bool = False,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
-    arrow_batch_size: int = 65536,
+    max_rows: int | None = None,
+    read_batch_rows: int | None = None,
     columns_to_read: Sequence[str] | None = None,
     filter: Expr | None = None,
     split_row_groups: bool = False,
@@ -1429,23 +1526,30 @@ def read_parquet(
     `num_shards` and `target_shard_bytes` affect input shard planning on the
     reader side. Parquet always plans byte/file spans first and resolves them
     to row groups or row ranges at read time. `filter` uses Arrow expressions
-    for row-group pruning plus row-level filtering during reads.
+    for row-group pruning plus row-level filtering during reads. `max_rows`
+    applies after that reader-level filter and before pipeline transforms.
+    ``read_batch_rows`` overrides the Parquet scanner batch size independently
+    of downstream execution block sizing.
     """
+    max_rows = _validated_max_rows(max_rows)
     return RefinerPipeline(
-        source=ParquetReader(
-            inputs,
-            fs=fs,
-            storage_options=storage_options,
-            recursive=recursive,
-            target_shard_bytes=target_shard_bytes,
-            num_shards=num_shards,
-            arrow_batch_size=arrow_batch_size,
-            columns_to_read=columns_to_read,
-            filter=filter,
-            split_row_groups=split_row_groups,
-            file_path_column=file_path_column,
-            dtypes=dtypes,
-        )
+        source=limit_source(
+            ParquetReader(
+                inputs,
+                fs=fs,
+                storage_options=storage_options,
+                recursive=recursive,
+                target_shard_bytes=target_shard_bytes,
+                num_shards=num_shards,
+                columns_to_read=columns_to_read,
+                filter=filter,
+                split_row_groups=split_row_groups,
+                file_path_column=file_path_column,
+                dtypes=dtypes,
+            ),
+            max_rows,
+        ),
+        read_batch_rows=read_batch_rows,
     )
 
 
@@ -1454,25 +1558,30 @@ def load_lance(
     *,
     version: int | str | None = None,
     columns: Sequence[str] | None = None,
-    batch_size: int = 65_536,
     num_shards: int | None = None,
     max_rows: int | None = None,
+    read_batch_rows: int | None = None,
 ) -> RefinerPipeline:
     """Create a pipeline over one immutable version of a Lance dataset.
 
     ``num_shards`` groups whole, adjacent Lance fragments into the requested
     number of scheduling shards without splitting individual fragments.
     ``max_rows`` reads at most that many leading rows from the pinned version.
+    ``read_batch_rows`` overrides Lance's scanner batch size independently of
+    downstream execution block sizing.
     """
+    max_rows = _validated_max_rows(max_rows)
     return RefinerPipeline(
-        source=LanceSource(
-            input,
-            version=version,
-            columns=columns,
-            batch_size=batch_size,
-            num_shards=num_shards,
-            max_rows=max_rows,
-        )
+        source=limit_source(
+            LanceSource(
+                input,
+                version=version,
+                columns=columns,
+                num_shards=num_shards,
+            ),
+            max_rows,
+        ),
+        read_batch_rows=read_batch_rows,
     )
 
 
@@ -1485,6 +1594,7 @@ def read_hf_dataset(
     timeout: float = 30.0,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
+    max_rows: int | None = None,
     arrow_batch_size: int = 65536,
     columns_to_read: Sequence[str] | None = None,
     filter: Expr | None = None,
@@ -1497,21 +1607,26 @@ def read_hf_dataset(
         repo: Hugging Face dataset repository ID.
         config: Dataset config name. If omitted, Hugging Face datasets resolves it.
         split: Dataset split to read.
+        max_rows: Maximum emitted rows for a bounded quick test.
     """
+    max_rows = _validated_max_rows(max_rows)
     return RefinerPipeline(
-        source=HFDatasetReader(
-            repo,
-            config=config,
-            split=split,
-            dtypes=dtypes,
-            timeout=timeout,
-            target_shard_bytes=target_shard_bytes,
-            num_shards=num_shards,
-            arrow_batch_size=arrow_batch_size,
-            columns_to_read=columns_to_read,
-            filter=filter,
-            split_row_groups=split_row_groups,
-            file_path_column=file_path_column,
+        source=limit_source(
+            HFDatasetReader(
+                repo,
+                config=config,
+                split=split,
+                dtypes=dtypes,
+                timeout=timeout,
+                target_shard_bytes=target_shard_bytes,
+                num_shards=num_shards,
+                arrow_batch_size=_bounded_reader_window(arrow_batch_size, max_rows),
+                columns_to_read=columns_to_read,
+                filter=filter,
+                split_row_groups=split_row_groups,
+                file_path_column=file_path_column,
+            ),
+            max_rows,
         )
     )
 
@@ -1523,6 +1638,7 @@ def read_lerobot(
     storage_options: Mapping[str, Any] | None = None,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
+    max_rows: int | None = None,
     split_row_groups: bool = True,
     skip_malformed_rows: bool = False,
 ) -> RefinerPipeline:
@@ -1534,17 +1650,22 @@ def read_lerobot(
     refined to row ranges inside an episode parquet file. Media loading stays
     unchanged. By default, malformed episode rows whose declared frame count
     does not match loaded frames raise an error; `skip_malformed_rows=True`
-    skips them with a warning and metric.
+    skips them with a warning and metric. `max_rows` caps emitted episodes.
     """
+    max_rows = _validated_max_rows(max_rows)
     return RefinerPipeline(
-        source=LeRobotEpisodeReader(
-            inputs,
-            fs=fs,
-            storage_options=storage_options,
-            target_shard_bytes=target_shard_bytes,
-            num_shards=num_shards,
-            split_row_groups=split_row_groups,
-            skip_malformed_rows=skip_malformed_rows,
+        source=limit_source(
+            LeRobotEpisodeReader(
+                inputs,
+                fs=fs,
+                storage_options=storage_options,
+                target_shard_bytes=target_shard_bytes,
+                num_shards=num_shards,
+                arrow_batch_size=_bounded_reader_window(65536, max_rows),
+                split_row_groups=split_row_groups,
+                skip_malformed_rows=skip_malformed_rows,
+            ),
+            max_rows,
         )
     )
 
@@ -1558,6 +1679,7 @@ def read_tfrecords(
     recursive: bool = False,
     target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
     num_shards: int | None = None,
+    max_rows: int | None = None,
     batch_size: int = 1024,
     compression: str | None = "auto",
     num_parallel_calls: int | None = None,
@@ -1579,26 +1701,37 @@ def read_tfrecords(
         recursive: Whether directory inputs should be expanded recursively.
         target_shard_bytes: Target shard size used when grouping whole files.
         num_shards: Optional requested number of planned file shards.
+        max_rows: Maximum emitted records for a bounded quick test.
         batch_size: Number of serialized examples parsed per batch.
         compression: `None`, `"auto"`, `"gzip"`, or `"zlib"`.
         num_parallel_calls: Optional TensorFlow map parallelism.
         prefetch: Optional TensorFlow prefetch depth.
         file_path_column: Source file path column, or `None` to omit it.
     """
+    max_rows = _validated_max_rows(max_rows)
     return RefinerPipeline(
-        source=TfrecordReader(
-            inputs,
-            features=features,
-            fs=fs,
-            storage_options=storage_options,
-            recursive=recursive,
-            target_shard_bytes=target_shard_bytes,
-            num_shards=num_shards,
-            batch_size=batch_size,
-            compression=compression,
-            num_parallel_calls=num_parallel_calls,
-            prefetch=prefetch,
-            file_path_column=file_path_column,
+        source=limit_source(
+            TfrecordReader(
+                inputs,
+                features=features,
+                fs=fs,
+                storage_options=storage_options,
+                recursive=recursive,
+                target_shard_bytes=target_shard_bytes,
+                num_shards=num_shards,
+                batch_size=_bounded_reader_window(batch_size, max_rows),
+                compression=compression,
+                num_parallel_calls=(
+                    1
+                    if max_rows is not None and num_parallel_calls is not None
+                    else num_parallel_calls
+                ),
+                prefetch=(
+                    1 if max_rows is not None and prefetch is not None else prefetch
+                ),
+                file_path_column=file_path_column,
+            ),
+            max_rows,
         )
     )
 
@@ -1613,6 +1746,7 @@ def read_tfds(
     batch_size: int = 1024,
     examples_per_shard: int = 10_000,
     num_shards: int | None = None,
+    max_rows: int | None = None,
     shuffle_files: bool = False,
     read_config: Any | None = None,
     decoders: Mapping[str, Any] | None = None,
@@ -1636,6 +1770,7 @@ def read_tfds(
         examples_per_shard: Target examples per shard when `num_shards` is
             omitted.
         num_shards: Optional requested number of row-range shards.
+        max_rows: Maximum emitted examples for a bounded quick test.
         shuffle_files: Passed to `builder.as_dataset`.
         read_config: Optional TFDS read config.
         decoders: Optional TFDS feature decoders.
@@ -1643,22 +1778,26 @@ def read_tfds(
         videos: Optional video-name to nested dataset frame path mapping.
         fps: Frame rate used for `videos`.
     """
+    max_rows = _validated_max_rows(max_rows)
     return RefinerPipeline(
-        source=TfdsReader(
-            input,
-            config=config,
-            split=split,
-            data_dir=data_dir,
-            download=download,
-            batch_size=batch_size,
-            examples_per_shard=examples_per_shard,
-            num_shards=num_shards,
-            shuffle_files=shuffle_files,
-            read_config=read_config,
-            decoders=decoders,
-            as_supervised=as_supervised,
-            videos=videos,
-            fps=fps,
+        source=limit_source(
+            TfdsReader(
+                input,
+                config=config,
+                split=split,
+                data_dir=data_dir,
+                download=download,
+                batch_size=_bounded_reader_window(batch_size, max_rows),
+                examples_per_shard=examples_per_shard,
+                num_shards=num_shards,
+                shuffle_files=shuffle_files,
+                read_config=read_config,
+                decoders=decoders,
+                as_supervised=as_supervised,
+                videos=videos,
+                fps=fps,
+            ),
+            max_rows,
         )
     )
 
