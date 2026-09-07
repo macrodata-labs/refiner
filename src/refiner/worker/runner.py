@@ -94,6 +94,7 @@ class Worker:
         sink = self.pipeline.sink or NullSink()
         sink_schema = self.pipeline.output_schema()
         sink.set_input_schema(sink_schema)
+        sink.set_input_dtype_columns(self.pipeline._output_dtype_columns())
         sink_step_index = (
             self.pipeline._next_step_index() if self.pipeline.sink is not None else None
         )
@@ -331,7 +332,9 @@ class Worker:
                     self.user_metrics_emitter.force_flush_logs()
                     failed_inflight = _fail_inflight_shards(lifecycle_error)
                     failed += failed_inflight
-                    if isinstance(e, AsyncStepTeardownError) and failed_inflight == 0:
+                    if failed_inflight == 0 and (
+                        claimed == 0 or isinstance(e, AsyncStepTeardownError)
+                    ):
                         raise
                 else:
                     _heartbeat_once()

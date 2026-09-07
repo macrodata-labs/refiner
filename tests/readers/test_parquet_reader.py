@@ -1,9 +1,12 @@
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
+from refiner import read_parquet
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline.data import datatype
 from refiner.pipeline.expressions import col
+from refiner.pipeline.sources.limited import LimitedSource
 from refiner.pipeline.sources.readers import ParquetReader
 from refiner.worker.context import set_active_run_context
 from refiner.worker.metrics.emitter import UserMetricsEmitter
@@ -87,6 +90,100 @@ def _rows_from_shard_units(units):
             yield from unit.to_rows()
         else:
             yield unit
+
+
+def test_max_block_rows_bounds_parquet_scanner_batches(tmp_path):
+    p = _write_parquet(tmp_path)
+
+    default_pipeline = read_parquet(p, file_path_column=None)
+    bounded_pipeline = default_pipeline.with_max_block_rows(3)
+    restored_pipeline = bounded_pipeline.with_max_block_rows(None)
+    overridden_pipeline = read_parquet(
+        p,
+        file_path_column=None,
+        read_batch_rows=7,
+    ).with_max_block_rows(3)
+    enlarged_pipeline = read_parquet(
+        p,
+        file_path_column=None,
+        read_batch_rows=131_072,
+    )
+
+    assert isinstance(default_pipeline.source, ParquetReader)
+    assert isinstance(bounded_pipeline.source, ParquetReader)
+    assert isinstance(restored_pipeline.source, ParquetReader)
+    assert isinstance(overridden_pipeline.source, ParquetReader)
+    assert isinstance(enlarged_pipeline.source, ParquetReader)
+    assert default_pipeline.source.arrow_batch_size == 65_536
+    assert bounded_pipeline.source.arrow_batch_size == 3
+    assert restored_pipeline.source.arrow_batch_size == 65_536
+    assert overridden_pipeline.source.arrow_batch_size == 7
+    assert enlarged_pipeline.source.arrow_batch_size == 131_072
+    assert overridden_pipeline.read_batch_rows == 7
+    assert overridden_pipeline.max_block_rows == 3
+
+    units = list(bounded_pipeline.source.read_shard(bounded_pipeline.list_shards()[0]))
+    tabular_units = []
+    for unit in units:
+        assert isinstance(unit, Tabular)
+        assert unit.num_rows <= 3
+        tabular_units.append(unit)
+    assert sum(unit.num_rows for unit in tabular_units) == 50
+
+    overridden_units = list(
+        overridden_pipeline.source.read_shard(overridden_pipeline.list_shards()[0])
+    )
+    assert all(
+        isinstance(unit, Tabular) and unit.num_rows <= 7 for unit in overridden_units
+    )
+
+
+def test_parquet_reader_copy_does_not_share_open_file_caches(tmp_path):
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    first_path = _write_parquet(first_dir)
+    second_path = _write_parquet(second_dir)
+    pipeline = read_parquet(
+        [first_path, second_path],
+        file_path_column=None,
+        target_shard_bytes=1,
+    )
+    source = pipeline.source
+    assert isinstance(source, ParquetReader)
+    shards = source.list_shards()
+
+    list(source.read_shard(shards[0]))
+    original_handle = source._open_fh
+    assert original_handle is not None
+
+    derived = pipeline.with_max_block_rows(3)
+    assert isinstance(derived.source, ParquetReader)
+    assert derived.source._open_fh is None
+    assert derived.source._open_pf is None
+    assert derived.source._open_fragment is None
+
+    list(derived.source.read_shard(shards[-1]))
+    assert not original_handle.closed
+    assert list(source.read_shard(shards[0]))
+
+
+def test_parquet_large_max_rows_preserves_default_scanner_batch(tmp_path):
+    path = _write_parquet(tmp_path)
+
+    pipeline = read_parquet(path, max_rows=1_000_000)
+
+    assert isinstance(pipeline.source, LimitedSource)
+    assert isinstance(pipeline.source.source, ParquetReader)
+    assert pipeline.source.source.arrow_batch_size == 65_536
+
+
+def test_read_parquet_rejects_invalid_read_batch_rows(tmp_path):
+    p = _write_parquet(tmp_path)
+
+    with pytest.raises(ValueError, match="read_batch_rows must be > 0"):
+        read_parquet(p, read_batch_rows=0)
 
 
 def test_parquet_reads_all_rows(tmp_path):

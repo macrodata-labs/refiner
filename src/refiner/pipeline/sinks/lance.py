@@ -9,7 +9,9 @@ import posixpath
 import queue as queue_module
 import re
 import tempfile
-from collections.abc import Sequence
+import threading
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
 import pyarrow as pa
@@ -49,7 +51,38 @@ from refiner.worker.context import (
 from refiner.worker.lifecycle import sort_finalized_workers
 from refiner.worker.metrics.api import log_throughput
 
-LanceWriteMode = Literal["create", "append", "overwrite", "add_columns"]
+LanceWriteModeName = Literal["create", "append", "overwrite", "add_columns"]
+
+
+@dataclass(frozen=True, slots=True)
+class Create:
+    """Create a Lance dataset and fail if the destination already exists."""
+
+
+@dataclass(frozen=True, slots=True)
+class Append:
+    """Append rows to an existing Lance dataset."""
+
+
+@dataclass(frozen=True, slots=True)
+class Overwrite:
+    """Replace a Lance dataset's logical contents with the pipeline output."""
+
+
+@dataclass(frozen=True, slots=True)
+class AddColumns:
+    """Add columns while filling rows omitted by a bounded or filtered source.
+
+    ``fill`` may be one Arrow-compatible scalar used for every output column, or
+    a mapping from output-column name to scalar. Mapping entries omitted by the
+    caller default to null.
+    """
+
+    fill: object | Mapping[str, object] = None
+
+
+LanceWriteMode = Create | Append | Overwrite | AddColumns
+LanceWriteConfig = LanceWriteMode | LanceWriteModeName
 _METADATA_FILENAME_TEMPLATE = (
     "_refiner_lance_fragments/{job_id}/{shard_id}__w{worker_id}.jsonl"
 )
@@ -62,6 +95,264 @@ _LANCE_WRITER_POOL = concurrent.futures.ThreadPoolExecutor(
 )
 _LANCE_ROW_ADDRESS_FRAGMENT_SHIFT = 32
 _LANCE_ROW_ADDRESS_POSITION_MASK = (1 << _LANCE_ROW_ADDRESS_FRAGMENT_SHIFT) - 1
+_ADD_COLUMNS_FILL_BATCH_ROWS = 65_536
+_MIN_MULTIPART_PART_BYTES = 5 * 1024 * 1024
+_MAX_MULTIPART_PART_BYTES = 5 * 1024 * 1024 * 1024
+_LANCE_PROCESS_CONFIG_LOCK = threading.Lock()
+_LANCE_PROCESS_UPLOAD_CONFIG: tuple[int, int] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LanceIOConfig:
+    """Performance and memory controls for Lance dataset writers."""
+
+    upload_concurrency: int = 32
+    multipart_part_bytes: int = 5 * 1024 * 1024
+    target_batch_bytes: int = 256 * 1024 * 1024
+    max_buffered_bytes: int = 1024 * 1024 * 1024
+
+    def __post_init__(self) -> None:
+        if self.upload_concurrency <= 0:
+            raise ValueError("upload_concurrency must be greater than zero")
+        if not (
+            _MIN_MULTIPART_PART_BYTES
+            <= self.multipart_part_bytes
+            <= _MAX_MULTIPART_PART_BYTES
+        ):
+            raise ValueError("multipart_part_bytes must be between 5 MiB and 5 GiB")
+        if self.target_batch_bytes <= 0:
+            raise ValueError("target_batch_bytes must be greater than zero")
+        required_batch_bytes = self.upload_concurrency * self.multipart_part_bytes
+        if self.target_batch_bytes < required_batch_bytes:
+            raise ValueError(
+                "target_batch_bytes must be at least upload_concurrency times "
+                "multipart_part_bytes"
+            )
+        if self.max_buffered_bytes < 4 * self.target_batch_bytes:
+            raise ValueError(
+                "max_buffered_bytes must be at least four times target_batch_bytes"
+            )
+
+    def to_plan(self) -> dict[str, int]:
+        return {
+            "upload_concurrency": self.upload_concurrency,
+            "multipart_part_bytes": self.multipart_part_bytes,
+            "target_batch_bytes": self.target_batch_bytes,
+            "max_buffered_bytes": self.max_buffered_bytes,
+        }
+
+
+def _configure_lance_process(config: LanceIOConfig) -> None:
+    """Set Lance's process-global writer controls before its first upload."""
+    global _LANCE_PROCESS_UPLOAD_CONFIG
+    requested = (config.upload_concurrency, config.multipart_part_bytes)
+    with _LANCE_PROCESS_CONFIG_LOCK:
+        if _LANCE_PROCESS_UPLOAD_CONFIG is not None:
+            if _LANCE_PROCESS_UPLOAD_CONFIG != requested:
+                raise RuntimeError(
+                    "This worker process already initialized Lance with "
+                    f"upload_concurrency={_LANCE_PROCESS_UPLOAD_CONFIG[0]} and "
+                    f"multipart_part_bytes={_LANCE_PROCESS_UPLOAD_CONFIG[1]}; "
+                    "start a fresh worker to use different Lance I/O settings"
+                )
+            return
+        os.environ["LANCE_UPLOAD_CONCURRENCY"] = str(config.upload_concurrency)
+        os.environ["LANCE_INITIAL_UPLOAD_SIZE"] = str(config.multipart_part_bytes)
+        _LANCE_PROCESS_UPLOAD_CONFIG = requested
+        logger.info(
+            "Configured Lance uploads concurrency={} part_bytes={}",
+            config.upload_concurrency,
+            config.multipart_part_bytes,
+        )
+
+
+def _split_batch_by_bytes(
+    batch: pa.RecordBatch,
+    target_bytes: int,
+) -> Iterator[pa.RecordBatch]:
+    """Split a batch until each multi-row slice fits the target byte size."""
+    if batch.num_rows <= 1 or batch.nbytes <= target_bytes:
+        yield batch
+        return
+    split_at = max(1, min(batch.num_rows - 1, batch.num_rows // 2))
+    yield from _split_batch_by_bytes(batch.slice(0, split_at), target_bytes)
+    yield from _split_batch_by_bytes(
+        batch.slice(split_at, batch.num_rows - split_at), target_bytes
+    )
+
+
+class _ByteAwareBatcher:
+    """Coalesce ordered Arrow batches without exceeding a target byte size."""
+
+    def __init__(self, target_bytes: int) -> None:
+        self.target_bytes = target_bytes
+        self._pending: list[pa.RecordBatch] = []
+        self._pending_bytes = 0
+
+    def add(self, batch: pa.RecordBatch) -> Iterator[pa.RecordBatch]:
+        for split_batch in _split_batch_by_bytes(batch, self.target_bytes):
+            if (
+                self._pending
+                and self._pending_bytes + split_batch.nbytes > self.target_bytes
+            ):
+                yield self.flush()
+            self._pending.append(split_batch)
+            self._pending_bytes += split_batch.nbytes
+            if self._pending_bytes >= self.target_bytes:
+                yield self.flush()
+
+    def flush(self) -> pa.RecordBatch:
+        if not self._pending:
+            raise RuntimeError("Cannot flush an empty Lance batch buffer")
+        if len(self._pending) == 1:
+            batch = self._pending[0]
+        else:
+            batch = pa.concat_batches(self._pending)
+        self._pending = []
+        self._pending_bytes = 0
+        return batch
+
+    def finish(self) -> list[pa.RecordBatch]:
+        return [] if not self._pending else [self.flush()]
+
+    @property
+    def pending_bytes(self) -> int:
+        return self._pending_bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _QueuedBatch:
+    batch: pa.RecordBatch
+    bytes: int
+
+
+class _ByteBudget:
+    """A byte-weighted, oversized-item-aware budget shared by writer queues."""
+
+    def __init__(self, max_bytes: int) -> None:
+        self.max_bytes = max_bytes
+        self._bytes_in_flight = 0
+        self._condition = threading.Condition()
+
+    def acquire(self, item_bytes: int, timeout: float | None) -> None:
+        with self._condition:
+            fits = (
+                self._bytes_in_flight == 0
+                if item_bytes > self.max_bytes
+                else self._bytes_in_flight + item_bytes <= self.max_bytes
+            )
+            if not fits:
+                self._condition.wait(timeout)
+                raise queue_module.Full
+            self._bytes_in_flight += item_bytes
+
+    def release(self, released_bytes: int) -> None:
+        with self._condition:
+            self._bytes_in_flight -= released_bytes
+            self._condition.notify_all()
+
+
+class _ByteBoundedBatchQueue:
+    """Keep queued and Lance-consumed batches within one byte budget."""
+
+    def __init__(
+        self,
+        config: LanceIOConfig,
+        *,
+        budget: _ByteBudget | None = None,
+    ) -> None:
+        self.max_bytes = config.max_buffered_bytes - 2 * config.target_batch_bytes
+        self.maxsize = max(
+            1,
+            config.max_buffered_bytes // config.target_batch_bytes - 3,
+        )
+        self._budget = budget or _ByteBudget(self.max_bytes)
+        self._closed = False
+        self._state_lock = threading.Lock()
+        self._queue: queue_module.Queue[_QueuedBatch | object] = queue_module.Queue()
+
+    def put(
+        self,
+        item: pa.RecordBatch | object,
+        *,
+        timeout: float | None = None,
+    ) -> None:
+        if item is _QUEUE_CLOSED:
+            with self._state_lock:
+                if self._closed:
+                    raise queue_module.Full
+                self._queue.put(item)
+            return
+        assert isinstance(item, pa.RecordBatch)
+        item_bytes = item.nbytes
+        self._budget.acquire(item_bytes, timeout)
+        with self._state_lock:
+            if self._closed:
+                self._budget.release(item_bytes)
+                raise queue_module.Full
+            self._queue.put(_QueuedBatch(item, item_bytes))
+
+    def iter_batches(self):
+        previous_bytes = 0
+        try:
+            while True:
+                if previous_bytes:
+                    self._release(previous_bytes)
+                    previous_bytes = 0
+                item = self._queue.get()
+                if item is _QUEUE_CLOSED:
+                    return
+                assert isinstance(item, _QueuedBatch)
+                previous_bytes = item.bytes
+                yield item.batch
+        finally:
+            with self._state_lock:
+                self._closed = True
+                if previous_bytes:
+                    self._release(previous_bytes)
+                while True:
+                    try:
+                        queued = self._queue.get_nowait()
+                    except queue_module.Empty:
+                        break
+                    if isinstance(queued, _QueuedBatch):
+                        self._release(queued.bytes)
+
+    def _release(self, released_bytes: int) -> None:
+        self._budget.release(released_bytes)
+
+
+class _AddColumnsBatchCoordinator:
+    """Bound pending batches and transport bytes across one add-columns shard."""
+
+    def __init__(self, config: LanceIOConfig) -> None:
+        self.target_bytes = config.target_batch_bytes
+        self.byte_budget = _ByteBudget(
+            config.max_buffered_bytes - 2 * config.target_batch_bytes
+        )
+        self._writers: list[_StreamingAddColumnsWriter] = []
+
+    def register(self, writer: _StreamingAddColumnsWriter) -> None:
+        self._writers.append(writer)
+
+    def prepare(self, active_writer: _StreamingAddColumnsWriter, incoming: int) -> None:
+        while self._pending_bytes() + incoming > self.target_bytes:
+            candidate = next(
+                (
+                    writer
+                    for writer in self._writers
+                    if writer is not active_writer and writer._batcher.pending_bytes > 0
+                ),
+                None,
+            )
+            if candidate is None and active_writer._batcher.pending_bytes > 0:
+                candidate = active_writer
+            if candidate is None:
+                return
+            candidate._flush_buffered_batches()
+
+    def _pending_bytes(self) -> int:
+        return sum(writer._batcher.pending_bytes for writer in self._writers)
 
 
 def _import_lance() -> Any:
@@ -97,28 +388,98 @@ def _schema_difference(expected: pa.Schema, actual: pa.Schema) -> str:
     return "; ".join(details) or "unknown schema difference"
 
 
-def _cast_to_planned_schema(table: pa.Table, schema: pa.Schema) -> pa.Table:
-    """Normalize fields known to the planner without forbidding row-map drops.
+def _cast_to_planned_schema(
+    table: pa.Table,
+    schema: pa.Schema,
+    *,
+    declared_columns: frozenset[str] = frozenset(),
+) -> pa.Table:
+    """Normalize known fields without overriding dynamic row-map changes.
 
-    Python row maps may use ``row.drop(...)``; their dynamic removal is not
-    visible to the static pipeline schema.  Every surviving field that *is*
-    known to the planner is nevertheless cast to its declared field, which
-    makes dtypes and metadata deterministic across workers.
+    Dynamic row maps may drop fields or replace their values with another type;
+    neither change is visible to the static pipeline schema. Fields whose
+    runtime types match the plan still receive deterministic planned metadata.
     """
     fields: list[pa.Field] = []
     for actual_field in table.schema:
         planned_index = schema.get_field_index(actual_field.name)
         fields.append(
-            actual_field if planned_index < 0 else schema.field(planned_index)
+            actual_field
+            if planned_index < 0
+            or (
+                actual_field.name not in declared_columns
+                and actual_field.type != schema.field(planned_index).type
+            )
+            else schema.field(planned_index)
         )
     target = pa.schema(fields, metadata=schema.metadata)
     return table.cast(target, safe=True)
 
 
 def _validate_write_mode(mode: str) -> None:
-    valid_modes = get_args(LanceWriteMode)
+    valid_modes = get_args(LanceWriteModeName)
     if mode not in valid_modes:
         raise ValueError("mode must be one of: " + ", ".join(sorted(valid_modes)))
+
+
+def _normalize_write_mode(
+    mode: LanceWriteConfig,
+) -> tuple[LanceWriteModeName, bool, object | Mapping[str, object]]:
+    if isinstance(mode, Create):
+        return "create", False, None
+    if isinstance(mode, Append):
+        return "append", False, None
+    if isinstance(mode, Overwrite):
+        return "overwrite", False, None
+    if isinstance(mode, AddColumns):
+        return "add_columns", True, mode.fill
+    _validate_write_mode(mode)
+    return mode, False, None
+
+
+def _validate_fill_mapping(
+    fill: object | Mapping[str, object], columns: Sequence[str] | None
+) -> None:
+    if not isinstance(fill, Mapping):
+        return
+    if not all(isinstance(name, str) for name in fill):
+        raise TypeError("AddColumns fill mapping keys must be column names")
+    unexpected = sorted(set(fill).difference(columns or ()))
+    if unexpected:
+        raise ValueError(
+            "AddColumns fill contains unknown columns: " + ", ".join(unexpected)
+        )
+
+
+def _filled_table(
+    schema: pa.Schema,
+    num_rows: int,
+    fill: object | Mapping[str, object],
+) -> pa.Table:
+    arrays: list[pa.Array] = []
+    for field in schema:
+        value = fill.get(field.name) if isinstance(fill, Mapping) else fill
+        if value is None:
+            arrays.append(pa.nulls(num_rows, type=field.type))
+        else:
+            try:
+                arrays.append(pa.repeat(pa.scalar(value, type=field.type), num_rows))
+            except (pa.ArrowException, TypeError, ValueError) as err:
+                raise ValueError(
+                    f"Cannot use AddColumns fill value for column {field.name!r}"
+                ) from err
+    return pa.Table.from_arrays(arrays, schema=schema)
+
+
+def _fill_fingerprint(
+    schema: pa.Schema,
+    fill: object | Mapping[str, object],
+) -> str:
+    table = _filled_table(schema, 1, fill)
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, schema) as writer:
+        writer.write_table(table)
+    return hashlib.sha256(sink.getvalue().to_pybytes()).hexdigest()
 
 
 def _asset_value_field(field: pa.Field) -> pa.Field | None:
@@ -381,14 +742,16 @@ class _StreamingShardWriter:
         *,
         dataset_uri: str,
         schema: pa.Schema,
-        mode: LanceWriteMode,
+        mode: LanceWriteModeName,
+        io_config: LanceIOConfig,
     ) -> None:
+        _configure_lance_process(io_config)
         self.dataset_uri = dataset_uri
         self.schema = schema
         self.mode = mode
-        self.queue: queue_module.Queue[pa.RecordBatch | object] = queue_module.Queue(
-            maxsize=8
-        )
+        self.io_config = io_config
+        self._batcher = _ByteAwareBatcher(io_config.target_batch_bytes)
+        self.queue = _ByteBoundedBatchQueue(io_config)
         self.closed = False
         self.task_future = _LANCE_WRITER_POOL.submit(self._run)
         self._spool_path: str | None = None
@@ -402,11 +765,7 @@ class _StreamingShardWriter:
             self._spool_writer = pa.ipc.new_stream(self._spool_sink, self.schema)
 
     def _iter_batches(self):
-        while True:
-            item = self.queue.get()
-            if item is _QUEUE_CLOSED:
-                return
-            yield item
+        yield from self.queue.iter_batches()
 
     def _write_reader(self, reader: pa.RecordBatchReader) -> list[str]:
         lance = _import_lance()
@@ -445,14 +804,20 @@ class _StreamingShardWriter:
         if self.closed:
             raise RuntimeError("Cannot write to a closed Lance shard writer.")
         for batch in batches:
-            if self._spool_writer is not None:
-                self._spool_writer.write_batch(batch)
-            else:
-                self._put(batch)
+            for ready_batch in self._batcher.add(batch):
+                self._write_batch(ready_batch)
+
+    def _write_batch(self, batch: pa.RecordBatch) -> None:
+        if self._spool_writer is not None:
+            self._spool_writer.write_batch(batch)
+        else:
+            self._put(batch)
 
     def finish(self) -> list[str]:
         if not self.closed:
             self.closed = True
+            for batch in self._batcher.finish():
+                self._write_batch(batch)
             if self._spool_writer is None:
                 self._put(_QUEUE_CLOSED)
         if self._spool_writer is not None:
@@ -478,19 +843,33 @@ class _StreamingAddColumnsWriter:
         num_rows: int,
         schema: pa.Schema,
         output: DataFolder,
+        fill_missing: bool = False,
+        fill: object | Mapping[str, object] = None,
+        io_config: LanceIOConfig = LanceIOConfig(),
+        batch_coordinator: _AddColumnsBatchCoordinator | None = None,
     ) -> None:
+        _configure_lance_process(io_config)
         self.fragment = fragment
         self.fragment_id = fragment_id
         self.num_rows = num_rows
         self.schema = schema
         self.output = output
+        self.fill_missing = fill_missing
+        self.fill = fill
+        self.io_config = io_config
+        self._batcher = _ByteAwareBatcher(io_config.target_batch_bytes)
+        self._batch_coordinator = batch_coordinator or _AddColumnsBatchCoordinator(
+            io_config
+        )
+        self._batch_coordinator.register(self)
         self.base_json = _json_dumps(fragment.metadata.to_json())
-        self.queue: queue_module.Queue[pa.RecordBatch | object] = queue_module.Queue(
-            maxsize=8
+        self.queue = _ByteBoundedBatchQueue(
+            io_config,
+            budget=self._batch_coordinator.byte_budget,
         )
         self.closed = False
         self.next_position = 0
-        self.pending: dict[int, tuple[int, pa.Table]] = {}
+        self.pending: dict[int, tuple[int, str]] = {}
         self.task_future = _LANCE_WRITER_POOL.submit(self._run)
         self._spool_path: str | None = None
         self._spool_sink: pa.OSFile | None = None
@@ -505,11 +884,7 @@ class _StreamingAddColumnsWriter:
             self._spool_writer = pa.ipc.new_stream(self._spool_sink, self.schema)
 
     def _iter_batches(self):
-        while True:
-            item = self.queue.get()
-            if item is _QUEUE_CLOSED:
-                return
-            yield item
+        yield from self.queue.iter_batches()
 
     def _merge_reader(self, reader: pa.RecordBatchReader) -> tuple[Any, Any]:
         return self.fragment.merge_columns(reader, reader_schema=self.schema)
@@ -527,6 +902,15 @@ class _StreamingAddColumnsWriter:
             raise RuntimeError("Lance add-columns writer failed") from error
 
     def _put_batch(self, batch: pa.RecordBatch) -> None:
+        self._batch_coordinator.prepare(self, batch.nbytes)
+        for ready_batch in self._batcher.add(batch):
+            self._write_batch(ready_batch)
+
+    def _flush_buffered_batches(self) -> None:
+        for batch in self._batcher.finish():
+            self._write_batch(batch)
+
+    def _write_batch(self, batch: pa.RecordBatch) -> None:
         if self._spool_writer is not None:
             self._spool_writer.write_batch(batch)
             return
@@ -540,10 +924,70 @@ class _StreamingAddColumnsWriter:
 
     def _emit_ready(self) -> None:
         while self.next_position in self.pending:
-            end, table = self.pending.pop(self.next_position)
+            end, path = self.pending.pop(self.next_position)
+            try:
+                with pa.memory_map(path, "r") as source:
+                    for batch in pa.ipc.open_stream(source):
+                        self._put_batch(batch)
+            finally:
+                os.unlink(path)
+            self.next_position = end
+
+    def _spool_pending_table(self, table: pa.Table) -> str:
+        tmp = tempfile.NamedTemporaryFile(
+            prefix="refiner-lance-columns-pending-",
+            delete=False,
+        )
+        path = tmp.name
+        tmp.close()
+        try:
+            with pa.OSFile(path, "wb") as sink:
+                with pa.ipc.new_stream(sink, table.schema) as writer:
+                    writer.write_table(table)
+        except Exception:
+            os.unlink(path)
+            raise
+        return path
+
+    def _cleanup_pending_spools(self) -> None:
+        for _, path in self.pending.values():
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+        self.pending.clear()
+
+    def _emit_fill(self, end: int) -> None:
+        while self.next_position < end:
+            batch_end = min(end, self.next_position + _ADD_COLUMNS_FILL_BATCH_ROWS)
+            table = _filled_table(
+                self.schema,
+                batch_end - self.next_position,
+                self.fill,
+            )
             for batch in table.to_batches():
                 self._put_batch(batch)
-            self.next_position = end
+            self.next_position = batch_end
+
+    def _fill_missing_positions(self) -> None:
+        while self.next_position < self.num_rows:
+            next_pending = min(self.pending, default=self.num_rows)
+            if next_pending < self.next_position:
+                raise ValueError(
+                    f"Lance fragment {self.fragment_id} has invalid or duplicate "
+                    "row positions"
+                )
+            if next_pending > self.next_position:
+                self._emit_fill(next_pending)
+            if self.next_position == self.num_rows:
+                break
+            previous_position = self.next_position
+            self._emit_ready()
+            if self.next_position == previous_position:
+                raise ValueError(
+                    f"Lance fragment {self.fragment_id} could not fill missing "
+                    "row positions"
+                )
 
     def put(self, positions: pa.ChunkedArray, output: pa.Table) -> None:
         if self.closed:
@@ -580,17 +1024,24 @@ class _StreamingAddColumnsWriter:
                     f"Lance fragment {self.fragment_id} has invalid or duplicate "
                     "row positions"
                 )
-            self.pending[start] = (
-                end,
-                sorted_output.slice(run_start, index - run_start),
-            )
+            run_table = sorted_output.slice(run_start, index - run_start)
+            if start == self.next_position:
+                for batch in run_table.to_batches():
+                    self._put_batch(batch)
+                self.next_position = end
+                self._emit_ready()
+            else:
+                self.pending[start] = (
+                    end,
+                    self._spool_pending_table(run_table),
+                )
             run_start = index
-        self._emit_ready()
 
     def _close_input(self) -> None:
         if self.closed:
             return
         self.closed = True
+        self._flush_buffered_batches()
         if self._spool_writer is not None:
             assert self._spool_sink is not None
             self._spool_writer.close()
@@ -620,9 +1071,12 @@ class _StreamingAddColumnsWriter:
         )
 
     def finish(self) -> tuple[Any, Any]:
+        if self.fill_missing:
+            self._fill_missing_positions()
         complete = self.next_position == self.num_rows and not self.pending
         self._close_input()
         if not complete:
+            self._cleanup_pending_spools()
             if self._spool_path is None:
                 try:
                     result = self.task_future.result()
@@ -645,6 +1099,7 @@ class _StreamingAddColumnsWriter:
 
     def abort(self) -> None:
         self._close_input()
+        self._cleanup_pending_spools()
         if self._spool_path is not None:
             os.unlink(self._spool_path)
             return
@@ -661,13 +1116,14 @@ class LanceDatasetSink(BaseSink):
         self,
         output: DataFolderLike,
         *,
-        mode: LanceWriteMode = "create",
+        mode: LanceWriteConfig = Create(),
         columns: Sequence[str] | None = None,
         source_uri: str | None = None,
         source_version: int | None = None,
         assets: AssetWriteConfig | None = None,
+        io: LanceIOConfig = LanceIOConfig(),
     ) -> None:
-        _validate_write_mode(mode)
+        mode, fill_missing, fill = _normalize_write_mode(mode)
         if mode == "add_columns" and not columns:
             raise ValueError("add_columns requires at least one output column")
         if columns is not None and len(set(columns)) != len(columns):
@@ -680,6 +1136,7 @@ class LanceDatasetSink(BaseSink):
             raise ValueError("columns is only supported with mode='add_columns'")
         if mode == "add_columns" and (source_uri is None or source_version is None):
             raise ValueError("add_columns requires a version-pinned Lance source")
+        _validate_fill_mapping(fill, columns)
         if (
             mode == "add_columns"
             and assets is not None
@@ -698,10 +1155,13 @@ class LanceDatasetSink(BaseSink):
         if source_uri is not None:
             validate_lance_uri(source_uri)
         self.mode = mode
+        self.fill_missing = fill_missing
+        self.fill = fill
         self.columns = tuple(columns) if columns is not None else None
         self.source_uri = source_uri
         self.source_version = source_version
         self.assets = assets
+        self.io = io
         if mode == "add_columns" and self.output.abs_path() != source_uri:
             raise ValueError("add_columns must write back to the loaded Lance dataset")
         if isinstance(assets, FileAssetConfig):
@@ -725,8 +1185,12 @@ class LanceDatasetSink(BaseSink):
         self._add_columns_writers_by_shard: dict[
             str, dict[int, _StreamingAddColumnsWriter]
         ] = {}
+        self._add_columns_coordinator_by_shard: dict[
+            str, _AddColumnsBatchCoordinator
+        ] = {}
         self._add_columns_schema: pa.Schema | None = None
         self._planned_output_schema: pa.Schema | None = None
+        self._declared_output_columns: frozenset[str] = frozenset()
         self._existing_schema: pa.Schema | None = None
         self._existing_version: int | None = None
         self._source_dataset_cache: Any | None = None
@@ -816,6 +1280,9 @@ class LanceDatasetSink(BaseSink):
                 [schema.field(column) for column in self.columns]
             )
 
+    def set_input_dtype_columns(self, columns: frozenset[str]) -> None:
+        self._declared_output_columns = columns
+
     def _write_add_columns_block(self, shard_id: str, block: Block) -> None:
         if not isinstance(block, Tabular) and not block:
             return
@@ -856,6 +1323,10 @@ class LanceDatasetSink(BaseSink):
             [row_addresses, pa.scalar(_LANCE_ROW_ADDRESS_FRAGMENT_SHIFT, pa.uint64())],
         )
         writers = self._add_columns_writers_by_shard.setdefault(shard_id, {})
+        batch_coordinator = self._add_columns_coordinator_by_shard.setdefault(
+            shard_id,
+            _AddColumnsBatchCoordinator(self.io),
+        )
         unique_fragment_ids = pc.call_function("unique", [fragment_ids])
         for fragment_id_raw in unique_fragment_ids.to_pylist():
             fragment_id = int(fragment_id_raw)
@@ -877,6 +1348,10 @@ class LanceDatasetSink(BaseSink):
                     num_rows=int(fragment.physical_rows),
                     schema=output_schema,
                     output=self.output,
+                    fill_missing=self.fill_missing,
+                    fill=self.fill,
+                    io_config=self.io,
+                    batch_coordinator=batch_coordinator,
                 )
                 writers[fragment_id] = writer
             positions = pc.call_function(
@@ -901,7 +1376,11 @@ class LanceDatasetSink(BaseSink):
         if self._assets is not None:
             table = self._assets.rewrite_table(shard_id, table)
         if self._planned_output_schema is not None:
-            table = _cast_to_planned_schema(table, self._planned_output_schema)
+            table = _cast_to_planned_schema(
+                table,
+                self._planned_output_schema,
+                declared_columns=self._declared_output_columns,
+            )
         if self.mode == "append":
             existing_schema = self._load_existing_schema()
             _validate_append_asset_layout(table.schema, existing_schema)
@@ -918,6 +1397,7 @@ class LanceDatasetSink(BaseSink):
                 dataset_uri=self._dataset_uri(),
                 schema=table.schema,
                 mode=self.mode,
+                io_config=self.io,
             )
             self._writers_by_shard[shard_id] = writer
         writer.put_batches(table.to_batches())
@@ -958,6 +1438,8 @@ class LanceDatasetSink(BaseSink):
             payload["source_version"] = self._existing_version
         elif self.mode == "add_columns":
             payload["source_version"] = self.source_version
+            if self._add_columns_schema is not None:
+                payload["output_schema"] = _schema_to_base64(self._add_columns_schema)
         self._write_sidecar(shard_id, payload)
 
     def on_shard_complete(self, shard_id: str) -> None:
@@ -993,6 +1475,7 @@ class LanceDatasetSink(BaseSink):
 
     def _complete_add_columns_shard(self, shard_id: str) -> None:
         writers = self._add_columns_writers_by_shard.pop(shard_id, None)
+        self._add_columns_coordinator_by_shard.pop(shard_id, None)
         if not writers:
             self._write_empty_sidecar(shard_id)
             return
@@ -1033,6 +1516,7 @@ class LanceDatasetSink(BaseSink):
             raise
         assert merged_schema is not None
         assert lance_schema_payload is not None
+        assert self._add_columns_schema is not None
         payload = {
             "schema": _schema_to_base64(merged_schema.to_pyarrow()),
             "lance_schema": lance_schema_payload,
@@ -1040,6 +1524,7 @@ class LanceDatasetSink(BaseSink):
             "created_files": sorted(created_files),
             "source_version": self.source_version,
             "source_fragment_ids": sorted(writers),
+            "output_schema": _schema_to_base64(self._add_columns_schema),
         }
         self._write_sidecar(
             shard_id,
@@ -1068,6 +1553,7 @@ class LanceDatasetSink(BaseSink):
                     if first_error is None:
                         first_error = err
         self._add_columns_writers_by_shard.clear()
+        self._add_columns_coordinator_by_shard.clear()
         if first_error is not None:
             raise first_error
 
@@ -1080,8 +1566,11 @@ class LanceDatasetSink(BaseSink):
             args["columns"] = list(self.columns)
         if self.source_version is not None:
             args["source_version"] = self.source_version
+        if self.fill_missing:
+            args["fill_missing"] = True
         if self.assets is not None:
             args["assets"] = asset_config_to_plan(self.assets)
+        args["io"] = self.io.to_plan()
         return ("write_lance_dataset", "writer", args)
 
     def build_reducer(self) -> BaseSink | None:
@@ -1090,6 +1579,10 @@ class LanceDatasetSink(BaseSink):
             mode=self.mode,
             source_version=self.source_version,
             assets_subdir=self.assets.subdir if self.assets is not None else None,
+            columns=self.columns,
+            fill_missing=self.fill_missing,
+            fill=self.fill,
+            io=self.io,
         )
 
 
@@ -1098,9 +1591,13 @@ class LanceDatasetCommitReducerSink(BaseSink):
         self,
         output: DataFolderLike,
         *,
-        mode: LanceWriteMode,
+        mode: LanceWriteModeName,
         source_version: int | None = None,
         assets_subdir: str | None = None,
+        columns: Sequence[str] | None = None,
+        fill_missing: bool = False,
+        fill: object | Mapping[str, object] = None,
+        io: LanceIOConfig = LanceIOConfig(),
     ) -> None:
         _validate_write_mode(mode)
         self.output = DataFolder.resolve(output)
@@ -1108,6 +1605,11 @@ class LanceDatasetCommitReducerSink(BaseSink):
         self.mode = mode
         self.source_version = source_version
         self.assets_subdir = assets_subdir
+        self.columns = tuple(columns) if columns is not None else None
+        self.fill_missing = fill_missing
+        self.fill = fill
+        self.io = io
+        _validate_fill_mapping(fill, columns)
         self._managed_path_pattern = _compile_output_path_patterns(
             _METADATA_FILENAME_TEMPLATE
         )[-1]
@@ -1133,6 +1635,9 @@ class LanceDatasetCommitReducerSink(BaseSink):
             args["source_version"] = self.source_version
         if self.assets_subdir is not None:
             args["assets_subdir"] = self.assets_subdir
+        if self.fill_missing:
+            args["fill_missing"] = True
+        args["io"] = self.io.to_plan()
         return ("write_lance_dataset_commit", "writer", args)
 
     def write_shard_block(self, shard_id: str, block: Block) -> None:
@@ -1155,6 +1660,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
         fragments: Sequence[str],
         source_versions: set[int],
         lance_schema_payload: dict[str, object] | None,
+        fill_fingerprint: str | None = None,
     ) -> str:
         payload = {
             "mode": self.mode,
@@ -1162,6 +1668,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
             "fragments": sorted(fragments),
             "source_versions": sorted(source_versions),
             "lance_schema": lance_schema_payload,
+            "fill_fingerprint": fill_fingerprint,
         }
         digest = hashlib.sha256(_json_dumps(payload).encode("utf-8")).hexdigest()
         return f"refiner:{digest}"
@@ -1206,6 +1713,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
         int | None,
         list[int],
         dict[str, object] | None,
+        pa.Schema | None,
     ]:
         with self.output.open(rel_path, mode="rt", encoding="utf-8") as f:
             payload = json.load(f)
@@ -1229,10 +1737,16 @@ class LanceDatasetCommitReducerSink(BaseSink):
         lance_schema_raw = (
             payload.get("lance_schema") if isinstance(payload, dict) else None
         )
+        output_schema_raw = (
+            payload.get("output_schema") if isinstance(payload, dict) else None
+        )
         if (
             not isinstance(empty_raw, bool)
             or not isinstance(fragment_raw, list)
             or not all(isinstance(fragment, str) for fragment in fragment_raw)
+            or (
+                output_schema_raw is not None and not isinstance(output_schema_raw, str)
+            )
         ):
             raise ValueError(f"Invalid Lance metadata payload: {rel_path}")
         if not isinstance(created_raw, list):
@@ -1256,6 +1770,9 @@ class LanceDatasetCommitReducerSink(BaseSink):
             int(source_version_raw) if source_version_raw is not None else None,
             [int(fragment_id) for fragment_id in source_fragments_raw],
             lance_schema_raw if isinstance(lance_schema_raw, dict) else None,
+            _schema_from_base64(output_schema_raw)
+            if isinstance(output_schema_raw, str)
+            else None,
         )
 
     def _load_existing_dataset(self, lance: Any) -> Any | None:
@@ -1350,6 +1867,87 @@ class LanceDatasetCommitReducerSink(BaseSink):
                 + ", ".join(str(fragment_id) for fragment_id in unexpected)
             )
 
+    def _fill_add_columns_fragments(
+        self,
+        lance: Any,
+        source_fragment_ids: set[int],
+        output_schema: pa.Schema | None,
+        lance_schema: Any | None,
+    ) -> tuple[list[str], list[str], pa.Schema | None, Any | None]:
+        if not self.fill_missing:
+            return [], [], None, lance_schema
+        if self.mode != "add_columns" or self.source_version is None:
+            raise ValueError("AddColumns(fill=...) requires an add_columns source")
+        if output_schema is None:
+            raise ValueError("AddColumns(fill=...) could not determine output schema")
+        if self.columns is None:
+            raise ValueError("AddColumns(fill=...) requires output columns")
+
+        source = lance.dataset(self._dataset_uri(), version=self.source_version)
+        missing_fragments = [
+            fragment
+            for fragment in source.get_fragments()
+            if int(fragment.count_rows()) > 0
+            and int(fragment.fragment_id) not in source_fragment_ids
+        ]
+        fragment_json: list[str] = []
+        created_files: list[str] = []
+        merged_schema: pa.Schema | None = None
+        active_writer: _StreamingAddColumnsWriter | None = None
+        try:
+            for fragment in missing_fragments:
+                fragment_id = int(fragment.fragment_id)
+                if int(fragment.num_deletions) > 0:
+                    raise ValueError(
+                        f"Lance fragment {fragment_id} has deletions; add_columns "
+                        "does not yet support deletion-bearing fragments"
+                    )
+                active_writer = _StreamingAddColumnsWriter(
+                    fragment=fragment,
+                    fragment_id=fragment_id,
+                    num_rows=int(fragment.physical_rows),
+                    schema=output_schema,
+                    output=self.output,
+                    fill_missing=True,
+                    fill=self.fill,
+                    io_config=self.io,
+                )
+                updated_fragment, next_schema = active_writer.finish()
+                active_writer = None
+                updated_json = _json_dumps(updated_fragment.to_json())
+                base_json = _json_dumps(fragment.metadata.to_json())
+                next_created_files = sorted(
+                    set(_fragment_data_paths(updated_json)).difference(
+                        _fragment_data_paths(base_json)
+                    )
+                )
+                fragment_json.append(updated_json)
+                created_files.extend(next_created_files)
+                if lance_schema is None:
+                    lance_schema = next_schema
+                elif lance_schema != next_schema:
+                    raise ValueError(
+                        "Cannot fill Lance fragments with inconsistent field IDs."
+                    )
+                next_arrow_schema = next_schema.to_pyarrow()
+                if merged_schema is None:
+                    merged_schema = next_arrow_schema
+                elif not merged_schema.equals(next_arrow_schema, check_metadata=True):
+                    raise ValueError(
+                        "Cannot fill Lance fragments with inconsistent schemas."
+                    )
+                source_fragment_ids.add(fragment_id)
+        except Exception:
+            if active_writer is not None:
+                active_writer.abort()
+            _remove_paths_best_effort(
+                self.output,
+                created_files,
+                operation="failed Lance fill cleanup",
+            )
+            raise
+        return fragment_json, created_files, merged_schema, lance_schema
+
     def _commit_empty_output(self, lance: Any) -> None:
         existing = self._load_existing_dataset(lance)
         if self.mode == "append":
@@ -1393,6 +1991,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
                     next_source_version,
                     next_source_fragment_ids,
                     _,
+                    _,
                 ) = self._read_metadata(rel_path)
                 next_created_files = self._verified_created_files(
                     cleanup_lance,
@@ -1425,6 +2024,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
         source_fragment_ids: set[int] = set()
         lance_schema_payload: dict[str, object] | None = None
         lance_schema: Any | None = None
+        output_schema: pa.Schema | None = None
         for rel_path in metadata_paths:
             (
                 next_schema,
@@ -1433,6 +2033,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
                 next_source_version,
                 next_source_fragment_ids,
                 next_lance_schema,
+                next_output_schema,
             ) = self._read_metadata(rel_path)
             self._verified_created_files(
                 lance,
@@ -1470,6 +2071,40 @@ class LanceDatasetCommitReducerSink(BaseSink):
                     raise ValueError(
                         "Cannot commit Lance fragments with inconsistent field IDs."
                     )
+            if next_output_schema is not None:
+                if output_schema is None:
+                    output_schema = next_output_schema
+                elif not output_schema.equals(next_output_schema, check_metadata=True):
+                    raise ValueError(
+                        "Cannot commit Lance fragments with inconsistent output schemas."
+                    )
+        worker_fragment_json = tuple(fragment_json)
+        (
+            filled_fragments,
+            filled_created_files,
+            filled_schema,
+            lance_schema,
+        ) = self._fill_add_columns_fragments(
+            lance,
+            source_fragment_ids,
+            output_schema,
+            lance_schema,
+        )
+        fragment_json.extend(filled_fragments)
+        if filled_schema is not None:
+            if schema is None:
+                schema = filled_schema
+            elif not schema.equals(filled_schema, check_metadata=True):
+                _remove_paths_best_effort(
+                    self.output,
+                    filled_created_files,
+                    operation="rejected Lance fill cleanup",
+                )
+                raise ValueError(
+                    "Cannot commit filled Lance fragments with inconsistent schemas."
+                )
+        if lance_schema is not None:
+            lance_schema_payload = _lance_schema_to_payload(lance_schema)
         self._validate_add_columns_fragment_coverage(lance, source_fragment_ids)
 
         if not fragment_json:
@@ -1483,9 +2118,14 @@ class LanceDatasetCommitReducerSink(BaseSink):
             raise ValueError("Lance fragment metadata is missing its schema")
         commit_message = self._commit_message(
             schema=schema,
-            fragments=fragment_json,
+            fragments=worker_fragment_json if self.fill_missing else fragment_json,
             source_versions=source_versions,
             lance_schema_payload=lance_schema_payload,
+            fill_fingerprint=(
+                _fill_fingerprint(output_schema, self.fill)
+                if self.fill_missing and output_schema is not None
+                else None
+            ),
         )
         expected_versions = (
             [next(iter(source_versions)) + 1]
@@ -1499,6 +2139,11 @@ class LanceDatasetCommitReducerSink(BaseSink):
         if self._was_committed(
             lance, commit_message, expected_versions=expected_versions
         ):
+            _remove_paths_best_effort(
+                self.output,
+                filled_created_files,
+                operation="redundant Lance fill cleanup",
+            )
             self._cleanup_rejected_data(rejected_created_files)
             self._pending_metadata_cleanup = tuple(
                 sorted(set(cleanup_paths).union(metadata_paths))
@@ -1581,13 +2226,21 @@ class LanceDatasetCommitReducerSink(BaseSink):
             )
             read_version = 0
 
-        lance.LanceDataset.commit(
-            self._dataset_uri(),
-            operation,
-            read_version=read_version,
-            commit_message=commit_message,
-            max_retries=0,
-        )
+        try:
+            lance.LanceDataset.commit(
+                self._dataset_uri(),
+                operation,
+                read_version=read_version,
+                commit_message=commit_message,
+                max_retries=0,
+            )
+        except Exception:
+            _remove_paths_best_effort(
+                self.output,
+                filled_created_files,
+                operation="failed Lance fill commit cleanup",
+            )
+            raise
         self._cleanup_rejected_data(rejected_created_files)
         self._pending_metadata_cleanup = tuple(
             sorted(set(cleanup_paths).union(metadata_paths))
@@ -1604,4 +2257,14 @@ class LanceDatasetCommitReducerSink(BaseSink):
         )
 
 
-__all__ = ["LanceDatasetCommitReducerSink", "LanceDatasetSink", "LanceWriteMode"]
+__all__ = [
+    "AddColumns",
+    "Append",
+    "Create",
+    "LanceDatasetCommitReducerSink",
+    "LanceDatasetSink",
+    "LanceWriteConfig",
+    "LanceWriteMode",
+    "LanceWriteModeName",
+    "Overwrite",
+]

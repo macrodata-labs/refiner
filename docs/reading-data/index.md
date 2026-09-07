@@ -39,3 +39,41 @@ pipeline = mdr.read_lerobot("hf://datasets/lerobot/aloha_sim_transfer_cube_human
 
 Read [Reader Model](reader-model.md) and [Sharding](sharding.md) before writing
 large jobs.
+
+## Run a bounded quick test
+
+Pass `max_rows` to a built-in reader before testing transforms or allocating a
+full cloud run:
+
+```python
+import refiner as mdr
+
+pipeline = mdr.read_parquet(
+    "s3://my-bucket/episodes/*.parquet",
+    columns_to_read=["episode_id", "video"],
+    max_rows=100,
+)
+
+rows = pipeline.take(5)
+```
+
+`max_rows` is a global source-output cap, not a per-worker cap. It applies after
+reader-level operations such as Parquet or Hugging Face filtering, but before
+pipeline transforms. A positive limit uses one source shard so multiple workers
+cannot each emit the requested number of rows. Consequently,
+`num_workers="auto"` starts at most one worker for a limited source. Set
+`max_rows=0` to execute no source shards.
+
+The option is available on `read_csv`, `read_json`, `read_jsonl`, `read_files`,
+`read_videos`, `read_hdf5`, `read_zarr`, `read_mcap`, `read_parquet`,
+`read_hf_dataset`, `read_lerobot`, `read_tfrecords`, `read_tfds`, and
+`load_lance`. All use the same bounded-source wrapper.
+
+Readers stop before opening later source shards and slice the final Arrow batch.
+Refiner also reduces configurable batch or concurrency windows for Lance,
+Parquet, Hugging Face, file-content, Zarr, LeRobot, TFRecord, and TFDS readers;
+bounded split MCAP reads stream one episode at a time when the input supports
+it. A reader may still need to load one indivisible physical unit to produce a
+row—for example, one whole-file JSON document, HDF5 group, MCAP episode, or
+LeRobot episode. The limit bounds later work but cannot make that first logical
+row smaller.

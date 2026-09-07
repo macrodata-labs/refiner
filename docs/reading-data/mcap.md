@@ -321,6 +321,10 @@ stream non-seekable or unindexed files in physical file order instead. When
 `episode_splitting="single"`, `stream_episodes` is ignored because the single
 episode is the whole file.
 
+Bounded split reads enable this mode automatically. For example,
+`read_mcap(..., episode_splitting={"time_gap_s": 5}, max_rows=1)` stops after
+the first episode without buffering every episode in a seekable indexed file.
+
 For non-seekable streams without an MCAP summary, explicit dotted selections may
 still require scanning all topics because the reader cannot resolve source
 strings to exact MCAP topics before reading.

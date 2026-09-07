@@ -90,6 +90,10 @@ class BaseSink(ABC):
         """Receive the schema expected at this sink boundary before writing starts."""
         del schema
 
+    def set_input_dtype_columns(self, columns: frozenset[str]) -> None:
+        """Receive columns whose output types were explicitly declared."""
+        del columns
+
     @property
     def counts_output_rows(self) -> bool:
         """Whether blocks written into this sink should count toward output_rows."""

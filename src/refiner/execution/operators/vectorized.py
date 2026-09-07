@@ -143,7 +143,7 @@ def apply_vectorized_op(
                 pa.array(lineage, type=pa.int64()),
             )
         with set_active_step_index(op.index):
-            next_table = op.fn(table)
+            next_table = op.apply_table(table)
         if not isinstance(next_table, pa.Table):
             raise TypeError(
                 f"map_table() must return pa.Table, got {type(next_table)!r}"

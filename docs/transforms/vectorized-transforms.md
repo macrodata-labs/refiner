@@ -46,6 +46,43 @@ pipeline = pipeline.cast(
 
 Use casts when the storage format cannot fully represent asset/media semantics.
 
+## Custom Arrow table transforms
+
+Use `map_table` when a library already accepts and returns Arrow tables:
+
+```python
+import pyarrow as pa
+
+
+def normalize(table: pa.Table) -> pa.Table:
+    return table
+
+
+pipeline = pipeline.map_table(normalize)
+```
+
+For expensive state such as a GPU model, provide a zero-argument factory:
+
+```python
+class Embedder:
+    def __init__(self):
+        self.model = load_model("clip").cuda()
+
+    def __call__(self, table: pa.Table) -> pa.Table:
+        embeddings = self.model.encode(table.column("image"))
+        return table.append_column("embedding", embeddings)
+
+
+def create_embedder():
+    return Embedder()
+
+
+pipeline = pipeline.map_table(factory=create_embedder)
+```
+
+Use `with_max_block_rows(...)` and
+`with_max_vectorized_block_bytes(...)` to bound the tables passed to the model.
+
 ## When not to use vectorized transforms
 
 Use row transforms when you need:
@@ -64,4 +101,3 @@ operations.
 - [Expressions](expressions.md)
 - [Schemas and DTypes](schemas-and-dtypes.md)
 - [Episode Rows](../episode-data/episode-rows.md)
-

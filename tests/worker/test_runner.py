@@ -574,6 +574,31 @@ def test_worker_propagates_async_teardown_failure_after_completion() -> None:
     assert runtime_lifecycle.failed_ids == []
 
 
+def test_worker_propagates_factory_failure_before_claiming_a_shard() -> None:
+    def fail_factory():
+        raise RuntimeError("factory initialization failed")
+
+    pipeline = task(
+        lambda rank, _world_size: {"rank": rank},
+        num_tasks=1,
+    ).map_async(factory=fail_factory)
+    runtime_lifecycle = _FakeRuntimeLifecycle(pipeline.list_shards())
+    worker = Worker(
+        pipeline=pipeline,
+        job_id="job",
+        stage_index=0,
+        worker_id="local",
+        runtime_lifecycle=runtime_lifecycle,
+    )
+
+    with pytest.raises(RuntimeError, match="factory initialization failed"):
+        worker.run()
+
+    assert runtime_lifecycle.claim_previous == []
+    assert runtime_lifecycle.completed_ids == []
+    assert runtime_lifecycle.failed_ids == []
+
+
 def test_task_worker_stops_claiming_after_heartbeat_failure() -> None:
     heartbeat_should_fail = threading.Event()
 

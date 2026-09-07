@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from collections.abc import Mapping
 from typing import cast
 
@@ -11,8 +12,9 @@ import pyarrow.parquet as pq
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
 
-from refiner import col, read_blob
-from refiner.io import DataFolder
+import refiner.pipeline.sinks.lance as lance_sink_module
+from refiner import AddColumns, Append, Create, Overwrite, col, read_blob
+from refiner.io import DataFile, DataFolder
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN, SOURCE_ROW_ID_COLUMN
@@ -26,9 +28,13 @@ from refiner.pipeline.sinks.assets import (
     FileAssetConfig,
 )
 from refiner.pipeline.sinks.lance import (
+    _ByteBoundedBatchQueue,
+    _ByteBudget,
     LanceDatasetCommitReducerSink,
     LanceDatasetSink,
+    LanceIOConfig,
     _StreamingAddColumnsWriter,
+    _StreamingShardWriter,
     _cast_to_planned_schema,
     _job_token,
     _schema_to_base64,
@@ -49,6 +55,290 @@ class _FinalizedWorkersRuntime:
     ) -> list[FinalizedShardWorker]:
         assert stage_index == 0
         return self._rows
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [(Create(), "create"), (Append(), "append"), (Overwrite(), "overwrite")],
+)
+def test_lance_write_mode_dataclasses_normalize(mode, expected, tmp_path) -> None:
+    assert LanceDatasetSink(tmp_path / "output.lance", mode=mode).mode == expected
+
+
+def test_lance_dataset_sink_uses_byte_aware_batching_defaults(tmp_path) -> None:
+    sink = LanceDatasetSink(tmp_path / "output.lance")
+
+    assert sink.io == LanceIOConfig()
+    assert sink.describe()[2]["io"] == {
+        "upload_concurrency": 32,
+        "multipart_part_bytes": 5 * 1024 * 1024,
+        "target_batch_bytes": 256 * 1024 * 1024,
+        "max_buffered_bytes": 1024 * 1024 * 1024,
+    }
+
+
+def test_lance_io_config_sets_process_upload_controls_once(monkeypatch) -> None:
+    monkeypatch.setattr(lance_sink_module, "_LANCE_PROCESS_UPLOAD_CONFIG", None)
+    monkeypatch.delenv("LANCE_UPLOAD_CONCURRENCY", raising=False)
+    monkeypatch.delenv("LANCE_INITIAL_UPLOAD_SIZE", raising=False)
+    config = LanceIOConfig()
+
+    lance_sink_module._configure_lance_process(config)
+    lance_sink_module._configure_lance_process(config)
+
+    assert lance_sink_module._LANCE_PROCESS_UPLOAD_CONFIG == (
+        config.upload_concurrency,
+        config.multipart_part_bytes,
+    )
+    assert lance_sink_module.os.environ["LANCE_UPLOAD_CONCURRENCY"] == "32"
+    assert lance_sink_module.os.environ["LANCE_INITIAL_UPLOAD_SIZE"] == str(
+        5 * 1024 * 1024
+    )
+    with pytest.raises(RuntimeError, match="start a fresh worker"):
+        lance_sink_module._configure_lance_process(
+            LanceIOConfig(
+                upload_concurrency=8,
+                multipart_part_bytes=16 * 1024 * 1024,
+                target_batch_bytes=128 * 1024 * 1024,
+                max_buffered_bytes=512 * 1024 * 1024,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"upload_concurrency": 0}, "upload_concurrency"),
+        ({"multipart_part_bytes": 1024}, "between 5 MiB and 5 GiB"),
+        ({"target_batch_bytes": 0}, "target_batch_bytes"),
+        (
+            {"upload_concurrency": 2, "target_batch_bytes": 8 * 1024 * 1024},
+            "upload_concurrency times",
+        ),
+        ({"max_buffered_bytes": 1024}, "four times"),
+    ],
+)
+def test_lance_io_config_validates_limits(kwargs, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        LanceIOConfig(**kwargs)
+
+
+def test_lance_io_config_accepts_five_gib_multipart_endpoint() -> None:
+    five_gib = 5 * 1024 * 1024 * 1024
+
+    config = LanceIOConfig(
+        upload_concurrency=1,
+        multipart_part_bytes=five_gib,
+        target_batch_bytes=five_gib,
+        max_buffered_bytes=4 * five_gib,
+    )
+
+    assert config.multipart_part_bytes == five_gib
+
+
+def _capture_lance_writer_batches(
+    monkeypatch,
+    batches: list[pa.RecordBatch],
+    *,
+    target_batch_bytes: int = 5 * 1024 * 1024,
+) -> tuple[list[pa.RecordBatch], int]:
+    captured: list[pa.RecordBatch] = []
+    writer_pool = ThreadPoolExecutor(max_workers=1)
+    monkeypatch.setattr(lance_sink_module, "_LANCE_WRITER_POOL", writer_pool)
+    monkeypatch.setattr(lance_sink_module, "_LANCE_PROCESS_UPLOAD_CONFIG", None)
+
+    def capture_batches(
+        _writer: _StreamingShardWriter, reader: pa.RecordBatchReader
+    ) -> list[str]:
+        captured.extend(reader)
+        return []
+
+    monkeypatch.setattr(_StreamingShardWriter, "_write_reader", capture_batches)
+    writer = _StreamingShardWriter(
+        dataset_uri="unused",
+        schema=batches[0].schema,
+        mode="create",
+        io_config=LanceIOConfig(
+            upload_concurrency=1,
+            multipart_part_bytes=5 * 1024 * 1024,
+            target_batch_bytes=target_batch_bytes,
+            max_buffered_bytes=4 * target_batch_bytes,
+        ),
+    )
+    try:
+        writer.put_batches(batches)
+        queue_maxsize = writer.queue.maxsize
+        writer.finish()
+        return captured, queue_maxsize
+    finally:
+        writer_pool.shutdown(wait=True)
+
+
+def test_lance_streaming_writer_coalesces_and_splits_batches_by_bytes(
+    monkeypatch,
+) -> None:
+    schema = pa.schema([pa.field("payload", pa.binary())])
+    source = [
+        pa.record_batch([pa.array([bytes([index]) * 1024 * 1024])], schema=schema)
+        for index in range(12)
+    ]
+
+    captured, queue_maxsize = _capture_lance_writer_batches(monkeypatch, source)
+
+    assert queue_maxsize == 1
+    assert [
+        value[0] for batch in captured for value in batch["payload"].to_pylist()
+    ] == [*range(12)]
+    assert len(captured) == 3
+    assert all(batch.nbytes <= 5 * 1024 * 1024 for batch in captured)
+
+    captured, _ = _capture_lance_writer_batches(
+        monkeypatch,
+        [
+            pa.record_batch(
+                [pa.array([bytes([index]) * 20 for index in range(8)])],
+                schema=schema,
+            )
+        ],
+    )
+    assert len(captured) == 1
+    assert all(batch.nbytes <= 5 * 1024 * 1024 for batch in captured)
+    assert [
+        value[0] for batch in captured for value in batch["payload"].to_pylist()
+    ] == [*range(8)]
+
+    captured, _ = _capture_lance_writer_batches(
+        monkeypatch,
+        [
+            pa.record_batch(
+                [pa.array([bytes([index]) * 1024 * 1024 for index in range(8)])],
+                schema=schema,
+            )
+        ],
+    )
+
+    assert len(captured) == 2
+    assert all(batch.nbytes <= 5 * 1024 * 1024 for batch in captured)
+    assert [
+        value[0] for batch in captured for value in batch["payload"].to_pylist()
+    ] == [*range(8)]
+
+
+def test_lance_byte_batcher_consumes_split_batches_incrementally(monkeypatch) -> None:
+    schema = pa.schema([pa.field("payload", pa.binary())])
+    source = pa.record_batch([pa.array([b"a", b"b", b"c"])], schema=schema)
+    consumed: list[int] = []
+
+    def tracked_splits(_batch, _target_bytes):
+        for index in range(source.num_rows):
+            consumed.append(index)
+            yield source.slice(index, 1)
+
+    monkeypatch.setattr(lance_sink_module, "_split_batch_by_bytes", tracked_splits)
+    batcher = lance_sink_module._ByteAwareBatcher(target_bytes=1)
+    ready = batcher.add(source)
+
+    assert consumed == []
+    assert next(ready).to_pydict() == {"payload": [b"a"]}
+    assert consumed == [0]
+
+
+def test_lance_streaming_writer_writes_oversized_single_row_alone(monkeypatch) -> None:
+    schema = pa.schema([pa.field("payload", pa.binary())])
+    captured, _ = _capture_lance_writer_batches(
+        monkeypatch,
+        [
+            pa.record_batch(
+                [pa.array([b"x" * (6 * 1024 * 1024), b"small"])],
+                schema=schema,
+            )
+        ],
+    )
+
+    assert [batch.num_rows for batch in captured] == [1, 1]
+    assert captured[0].nbytes > 5 * 1024 * 1024
+    assert captured[1].nbytes <= 5 * 1024 * 1024
+
+
+def test_lance_streaming_writer_allows_only_one_oversized_batch_in_flight(
+    monkeypatch,
+) -> None:
+    first_batch_consumed = threading.Event()
+    release_first_batch = threading.Event()
+    writer_pool = ThreadPoolExecutor(max_workers=1)
+    monkeypatch.setattr(lance_sink_module, "_LANCE_WRITER_POOL", writer_pool)
+    monkeypatch.setattr(lance_sink_module, "_LANCE_PROCESS_UPLOAD_CONFIG", None)
+
+    def consume_batches(
+        _writer: _StreamingShardWriter,
+        reader: pa.RecordBatchReader,
+    ) -> list[str]:
+        iterator = iter(reader)
+        next(iterator)
+        first_batch_consumed.set()
+        assert release_first_batch.wait(timeout=2)
+        next(iterator)
+        with pytest.raises(StopIteration):
+            next(iterator)
+        return []
+
+    monkeypatch.setattr(_StreamingShardWriter, "_write_reader", consume_batches)
+    schema = pa.schema([pa.field("payload", pa.binary())])
+    config = LanceIOConfig(
+        upload_concurrency=1,
+        multipart_part_bytes=5 * 1024 * 1024,
+        target_batch_bytes=5 * 1024 * 1024,
+        max_buffered_bytes=20 * 1024 * 1024,
+    )
+    writer = _StreamingShardWriter(
+        dataset_uri="unused",
+        schema=schema,
+        mode="create",
+        io_config=config,
+    )
+    oversized = pa.record_batch([pa.array([b"x" * (15 * 1024 * 1024)])], schema=schema)
+
+    try:
+        writer.put_batches([oversized])
+        assert first_batch_consumed.wait(timeout=2)
+
+        with ThreadPoolExecutor(max_workers=1) as producer:
+            future = producer.submit(writer.put_batches, [oversized])
+            with pytest.raises(TimeoutError):
+                future.result(timeout=0.1)
+            release_first_batch.set()
+            future.result(timeout=2)
+
+        assert writer.finish() == []
+    finally:
+        release_first_batch.set()
+        writer_pool.shutdown(wait=True)
+
+
+def test_lance_batch_queue_releases_queued_bytes_when_consumer_exits() -> None:
+    target_bytes = 5 * 1024 * 1024
+    config = LanceIOConfig(
+        upload_concurrency=1,
+        multipart_part_bytes=target_bytes,
+        target_batch_bytes=target_bytes,
+        max_buffered_bytes=4 * target_bytes,
+    )
+    budget = _ByteBudget(2 * target_bytes)
+    first_queue = _ByteBoundedBatchQueue(config, budget=budget)
+    second_queue = _ByteBoundedBatchQueue(config, budget=budget)
+    schema = pa.schema([pa.field("payload", pa.binary())])
+    batch = pa.record_batch([pa.array([b"x" * (4 * 1024 * 1024)])], schema=schema)
+
+    first_queue.put(batch, timeout=0)
+    first_queue.put(batch, timeout=0)
+    iterator = first_queue.iter_batches()
+    next(iterator)
+    iterator.close()
+
+    second_queue.put(batch, timeout=0)
+    second_iterator = second_queue.iter_batches()
+    next(second_iterator)
+    second_iterator.close()
 
 
 class _PartialMissingStream:
@@ -98,6 +388,28 @@ def test_lance_writer_normalizes_worker_schema_metadata() -> None:
 
     assert normalized.schema.equals(planned, check_metadata=True)
     assert normalized.to_pydict() == {"x": [1, 2]}
+
+
+def test_lance_writer_preserves_runtime_inferred_type_changes() -> None:
+    planned = pa.schema([pa.field("value", pa.int64())])
+    runtime = pa.table({"value": ["chunk-1", "chunk-2"]})
+
+    normalized = _cast_to_planned_schema(runtime, planned)
+
+    assert normalized.schema == pa.schema([pa.field("value", pa.string())])
+    assert normalized.to_pydict() == {"value": ["chunk-1", "chunk-2"]}
+
+
+def test_lance_writer_honors_explicitly_declared_type_changes() -> None:
+    planned = pa.schema([pa.field("value", pa.int64())])
+    runtime = pa.table({"value": ["1", "2"]})
+
+    normalized = _cast_to_planned_schema(
+        runtime, planned, declared_columns=frozenset({"value"})
+    )
+
+    assert normalized.schema == planned
+    assert normalized.to_pydict() == {"value": [1, 2]}
 
 
 def test_lance_writer_allows_row_map_dropped_planned_fields() -> None:
@@ -284,6 +596,55 @@ def test_launch_local_writes_lance_dataset(tmp_path) -> None:
     ]
 
 
+def test_lance_dataset_writer_preserves_undeclared_row_map_type_change(
+    tmp_path,
+) -> None:
+    lance = pytest.importorskip("lance")
+    source_uri = tmp_path / "dynamic-type-source.lance"
+    output_uri = tmp_path / "dynamic-type-output.lance"
+    source = lance.write_dataset(pa.table({"value": [1, 2]}), str(source_uri))
+
+    (
+        load_lance(source_uri, version=source.version)
+        .map(lambda row: {"value": f"chunk-{int(row['value'])}"})
+        .write_lance_dataset(output_uri)
+        .launch_local(
+            name="lance-dynamic-type",
+            num_workers=1,
+            rundir=str(tmp_path / "dynamic-type-run"),
+        )
+    )
+
+    table = lance.dataset(str(output_uri)).to_table()
+    assert table.schema.field("value").type == pa.string()
+    assert table.column("value").to_pylist() == ["chunk-1", "chunk-2"]
+
+
+def test_lance_dataset_writer_enforces_declared_row_map_dtype(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    source_uri = tmp_path / "declared-type-source.lance"
+    output_uri = tmp_path / "declared-type-output.lance"
+    source = lance.write_dataset(pa.table({"value": [1, 2]}), str(source_uri))
+
+    (
+        load_lance(source_uri, version=source.version)
+        .map(
+            lambda row: {"value": str(int(row["value"]))},
+            dtypes={"value": pa.int64()},
+        )
+        .write_lance_dataset(output_uri)
+        .launch_local(
+            name="lance-declared-type",
+            num_workers=1,
+            rundir=str(tmp_path / "declared-type-run"),
+        )
+    )
+
+    table = lance.dataset(str(output_uri)).to_table()
+    assert table.schema.field("value").type == pa.int64()
+    assert table.column("value").to_pylist() == [1, 2]
+
+
 def test_lance_dataset_writer_handles_more_shards_than_io_threads(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     output_dir = tmp_path / "many-shards.lance"
@@ -338,7 +699,6 @@ def test_lance_add_columns_packs_assets_as_generic_blob_references(tmp_path) -> 
             dataset_uri,
             version=base.version,
             columns=["x"],
-            batch_size=1,
         )
         .map(
             lambda row: {"image": bytes([int(row["x"])])},
@@ -446,7 +806,6 @@ def test_launch_local_adds_lance_columns_without_rewriting_base_files(tmp_path) 
             dataset_uri,
             version=base.version,
             columns=["x"],
-            batch_size=1,
             num_shards=1,
         )
         .map(
@@ -495,7 +854,6 @@ def test_lance_add_columns_handles_more_fragments_than_io_threads(tmp_path) -> N
         load_lance(
             dataset_uri,
             version=base.version,
-            batch_size=1,
             num_shards=1,
         )
         .map(lambda row: {"y": int(row["x"]) * 10}, dtypes={"y": datatype.int64()})
@@ -511,6 +869,83 @@ def test_lance_add_columns_handles_more_fragments_than_io_threads(tmp_path) -> N
         "x": list(range(12)),
         "y": [value * 10 for value in range(12)],
     }
+
+
+def test_lance_add_columns_fills_filtered_rows(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "filtered-column-fill.lance"
+    base = lance.write_dataset(
+        pa.table({"x": list(range(6))}),
+        str(dataset_uri),
+        max_rows_per_file=2,
+    )
+
+    (
+        load_lance(dataset_uri, version=base.version)
+        .filter(lambda row: int(row["x"]) % 2 == 0)
+        .map(lambda row: {"y": int(row["x"]) * 10}, dtypes={"y": datatype.int64()})
+        .write_lance_dataset(
+            dataset_uri,
+            mode=AddColumns(fill={"y": -1}),
+            columns=["y"],
+        )
+        .launch_local(
+            name="lance-filtered-column-fill",
+            num_workers=1,
+            rundir=str(tmp_path / "filtered-column-fill-run"),
+        )
+    )
+
+    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
+        "x": list(range(6)),
+        "y": [0, -1, 20, -1, 40, -1],
+    }
+
+
+def test_lance_add_columns_fills_when_every_row_is_filtered(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "all-filtered-column-fill.lance"
+    base = lance.write_dataset(
+        pa.table({"x": list(range(4))}),
+        str(dataset_uri),
+        max_rows_per_file=2,
+    )
+
+    (
+        load_lance(dataset_uri, version=base.version)
+        .map(lambda _row: {"y": 0}, dtypes={"y": datatype.int64()})
+        .filter(lambda _row: False)
+        .write_lance_dataset(
+            dataset_uri,
+            mode=AddColumns(fill={"y": -1}),
+            columns=["y"],
+        )
+        .launch_local(
+            name="lance-all-filtered-column-fill",
+            num_workers=1,
+            rundir=str(tmp_path / "all-filtered-column-fill-run"),
+        )
+    )
+
+    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
+        "x": list(range(4)),
+        "y": [-1, -1, -1, -1],
+    }
+
+
+def test_lance_add_columns_rejects_unknown_fill_column(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "unknown-fill-column.lance"
+    base = lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+
+    with pytest.raises(ValueError, match="unknown columns: z"):
+        LanceDatasetSink(
+            dataset_uri,
+            mode=AddColumns(fill={"z": 0}),
+            columns=["y"],
+            source_uri=str(dataset_uri),
+            source_version=base.version,
+        )
 
 
 def test_lance_add_columns_accepts_equivalent_nested_metadata_order(tmp_path) -> None:
@@ -572,7 +1007,7 @@ def test_lance_add_columns_reorders_fragment_outputs(tmp_path) -> None:
             yield row.update({"y": int(row["x"]) * 10})
 
     pipeline = (
-        load_lance(dataset_uri, version=base.version, columns=["x"], batch_size=3)
+        load_lance(dataset_uri, version=base.version, columns=["x"])
         .batch_map(
             reverse_batch,
             batch_size=3,
@@ -597,9 +1032,24 @@ def test_lance_add_columns_reorders_fragment_outputs(tmp_path) -> None:
     }
 
 
-def test_lance_add_columns_streams_contiguous_reordered_batches(tmp_path) -> None:
-    first_batch_consumed = threading.Event()
+def test_lance_add_columns_orders_contiguous_reordered_batches(
+    tmp_path,
+    monkeypatch,
+) -> None:
     consumed: list[int] = []
+    original_open_stream = pa.ipc.open_stream
+
+    class _StreamingOnlyReader:
+        def __init__(self, source) -> None:
+            self._reader = original_open_stream(source)
+
+        def __iter__(self):
+            yield from self._reader
+
+        def read_all(self):
+            raise AssertionError("Pending Lance batches must be replayed incrementally")
+
+    monkeypatch.setattr(pa.ipc, "open_stream", _StreamingOnlyReader)
 
     class _Metadata:
         def to_json(self):
@@ -612,7 +1062,6 @@ def test_lance_add_columns_streams_contiguous_reordered_batches(tmp_path) -> Non
             assert reader_schema == pa.schema([("y", pa.int64())])
             for batch in reader:
                 consumed.extend(batch.column("y").to_pylist())
-                first_batch_consumed.set()
             return "updated", "schema"
 
     writer = _StreamingAddColumnsWriter(
@@ -626,15 +1075,119 @@ def test_lance_add_columns_streams_contiguous_reordered_batches(tmp_path) -> Non
         pa.chunked_array([[2, 3]], type=pa.uint64()),
         pa.table({"y": [30, 40]}),
     )
-    assert not first_batch_consumed.is_set()
+    pending_path = writer.pending[2][1]
+    assert lance_sink_module.os.path.exists(pending_path)
+    assert consumed == []
 
     writer.put(
         pa.chunked_array([[1, 0]], type=pa.uint64()),
         pa.table({"y": [20, 10]}),
     )
-    assert first_batch_consumed.wait(timeout=2)
+    assert consumed == []
+    assert writer.pending == {}
+    assert not lance_sink_module.os.path.exists(pending_path)
     assert writer.finish() == ("updated", "schema")
     assert consumed == [10, 20, 30, 40]
+
+
+def test_lance_add_columns_honors_byte_aware_buffer_limits(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(lance_sink_module, "_LANCE_PROCESS_UPLOAD_CONFIG", None)
+    captured: list[pa.RecordBatch] = []
+
+    class _Metadata:
+        def to_json(self):
+            return {"files": [], "physical_rows": 12}
+
+    class _Fragment:
+        metadata = _Metadata()
+
+        def merge_columns(self, reader, *, reader_schema):
+            assert reader_schema == pa.schema([("payload", pa.binary())])
+            captured.extend(reader)
+            return "updated", "schema"
+
+    target_bytes = 5 * 1024 * 1024
+    writer = _StreamingAddColumnsWriter(
+        fragment=_Fragment(),
+        fragment_id=7,
+        num_rows=12,
+        schema=pa.schema([("payload", pa.binary())]),
+        output=LanceDatasetSink(tmp_path / "bounded-columns.lance").output,
+        io_config=LanceIOConfig(
+            upload_concurrency=1,
+            multipart_part_bytes=target_bytes,
+            target_batch_bytes=target_bytes,
+            max_buffered_bytes=4 * target_bytes,
+        ),
+    )
+
+    assert writer.queue.maxsize == 1
+    for index in range(12):
+        writer.put(
+            pa.chunked_array([[index]], type=pa.uint64()),
+            pa.table({"payload": [bytes([index]) * 1024 * 1024]}),
+        )
+
+    assert writer.finish() == ("updated", "schema")
+    assert len(captured) == 3
+    assert all(batch.nbytes <= target_bytes for batch in captured)
+    assert [
+        value[0] for batch in captured for value in batch["payload"].to_pylist()
+    ] == [*range(12)]
+
+
+def test_lance_add_columns_shares_buffer_budget_across_fragment_writers(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    budgets = []
+
+    class _Fragment:
+        num_deletions = 0
+        physical_rows = 1
+
+    class _Dataset:
+        def get_fragment(self, _fragment_id):
+            return _Fragment()
+
+    class _Writer:
+        def __init__(self, **kwargs):
+            budgets.append(kwargs["batch_coordinator"])
+
+        def put(self, _positions, _output):
+            return None
+
+    monkeypatch.setattr(lance_sink_module, "_StreamingAddColumnsWriter", _Writer)
+    dataset_uri = tmp_path / "shared-budget.lance"
+    sink = LanceDatasetSink(
+        dataset_uri,
+        mode="add_columns",
+        columns=["y"],
+        source_uri=str(dataset_uri),
+        source_version=1,
+    )
+    sink._source_dataset_cache = _Dataset()
+
+    sink.write_shard_block(
+        "shard",
+        Tabular(
+            pa.table(
+                {
+                    "y": [10, 20],
+                    SOURCE_ROW_ID_COLUMN: pa.array(
+                        [0, 1 << 32],
+                        type=pa.uint64(),
+                    ),
+                }
+            )
+        ),
+    )
+
+    assert len(budgets) == 2
+    assert budgets[0] is budgets[1]
 
 
 def test_lance_add_columns_preserves_existing_field_ids(tmp_path) -> None:
@@ -1636,6 +2189,161 @@ def test_blob_writer_coalesces_complete_source_blob_references(
     assert references[0]["path"] == references[1]["path"]
     assert references[0]["offset"] == 0
     assert references[1]["offset"] == 3
+
+
+def test_blob_writer_falls_back_when_source_size_is_unavailable(
+    tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "source.blob"
+    source.write_bytes(b"abcdef")
+    source_file = DataFile.resolve(source)
+    original_size = source_file.fs.size
+
+    def size_without_source_metadata(path):
+        if path == source_file.path:
+            return None
+        return original_size(path)
+
+    monkeypatch.setattr(source_file.fs, "size", size_without_source_metadata)
+    output = DataFolder.resolve(tmp_path / "fallback-assets")
+    field = datatype.blob_reference("video").with_name("video")
+    table = pa.Table.from_arrays(
+        [
+            pa.array(
+                [
+                    {"path": str(source), "offset": 0, "size": 3},
+                    {"path": str(source), "offset": 3, "size": 3},
+                ],
+                type=field.type,
+            )
+        ],
+        schema=pa.schema([field]),
+    )
+    manager = BlobAssetManager(
+        output,
+        config=BlobAssetConfig(target_bytes=1024),
+        filename_template="{shard_id}.parquet",
+    )
+    manager.set_input_schema(table.schema)
+    range_copies = 0
+    original_append = manager._append
+
+    def count_range_copy(*args, **kwargs):
+        nonlocal range_copies
+        range_copies += 1
+        return original_append(*args, **kwargs)
+
+    monkeypatch.setattr(manager, "_append", count_range_copy)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        rewritten = manager.rewrite_table("0123456789ab", table)
+        manager.close()
+
+    assert range_copies == 2
+    assert [
+        read_blob(reference) for reference in rewritten.column("video").to_pylist()
+    ] == [b"abc", b"def"]
+
+
+def test_blob_writer_rejects_same_complete_source_and_retry_destination(
+    tmp_path,
+) -> None:
+    output_path = tmp_path / "retry-assets"
+    output = DataFolder.resolve(output_path)
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    worker = worker_token_for(worker_id)
+    source = output_path / "assets" / f"{shard_id}__w{worker}" / "video" / "00000.blob"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"abcdef")
+    field = datatype.blob_reference("video").with_name("video")
+    table = pa.Table.from_arrays(
+        [
+            pa.array(
+                [
+                    {"path": str(source), "offset": 0, "size": 3},
+                    {"path": str(source), "offset": 3, "size": 3},
+                ],
+                type=field.type,
+            )
+        ],
+        schema=pa.schema([field]),
+    )
+    manager = BlobAssetManager(
+        output,
+        config=BlobAssetConfig(target_bytes=1024),
+        filename_template="{shard_id}.parquet",
+    )
+    manager.set_input_schema(table.schema)
+
+    with (
+        set_active_run_context(
+            job_id="job",
+            stage_index=0,
+            worker_id=worker_id,
+            worker_name=None,
+            runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+        ),
+        pytest.raises(FileExistsError, match="packed blob destination already exists"),
+    ):
+        manager.rewrite_table(shard_id, table)
+
+    assert source.read_bytes() == b"abcdef"
+
+
+def test_blob_writer_rejects_cross_blob_overwrite_before_reordered_copy(
+    tmp_path,
+) -> None:
+    output_path = tmp_path / "retry-assets"
+    output = DataFolder.resolve(output_path)
+    shard_id = "0123456789ab"
+    worker_id = "worker-1"
+    worker = worker_token_for(worker_id)
+    asset_dir = output_path / "assets" / f"{shard_id}__w{worker}" / "video"
+    asset_dir.mkdir(parents=True)
+    first = asset_dir / "00000.blob"
+    second = asset_dir / "00001.blob"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    field = datatype.blob_reference("video").with_name("video")
+    table = pa.Table.from_arrays(
+        [
+            pa.array(
+                [
+                    {"path": str(second), "offset": 0, "size": 6},
+                    {"path": str(first), "offset": 0, "size": 5},
+                ],
+                type=field.type,
+            )
+        ],
+        schema=pa.schema([field]),
+    )
+    manager = BlobAssetManager(
+        output,
+        config=BlobAssetConfig(target_bytes=6),
+        filename_template="{shard_id}.parquet",
+    )
+    manager.set_input_schema(table.schema)
+
+    with (
+        set_active_run_context(
+            job_id="job",
+            stage_index=0,
+            worker_id=worker_id,
+            worker_name=None,
+            runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+        ),
+        pytest.raises(FileExistsError, match="packed blob destination already exists"),
+    ):
+        manager.rewrite_table(shard_id, table)
+
+    assert first.read_bytes() == b"first"
+    assert second.read_bytes() == b"second"
 
 
 def test_blob_writer_keeps_partial_source_blob_on_range_copy_path(

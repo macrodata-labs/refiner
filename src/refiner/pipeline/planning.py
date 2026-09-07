@@ -12,6 +12,7 @@ from refiner.pipeline.steps import (
     DropStep,
     FilterExprStep,
     FilterRowStep,
+    FnAsyncBatchStep,
     FnAsyncRowStep,
     FnBatchStep,
     FnFlatMapStep,
@@ -83,12 +84,13 @@ def _explicit_callable_name(fn: Any) -> str | None:
 def _callable_step_args(
     fn: Any,
     *,
+    callable_arg_name: str = "fn",
     extra_args: dict[str, Any] | None = None,
     builtin_extra_args: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     builtin_description = _builtin_description(fn)
     if builtin_description is None:
-        args: dict[str, Any] = {"fn": fn}
+        args: dict[str, Any] = {callable_arg_name: fn}
         if extra_args:
             args.update(extra_args)
     else:
@@ -96,6 +98,16 @@ def _callable_step_args(
         if builtin_extra_args:
             args.update(builtin_extra_args)
     return args
+
+
+def _step_callable(
+    step: FnAsyncRowStep | FnAsyncBatchStep | FnBatchStep | FnTableStep,
+) -> tuple[Any, str]:
+    if step.factory is not None:
+        return step.factory, "factory"
+    if step.fn is None:
+        raise AssertionError(f"{step.op_name or type(step).__name__} has no callable")
+    return step.fn, "fn"
 
 
 def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
@@ -112,16 +124,18 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
             _callable_step_args(step.fn),
         )
     if isinstance(step, FnAsyncRowStep):
+        fn, callable_arg_name = _step_callable(step)
         inferred_name = (
             explicit_name
             if explicit_name and explicit_name != "map_async"
-            else _explicit_callable_name(step.fn)
+            else _explicit_callable_name(fn)
         )
         return (
             (inferred_name or "map_async"),
             "async_map",
             _callable_step_args(
-                step.fn,
+                fn,
+                callable_arg_name=callable_arg_name,
                 extra_args={
                     "max_in_flight": step.max_in_flight,
                     "preserve_order": step.preserve_order,
@@ -132,17 +146,39 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
                 },
             ),
         )
+    if isinstance(step, FnAsyncBatchStep):
+        fn, callable_arg_name = _step_callable(step)
+        inferred_name = (
+            explicit_name
+            if explicit_name and explicit_name != "batch_map_async"
+            else _explicit_callable_name(fn)
+        )
+        return (
+            (inferred_name or "batch_map_async"),
+            "async_batch_map",
+            _callable_step_args(
+                fn,
+                callable_arg_name=callable_arg_name,
+                extra_args={
+                    "batch_size": step.batch_size,
+                    "max_in_flight": step.max_in_flight,
+                    "preserve_order": step.preserve_order,
+                },
+            ),
+        )
     if isinstance(step, FnBatchStep):
+        fn, callable_arg_name = _step_callable(step)
         inferred_name = (
             explicit_name
             if explicit_name and explicit_name != "batch_map"
-            else _explicit_callable_name(step.fn)
+            else _explicit_callable_name(fn)
         )
         return (
             (inferred_name or "batch_map"),
             "batch_map",
             _callable_step_args(
-                step.fn,
+                fn,
+                callable_arg_name=callable_arg_name,
                 extra_args={"batch_size": step.batch_size},
                 builtin_extra_args={"batch_map.batch_size": step.batch_size},
             ),
@@ -169,15 +205,16 @@ def _step_name_type(step: Any) -> tuple[str, str, dict[str, Any] | None]:
         step_name = inferred_name or "flat_map"
         return step_name, "flat_map", _callable_step_args(step.fn)
     if isinstance(step, FnTableStep):
+        fn, callable_arg_name = _step_callable(step)
         inferred_name = (
             explicit_name
             if explicit_name and explicit_name != "map_table"
-            else _explicit_callable_name(step.fn)
+            else _explicit_callable_name(fn)
         )
         return (
             (inferred_name or "map_table"),
             "table_map",
-            _callable_step_args(step.fn),
+            _callable_step_args(fn, callable_arg_name=callable_arg_name),
         )
     if isinstance(step, SelectStep):
         return (explicit_name or "select"), "select", {"columns": list(step.columns)}

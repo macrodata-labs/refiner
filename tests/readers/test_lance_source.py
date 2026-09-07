@@ -4,10 +4,15 @@ import pyarrow as pa
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
 
-from refiner import load_lance, read_blob
+from refiner import AddColumns, load_lance, read_blob
 from refiner.pipeline.data import datatype
-from refiner.pipeline.data.shard import SOURCE_ROW_ID_COLUMN, RowRangeDescriptor
+from refiner.pipeline.data.shard import (
+    SOURCE_ROW_ID_COLUMN,
+    RowRangeDescriptor,
+    ShardGroupDescriptor,
+)
 from refiner.pipeline.sources.lance import LanceSource
+from refiner.pipeline.sources.limited import LimitedSource
 from refiner.pipeline.data.tabular import Tabular
 
 
@@ -19,8 +24,6 @@ def test_load_lance_rejects_explicit_shard_count_above_limit() -> None:
 def test_load_lance_caps_automatic_shards_without_dropping_fragments() -> None:
     source = object.__new__(LanceSource)
     source.num_shards = None
-    source.row_limit = None
-    source._fragment_row_limits = None
     source._dataset_cache = type(
         "Dataset",
         (),
@@ -52,7 +55,6 @@ def test_load_lance_pins_version_and_shards_by_fragment(tmp_path) -> None:
         dataset_uri,
         version=version_one,
         columns=["x"],
-        batch_size=1,
     )
     shards = pipeline.list_shards()
 
@@ -65,6 +67,132 @@ def test_load_lance_pins_version_and_shards_by_fragment(tmp_path) -> None:
         (1, 2),
     ]
     assert [int(row["x"]) for row in pipeline.iter_rows()] == [1, 2, 3]
+
+
+def test_max_block_rows_bounds_lance_scanner_batches(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "scanner-batches.lance"
+    lance.write_dataset(pa.table({"x": list(range(9))}), str(dataset_uri))
+
+    default_pipeline = load_lance(dataset_uri)
+    bounded_pipeline = default_pipeline.with_max_block_rows(2)
+    restored_pipeline = bounded_pipeline.with_max_block_rows(None)
+    overridden_pipeline = (
+        load_lance(dataset_uri, read_batch_rows=4).with_max_block_rows(2).select("x")
+    )
+    enlarged_pipeline = load_lance(dataset_uri, read_batch_rows=131_072)
+
+    assert isinstance(default_pipeline.source, LanceSource)
+    assert isinstance(bounded_pipeline.source, LanceSource)
+    assert isinstance(restored_pipeline.source, LanceSource)
+    assert isinstance(overridden_pipeline.source, LanceSource)
+    assert isinstance(enlarged_pipeline.source, LanceSource)
+    assert default_pipeline.source._read_batch_rows == 65_536
+    assert bounded_pipeline.source._read_batch_rows == 2
+    assert restored_pipeline.source._read_batch_rows == 65_536
+    assert overridden_pipeline.source._read_batch_rows == 4
+    assert enlarged_pipeline.source._read_batch_rows == 131_072
+    assert overridden_pipeline.read_batch_rows == 4
+    assert overridden_pipeline.max_block_rows == 2
+
+    units = list(bounded_pipeline.source.read_shard(bounded_pipeline.list_shards()[0]))
+    tabular_units = []
+    for unit in units:
+        assert isinstance(unit, Tabular)
+        tabular_units.append(unit)
+    assert [unit.num_rows for unit in tabular_units] == [2, 2, 2, 2, 1]
+
+    overridden_units = list(
+        overridden_pipeline.source.read_shard(overridden_pipeline.list_shards()[0])
+    )
+    assert [
+        unit.num_rows for unit in overridden_units if isinstance(unit, Tabular)
+    ] == [
+        4,
+        4,
+        1,
+    ]
+
+
+def test_load_lance_rejects_invalid_read_batch_rows(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "invalid-read-batch.lance"
+    lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+
+    with pytest.raises(ValueError, match="read_batch_rows must be > 0"):
+        load_lance(dataset_uri, read_batch_rows=0)
+
+
+def test_load_lance_max_rows_uses_limited_source_and_slices_final_batch(
+    tmp_path,
+) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "limited.lance"
+    lance.write_dataset(
+        pa.table({"x": list(range(6))}),
+        str(dataset_uri),
+        max_rows_per_file=2,
+    )
+
+    pipeline = load_lance(dataset_uri, max_rows=3)
+    shards = pipeline.list_shards()
+
+    assert len(shards) == 1
+    assert isinstance(shards[0].descriptor, ShardGroupDescriptor)
+    assert isinstance(pipeline.source, LimitedSource)
+    assert isinstance(pipeline.source.source, LanceSource)
+    assert pipeline.source.source._read_batch_rows == 3
+    assert [int(row["x"]) for row in pipeline.iter_rows()] == [0, 1, 2]
+    assert pipeline.source.describe()["max_rows"] == 3
+
+
+def test_load_lance_large_max_rows_preserves_default_scanner_batch(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "large-limit.lance"
+    lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+
+    pipeline = load_lance(dataset_uri, max_rows=1_000_000)
+
+    assert isinstance(pipeline.source, LimitedSource)
+    assert isinstance(pipeline.source.source, LanceSource)
+    assert pipeline.source.source._read_batch_rows == 65_536
+
+
+def test_load_lance_max_rows_zero_and_negative(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "zero.lance"
+    lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri))
+
+    assert load_lance(dataset_uri, max_rows=0).list_shards() == []
+    assert list(load_lance(dataset_uri, max_rows=0).iter_rows()) == []
+    with pytest.raises(ValueError, match="max_rows must be >= 0"):
+        load_lance(dataset_uri, max_rows=-1)
+
+
+def test_load_lance_max_rows_wraps_requested_fragment_plan(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "grouped-limited.lance"
+    lance.write_dataset(
+        pa.table({"x": list(range(6))}),
+        str(dataset_uri),
+        max_rows_per_file=2,
+    )
+
+    pipeline = load_lance(dataset_uri, max_rows=3, num_shards=1)
+    shards = pipeline.list_shards()
+
+    assert len(shards) == 1
+    descriptor = shards[0].descriptor
+    assert isinstance(descriptor, ShardGroupDescriptor)
+    assert len(descriptor.shards) == 1
+    assert (
+        descriptor.shards[0].descriptor.start,
+        descriptor.shards[0].descriptor.end,
+    ) == (
+        0,
+        3,
+    )
+    assert [int(row["x"]) for row in pipeline.iter_rows()] == [0, 1, 2]
 
 
 def test_load_lance_normalizes_classic_blobs_to_references(tmp_path) -> None:
@@ -92,7 +220,7 @@ def test_load_lance_normalizes_classic_blobs_to_references(tmp_path) -> None:
         max_rows_per_file=1,
     )
 
-    pipeline = load_lance(dataset_uri, batch_size=1)
+    pipeline = load_lance(dataset_uri)
     output_schema = pipeline.output_schema()
     rows = list(pipeline.iter_rows())
 
@@ -158,30 +286,25 @@ def test_load_lance_limits_leading_rows_across_fragments(tmp_path) -> None:
 
     pipeline = load_lance(
         dataset_uri,
-        batch_size=2,
         num_shards=2,
-        row_limit=5,
+        max_rows=5,
     )
 
     assert [int(row["x"]) for row in pipeline.iter_rows()] == list(range(5))
-    assert len(pipeline.list_shards()) == 2
-    assert pipeline.source.describe()["row_limit"] == 5
+    assert len(pipeline.list_shards()) == 1
+    assert isinstance(pipeline.source, LimitedSource)
+    assert isinstance(pipeline.source.source, LanceSource)
+    assert pipeline.source.describe()["max_rows"] == 5
 
 
-def test_load_lance_row_limit_allows_short_dataset(tmp_path) -> None:
+def test_load_lance_max_rows_allows_short_dataset(tmp_path) -> None:
     lance = pytest.importorskip("lance")
     dataset_uri = tmp_path / "short.lance"
     lance.write_dataset(pa.table({"x": [1, 2]}), str(dataset_uri))
 
     assert [
-        int(row["x"]) for row in load_lance(dataset_uri, row_limit=10).iter_rows()
+        int(row["x"]) for row in load_lance(dataset_uri, max_rows=10).iter_rows()
     ] == [1, 2]
-
-
-@pytest.mark.parametrize("row_limit", [0, -1])
-def test_load_lance_rejects_nonpositive_row_limit(row_limit: int) -> None:
-    with pytest.raises(ValueError, match="row_limit must be > 0"):
-        LanceSource("unused.lance", row_limit=row_limit)
 
 
 def test_limited_lance_source_rejects_add_columns(tmp_path) -> None:
@@ -190,11 +313,41 @@ def test_limited_lance_source_rejects_add_columns(tmp_path) -> None:
     lance.write_dataset(pa.table({"x": [1, 2]}), str(dataset_uri))
 
     with pytest.raises(ValueError, match="limited Lance source"):
-        load_lance(dataset_uri, row_limit=1).write_lance_dataset(
+        load_lance(dataset_uri, max_rows=1).write_lance_dataset(
             dataset_uri,
             mode="add_columns",
             columns=["y"],
         )
+
+
+def test_limited_lance_source_adds_columns_with_null_fill(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "limited-add-columns-fill.lance"
+    base = lance.write_dataset(
+        pa.table({"x": list(range(8))}),
+        str(dataset_uri),
+        max_rows_per_file=3,
+    )
+
+    (
+        load_lance(dataset_uri, version=base.version, max_rows=4)
+        .map(lambda row: {"y": int(row["x"]) * 10}, dtypes={"y": datatype.int64()})
+        .write_lance_dataset(
+            dataset_uri,
+            mode=AddColumns(),
+            columns=["y"],
+        )
+        .launch_local(
+            name="limited-add-columns-fill",
+            num_workers=1,
+            rundir=str(tmp_path / "limited-add-columns-fill-run"),
+        )
+    )
+
+    assert lance.dataset(str(dataset_uri)).to_table().to_pydict() == {
+        "x": list(range(8)),
+        "y": [0, 10, 20, 30, None, None, None, None],
+    }
 
 
 def test_load_lance_uses_physical_row_addresses_as_source_row_ids(tmp_path) -> None:
@@ -206,7 +359,7 @@ def test_load_lance_uses_physical_row_addresses_as_source_row_ids(tmp_path) -> N
         max_rows_per_file=2,
     )
 
-    pipeline = load_lance(dataset_uri, batch_size=1)
+    pipeline = load_lance(dataset_uri)
     addresses_by_shard = []
     for shard in pipeline.list_shards():
         addresses = []

@@ -565,6 +565,11 @@ class BlobAssetManager:
         if block is None:
             next_index = self._blocks[key].index + 1 if key in self._blocks else 0
             relpath = self._block_relpath(shard_id, column_name, next_index)
+            if self.output.exists(relpath):
+                raise FileExistsError(
+                    "packed blob destination already exists; refusing to overwrite it: "
+                    f"{self.output.abs_path(relpath)}"
+                )
             open_kwargs = (
                 {"size": max(self.config.target_bytes, payload_size)}
                 if is_s3fs(self.output.fs)
@@ -755,9 +760,10 @@ class BlobAssetManager:
         for index, value in enumerate(values):
             if value is None or not isinstance(value, Mapping):
                 continue
-            path = value.get("path")
-            offset = value.get("offset")
-            size = value.get("size")
+            reference = cast(Mapping[str, object], value)
+            path = reference.get("path")
+            offset = reference.get("offset")
+            size = reference.get("size")
             if (
                 isinstance(path, str)
                 and path
@@ -771,7 +777,16 @@ class BlobAssetManager:
         rewritten: dict[int, object] = {}
         for path, references in grouped.items():
             source = DataFile.resolve(path)
-            source_size = int(source.fs.size(source.path))
+            try:
+                raw_source_size = source.fs.size(source.path)
+            except (NotImplementedError, OSError):
+                continue
+            try:
+                source_size = int(raw_source_size)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if source_size < 0:
+                continue
             if not self._covers_entire_blob(
                 [(offset, size) for _, offset, size in references], source_size
             ):
