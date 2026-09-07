@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.metadata
 import os
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, TypeVar
 from urllib.parse import quote, urlencode
@@ -417,6 +418,7 @@ class MacrodataClient:
         self,
         *,
         job_id: str,
+        attempt_id: str | None = None,
         command: list[str],
         workdir: str | None = None,
         timeout_secs: int = 300,
@@ -427,18 +429,22 @@ class MacrodataClient:
         }
         if workdir is not None:
             payload["workdir"] = workdir
-        return self._request_raw(
+        attempt_id = str(uuid.UUID(attempt_id)) if attempt_id else str(uuid.uuid4())
+        payload["attempt_id"] = attempt_id
+        result = self._request_raw(
             method="POST",
             path=f"/api/cloud/debug/{quote(job_id, safe='')}/exec",
             json_payload=payload,
-            timeout_s=float(timeout_secs + 30),
-            retry_attempts=1,
+            timeout_s=40.0,
+            retry_attempts=4,
         )
+        return self._wait_debug_attempt(job_id, attempt_id, result, timeout_secs)
 
     def cloud_debug_run(
         self,
         *,
         job_id: str,
+        attempt_id: str | None = None,
         max_shards: int | None = None,
         timeout_secs: int = 3600,
         profile: bool = False,
@@ -448,13 +454,39 @@ class MacrodataClient:
             payload["max_shards"] = max_shards
         if profile:
             payload["profile"] = True
-        return self._request_raw(
+        attempt_id = str(uuid.UUID(attempt_id)) if attempt_id else str(uuid.uuid4())
+        payload["attempt_id"] = attempt_id
+        result = self._request_raw(
             method="POST",
             path=f"/api/cloud/debug/{quote(job_id, safe='')}/run",
             json_payload=payload,
-            timeout_s=float(timeout_secs + 30),
-            retry_attempts=1,
+            timeout_s=40.0,
+            retry_attempts=4,
         )
+        return self._wait_debug_attempt(job_id, attempt_id, result, timeout_secs)
+
+    def cloud_debug_attempt(self, *, job_id: str, attempt_id: str) -> dict[str, Any]:
+        return self._request_raw(
+            method="GET",
+            path=f"/api/cloud/debug/{quote(job_id, safe='')}/attempts/{quote(attempt_id, safe='')}",
+            timeout_s=40.0,
+        )
+
+    def _wait_debug_attempt(
+        self, job_id: str, attempt_id: str, result: dict[str, Any], timeout_secs: int
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + timeout_secs + 60
+        while result.get("status") == "running":
+            if time.monotonic() >= deadline:
+                raise MacrodataApiError(
+                    status=408,
+                    message=f"Timed out waiting for debug attempt {attempt_id}; resume using the same attempt ID",
+                )
+            time.sleep(1)
+            result = self.cloud_debug_attempt(job_id=job_id, attempt_id=attempt_id)
+        if result.get("status") not in {"completed", "failed"}:
+            raise MacrodataApiError(status=502, message="Invalid debug attempt result")
+        return result
 
     def cloud_debug_profile(self, *, job_id: str) -> dict[str, Any]:
         return self._request_raw(

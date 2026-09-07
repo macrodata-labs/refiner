@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import time
+import uuid
 from typing import Any
 
 from refiner.cli.debug_sessions import (
@@ -40,6 +41,16 @@ def _print_json(payload: dict[str, Any]) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def _attempt_id(args: argparse.Namespace) -> str:
+    value = str(uuid.UUID(args.attempt_id)) if args.attempt_id else str(uuid.uuid4())
+    print(
+        f"Debug attempt {value} (reuse --attempt-id to resume)",
+        file=sys.stderr,
+        flush=True,
+    )
+    return value
+
+
 def _emit_exec_result(payload: dict[str, Any]) -> int:
     stdout = payload.get("stdout")
     stderr = payload.get("stderr")
@@ -47,6 +58,11 @@ def _emit_exec_result(payload: dict[str, Any]) -> int:
         print(stdout, end="" if stdout.endswith("\n") else "\n")
     if isinstance(stderr, str) and stderr:
         print(stderr, end="" if stderr.endswith("\n") else "\n", file=sys.stderr)
+    if payload.get("output_truncated"):
+        print(
+            "Debug output exceeded the retained output limit and was truncated.",
+            file=sys.stderr,
+        )
     return_code = payload.get("exit_code")
     return return_code if isinstance(return_code, int) else 1
 
@@ -130,6 +146,9 @@ def _debug_parser() -> argparse.ArgumentParser:
 
     run = subparsers.add_parser("run", help="Run the synchronized pipeline once")
     _add_target(run)
+    run.add_argument(
+        "--attempt-id", help="Resume/retry an existing attempt without rerunning it"
+    )
     run.add_argument("--max-shards", type=int)
     run.add_argument("--timeout", type=int, default=3600)
     run.add_argument("--profile", action="store_true")
@@ -155,6 +174,9 @@ def _debug_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_target(execute)
+    execute.add_argument(
+        "--attempt-id", help="Resume/retry an existing attempt without rerunning it"
+    )
     execute.add_argument("--workdir", metavar="PATH", help="Worker working directory")
     execute.add_argument(
         "--timeout",
@@ -467,7 +489,9 @@ def _dispatch(args: argparse.Namespace) -> int:
     if args.debug_command == "run":
         if args.max_shards is not None and args.max_shards <= 0:
             raise SystemExit("--max-shards must be greater than zero")
+        attempt_id = _attempt_id(args)
         payload = client.cloud_debug_run(
+            attempt_id=attempt_id,
             job_id=job_id,
             max_shards=args.max_shards,
             timeout_secs=args.timeout,
@@ -492,6 +516,7 @@ def _dispatch(args: argparse.Namespace) -> int:
             raise SystemExit("debug exec requires a command after --")
         return _emit_exec_result(
             client.cloud_debug_exec(
+                attempt_id=_attempt_id(args),
                 job_id=job_id,
                 command=command,
                 workdir=args.workdir,
