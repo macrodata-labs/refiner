@@ -1465,11 +1465,13 @@ def test_write_zarr_rejects_sharded_schema_drift_after_cleanup(
             "meta/episode_ends": np.asarray([1], dtype=np.int64),
         },
     )
-    reducer = ZarrSink(
-        str(zarr_out),
-        arrays={"data/action": "action"},
+    reducer = ZarrReducerSink(
+        output=str(zarr_out),
+        store_template="{shard_id}__w{worker_id}.zarr",
+        episode_ends_path="meta/episode_ends",
+        array_chunk_bytes=8 * 1024 * 1024,
         reduce_to_single_store=False,
-    ).build_reducer()
+    )
     assert reducer is not None
     runtime = _FinalizedWorkersRuntime(
         [

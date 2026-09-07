@@ -18,7 +18,6 @@ from refiner.pipeline.sinks.assets import (
     asset_config_to_plan,
 )
 from refiner.pipeline.sinks.lance_utils import block_to_table, validate_lance_uri
-from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.utils import check_required_dependencies
 from refiner.worker.context import get_active_worker_token
 from refiner.worker.metrics.api import log_throughput
@@ -140,11 +139,3 @@ class LanceSink(BaseSink):
         if self.assets is not None:
             args["assets"] = asset_config_to_plan(self.assets)
         return ("write_lance", "writer", args)
-
-    def build_reducer(self) -> BaseSink | None:
-        return FileCleanupReducerSink(
-            output=self.output,
-            filename_template=self.filename_template,
-            reducer_name="write_lance_reduce",
-            assets_subdir=self.assets.subdir if self.assets is not None else None,
-        )

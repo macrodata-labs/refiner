@@ -4,7 +4,6 @@ import json
 import subprocess
 import sys
 import threading
-from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
@@ -40,6 +39,7 @@ from refiner.worker.workdir import resolve_workdir
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
     from refiner.pipeline.data.shard import Shard
+    from refiner.pipeline.sequence import PipelineSequence
 
 
 class LocalLauncher(BaseLauncher):
@@ -51,7 +51,7 @@ class LocalLauncher(BaseLauncher):
     def __init__(
         self,
         *,
-        pipeline: RefinerPipeline,
+        pipeline: RefinerPipeline | PipelineSequence,
         name: str,
         num_workers: int | Literal["auto"] = 1,
         rundir: str | None = None,
@@ -69,24 +69,6 @@ class LocalLauncher(BaseLauncher):
         )
         self.job_tracking_url: str | None = None
         self._total_stages = 1
-
-    def _resolved_stages(
-        self,
-        stages: list[PlannedStage] | None = None,
-    ) -> list[PlannedStage]:
-        resolved = super()._resolved_stages(stages)
-        return [
-            replace(
-                stage,
-                compute=replace(
-                    stage.compute,
-                    num_workers=len(stage.pipeline.list_shards()),
-                ),
-            )
-            if stage.compute.num_workers == "auto"
-            else stage
-            for stage in resolved
-        ]
 
     def _collect_worker_results(
         self,
@@ -300,10 +282,10 @@ class LocalLauncher(BaseLauncher):
         *,
         stage: PlannedStage,
     ) -> LaunchStats:
-        # Resolve worker capacity and remaining stage shards.
+        # Resolve remaining shards before sizing automatic worker capacity. This
+        # must happen when the stage starts because earlier stages may produce
+        # the current stage's input.
         stage_workers = stage.compute.num_workers
-        if not isinstance(stage_workers, int):
-            raise RuntimeError("local stage worker count was not resolved")
         if self.job_id is None or self.rundir is None:
             raise RuntimeError(
                 "local launcher must be initialized in launch() before running stages"
@@ -333,7 +315,7 @@ class LocalLauncher(BaseLauncher):
                 output_rows=0,
             )
 
-        if self.num_workers == "auto" and stage.compute.inherit_launcher_resources:
+        if stage_workers == "auto":
             stage_workers = len(shards)
         available_cpus = len(available_cpu_ids())
         if stage_workers > available_cpus:
@@ -405,13 +387,33 @@ class LocalLauncher(BaseLauncher):
     def launch(self) -> LaunchStats:
         if attach_mode_override() == "detach":
             raise SystemExit("--detach is only supported for cloud launches.")
+        stages = self._resolved_stages()
+        unsupported_stages = [
+            stage.name
+            for stage in stages
+            if stage.compute.cpus_per_worker is not None
+            or stage.compute.memory_mb_per_worker is not None
+        ]
+        if unsupported_stages:
+            names = ", ".join(unsupported_stages)
+            raise ValueError(
+                "launch_local does not support cpus_per_worker or "
+                f"mem_mb_per_worker; remove them from stages: {names}"
+            )
         available_cpus = len(available_cpu_ids())
-        if isinstance(self.num_workers, int) and self.num_workers > available_cpus:
+        max_stage_workers = max(
+            (
+                stage.compute.num_workers
+                for stage in stages
+                if isinstance(stage.compute.num_workers, int)
+            ),
+            default=0,
+        )
+        if max_stage_workers > available_cpus:
             logger.warning(
-                f"launch requested {self.num_workers} workers, but only {available_cpus} CPUs are available on this machine."
+                f"launch requested {max_stage_workers} workers, but only {available_cpus} CPUs are available on this machine."
             )
         self.job_tracking_url = None
-        stages = self._resolved_stages()
         self._total_stages = max(1, len(stages))
         tracking_client, self.job_id = self._register_tracked_job(stages=stages)
         if self.job_id is None:

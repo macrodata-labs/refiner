@@ -18,13 +18,14 @@ from refiner.pipeline.resources import GPU
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
+    from refiner.pipeline.sequence import PipelineSequence
 
 
 class BaseLauncher(ABC):
     def __init__(
         self,
         *,
-        pipeline: RefinerPipeline,
+        pipeline: RefinerPipeline | PipelineSequence,
         name: str,
         num_workers: WorkerCount = 1,
         cpus_per_worker: int | None = None,

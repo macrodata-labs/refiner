@@ -77,15 +77,6 @@ class BaseSink(ABC):
             return ()
         return cast(Any, self).output.required_refiner_extras()
 
-    def build_reducer(self) -> "BaseSink | None":
-        """Return an optional 1-worker reducer sink for launched execution.
-
-        Reducers run as a follow-up stage after the main writer stage. Use this
-        when a sink needs a final cleanup or reduction pass once all shard-local
-        writer outputs are known.
-        """
-        return None
-
     def set_input_schema(self, schema: pa.Schema | None) -> None:
         """Receive the schema expected at this sink boundary before writing starts."""
         del schema

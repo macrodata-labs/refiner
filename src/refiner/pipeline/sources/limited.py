@@ -105,6 +105,12 @@ class LimitedSource(BaseSource):
                 if close is not None:
                     close()
 
+    def prepare_shard(self, shard: Shard) -> None:
+        descriptor = shard.descriptor
+        if not isinstance(descriptor, ShardGroupDescriptor):
+            raise ValueError("LimitedSource requires a shard-group descriptor")
+        self.source.prepare_shard(descriptor.shards[0])
+
 
 def limit_source(source: BaseSource, max_rows: int | None) -> BaseSource:
     """Return ``source`` unchanged or wrapped with one global row cap."""

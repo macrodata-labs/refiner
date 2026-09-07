@@ -36,6 +36,22 @@ class _FakeReader(BaseReader):
             yield row
 
 
+class _PrepareBeforeSchemaReader(_FakeReader):
+    def __init__(self, rows_by_shard_id: Mapping[str, Sequence[Row]]):
+        super().__init__(rows_by_shard_id)
+        self.prepared = False
+
+    def prepare_shard(self, shard: Shard) -> None:
+        del shard
+        self.prepared = True
+
+    @property
+    def schema(self) -> pa.Schema:
+        if not self.prepared:
+            raise RuntimeError("source schema accessed before shard preparation")
+        return pa.schema([pa.field("x", pa.int64())])
+
+
 class _FakeRuntimeLifecycle:
     def __init__(self, shards: list[Shard]):
         self.worker_id = "local"
@@ -220,6 +236,23 @@ def test_pipeline_executes_row_and_batch_steps() -> None:
 
     assert [r["x"] for r in out] == [3, 5]
     assert [r["y"] for r in out] == [30, 50]
+
+
+def test_worker_prepares_claimed_shard_before_accessing_source_schema() -> None:
+    shard = _shard("input", 0, 10)
+    source = _PrepareBeforeSchemaReader({shard.id: [DictRow({"x": 1})]})
+    lifecycle = _FakeRuntimeLifecycle([shard])
+
+    stats = Worker(
+        pipeline=RefinerPipeline(source=source),
+        job_id="job",
+        stage_index=0,
+        worker_id=lifecycle.worker_id,
+        runtime_lifecycle=lifecycle,
+    ).run()
+
+    assert source.prepared is True
+    assert stats.completed == 1
 
 
 def test_worker_runs_fused_pipeline_and_updates_runtime_lifecycle() -> None:
@@ -793,7 +826,7 @@ def test_worker_metrics_use_correct_step_indexes_for_all_block_types(
     )
 
     worker = Worker(
-        pipeline=pipeline,
+        pipeline=pipeline.primary_pipeline,
         job_id="job",
         stage_index=0,
         worker_id=runtime_lifecycle.worker_id,

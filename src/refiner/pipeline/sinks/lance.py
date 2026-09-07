@@ -12,7 +12,7 @@ import tempfile
 import threading
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, get_args
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -50,6 +50,9 @@ from refiner.worker.context import (
 )
 from refiner.worker.lifecycle import sort_finalized_workers
 from refiner.worker.metrics.api import log_throughput
+
+if TYPE_CHECKING:
+    from refiner.pipeline.sources.lance import LanceSource
 
 LanceWriteModeName = Literal["create", "append", "overwrite", "add_columns"]
 
@@ -1120,6 +1123,7 @@ class LanceDatasetSink(BaseSink):
         columns: Sequence[str] | None = None,
         source_uri: str | None = None,
         source_version: int | None = None,
+        source_version_source: LanceSource | None = None,
         assets: AssetWriteConfig | None = None,
         io: LanceIOConfig = LanceIOConfig(),
     ) -> None:
@@ -1134,7 +1138,10 @@ class LanceDatasetSink(BaseSink):
                 raise ValueError(f"{sorted(reserved_columns)[0]} is an internal column")
         if mode != "add_columns" and columns is not None:
             raise ValueError("columns is only supported with mode='add_columns'")
-        if mode == "add_columns" and (source_uri is None or source_version is None):
+        if mode == "add_columns" and (
+            source_uri is None
+            or (source_version is None and source_version_source is None)
+        ):
             raise ValueError("add_columns requires a version-pinned Lance source")
         _validate_fill_mapping(fill, columns)
         if (
@@ -1160,6 +1167,7 @@ class LanceDatasetSink(BaseSink):
         self.columns = tuple(columns) if columns is not None else None
         self.source_uri = source_uri
         self.source_version = source_version
+        self._source_version_source = source_version_source
         self.assets = assets
         self.io = io
         if mode == "add_columns" and self.output.abs_path() != source_uri:
@@ -1203,12 +1211,19 @@ class LanceDatasetSink(BaseSink):
 
     def _source_dataset(self) -> Any:
         assert self.source_uri is not None
-        assert self.source_version is not None
+        source_version = self._resolve_source_version()
         if self._source_dataset_cache is None:
             self._source_dataset_cache = _import_lance().dataset(
-                self.source_uri, version=self.source_version
+                self.source_uri, version=source_version
             )
         return self._source_dataset_cache
+
+    def _resolve_source_version(self) -> int:
+        if self.source_version is None and self._source_version_source is not None:
+            self.source_version = self._source_version_source.version
+        if self.source_version is None:
+            raise ValueError("add_columns requires a version-pinned Lance source")
+        return self.source_version
 
     def __getstate__(self) -> dict[str, object]:
         state = self.__dict__.copy()
@@ -1265,7 +1280,7 @@ class LanceDatasetSink(BaseSink):
             return
         assert self.columns is not None
         assert self.source_uri is not None
-        assert self.source_version is not None
+        self._resolve_source_version()
         source_schema = self._source_dataset().schema
         conflicts = sorted(set(self.columns).intersection(source_schema.names))
         if conflicts:
@@ -1573,18 +1588,6 @@ class LanceDatasetSink(BaseSink):
         args["io"] = self.io.to_plan()
         return ("write_lance_dataset", "writer", args)
 
-    def build_reducer(self) -> BaseSink | None:
-        return LanceDatasetCommitReducerSink(
-            self.output,
-            mode=self.mode,
-            source_version=self.source_version,
-            assets_subdir=self.assets.subdir if self.assets is not None else None,
-            columns=self.columns,
-            fill_missing=self.fill_missing,
-            fill=self.fill,
-            io=self.io,
-        )
-
 
 class LanceDatasetCommitReducerSink(BaseSink):
     def __init__(
@@ -1593,6 +1596,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
         *,
         mode: LanceWriteModeName,
         source_version: int | None = None,
+        source_version_source: LanceSource | None = None,
         assets_subdir: str | None = None,
         columns: Sequence[str] | None = None,
         fill_missing: bool = False,
@@ -1604,6 +1608,7 @@ class LanceDatasetCommitReducerSink(BaseSink):
         validate_lance_uri(self.output.abs_path())
         self.mode = mode
         self.source_version = source_version
+        self._source_version_source = source_version_source
         self.assets_subdir = assets_subdir
         self.columns = tuple(columns) if columns is not None else None
         self.fill_missing = fill_missing
@@ -1621,6 +1626,13 @@ class LanceDatasetCommitReducerSink(BaseSink):
 
     def _dataset_uri(self) -> str:
         return self.output.abs_path()
+
+    def _resolve_source_version(self) -> int:
+        if self.source_version is None and self._source_version_source is not None:
+            self.source_version = self._source_version_source.version
+        if self.source_version is None:
+            raise ValueError("add_columns reducer is missing its source version")
+        return self.source_version
 
     @property
     def counts_output_rows(self) -> bool:
@@ -1963,6 +1975,8 @@ class LanceDatasetCommitReducerSink(BaseSink):
         if self._commit_ran:
             return
         self._commit_ran = True
+        if self.mode == "add_columns":
+            self._resolve_source_version()
 
         metadata_paths, cleanup_paths = _managed_paths(
             output=self.output,

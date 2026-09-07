@@ -92,6 +92,50 @@ Broad selectors are `us`, `eu`, `ca`, and `uk`. Narrow selectors are
 `eu-south`. `eu` excludes the UK. Madrid is classified as `eu-south`; the
 defensive `FRA*` and `AMS` aliases are classified as `eu-west`.
 
+## Run pipelines as ordered stages
+
+Use `as_stage(...)` and `then(...)` when one job should run multiple complete
+pipelines in order. Each pipeline owns its reader and writer, so write durable
+output that the following stage can read.
+
+```python
+import refiner as mdr
+
+prepare = (
+    mdr.read_jsonl("s3://datasets/raw/*.jsonl")
+    .map(clean_row)
+    .write_parquet("s3://datasets/work/prepared")
+)
+publish = (
+    mdr.read_parquet("s3://datasets/work/prepared/*.parquet")
+    .write_jsonl("s3://datasets/final")
+)
+
+workflow = prepare.as_stage(
+    name="prepare",
+    num_workers=32,
+    cpus_per_worker=2,
+).then(
+    publish,
+    name="publish",
+    num_workers=4,
+    mem_mb_per_worker=16_384,
+)
+
+workflow.launch_cloud(name="dataset-production")
+```
+
+Macrodata starts `publish` only after `prepare` completes successfully. If a
+stage fails, later stages do not start. Stage names and resource arguments
+belong to the pipeline beside them; `launch_cloud(name=...)` names the whole
+job.
+
+Refiner does not implicitly pass rows between stages. This keeps stage inputs
+reproducible and makes continuation safe: the earlier stage's writer and the
+later stage's reader define the durable handoff. Writers may add one or more
+internal follow-up stages automatically; those stages do not need to be
+expressed with `then(...)`.
+
 ## What gets submitted
 
 A cloud submission includes:

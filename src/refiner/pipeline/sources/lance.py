@@ -59,7 +59,7 @@ def _blob_reference_field(field: pa.Field) -> pa.Field:
 
 
 class LanceSource(BaseSource):
-    """A version-pinned Lance source sharded by contiguous fragment groups."""
+    """A lazily version-pinned Lance source sharded by fragment groups."""
 
     name = "load_lance"
 
@@ -87,9 +87,21 @@ class LanceSource(BaseSource):
         self._read_batch_rows = _DEFAULT_READ_BATCH_ROWS
         self.num_shards = num_shards
         self._dataset_cache: Any | None = None
+        self._requested_version = version
+        # Shallow pipeline copies share this reference, so a sink derived from
+        # this source observes the exact version pinned by stage-time planning.
+        self._version_ref: list[int | None] = [None]
+        self._schema: pa.Schema | None = None
+        self._blob_field_ids: dict[str, int] = {}
+        if version is not None:
+            self._initialize_from_dataset(
+                _import_lance().dataset(self.dataset_uri, version=version)
+            )
 
-        dataset = _import_lance().dataset(self.dataset_uri, version=version)
-        self.version = int(dataset.version)
+    def _initialize_from_dataset(self, dataset: Any) -> None:
+        """Pin the opened dataset version and validate its projected schema."""
+        self._version_ref[0] = int(dataset.version)
+        self._dataset_cache = dataset
         source_schema = dataset.schema
         selected_columns = set(self.columns) if self.columns is not None else None
         unsupported_blobs = [
@@ -136,6 +148,19 @@ class LanceSource(BaseSource):
             )
         self._schema = projected_schema
 
+    @property
+    def version(self) -> int:
+        """Return the pinned version, resolving the latest version on first use."""
+        self._dataset()
+        if self._version_ref[0] is None:
+            raise RuntimeError("Lance dataset version was not resolved")
+        return self._version_ref[0]
+
+    @property
+    def resolved_version(self) -> int | None:
+        """Return the pinned version without opening an unresolved dataset."""
+        return self._version_ref[0]
+
     def with_read_batch_rows(self, max_rows: int | None) -> "LanceSource":
         source = copy(self)
         source._read_batch_rows = (
@@ -150,6 +175,9 @@ class LanceSource(BaseSource):
 
     @property
     def schema(self) -> pa.Schema:
+        self._dataset()
+        if self._schema is None:
+            raise RuntimeError("Lance dataset schema was not resolved")
         return self._schema
 
     def _declared_refiner_extras(self) -> tuple[str, ...]:
@@ -160,9 +188,17 @@ class LanceSource(BaseSource):
 
     def _dataset(self) -> Any:
         if self._dataset_cache is None:
-            self._dataset_cache = _import_lance().dataset(
-                self.dataset_uri, version=self.version
+            dataset = _import_lance().dataset(
+                self.dataset_uri,
+                version=(
+                    self._version_ref[0]
+                    if self._version_ref[0] is not None
+                    else self._requested_version
+                ),
             )
+            self._initialize_from_dataset(dataset)
+        if self._dataset_cache is None:
+            raise RuntimeError("Lance dataset was not resolved")
         return self._dataset_cache
 
     def __getstate__(self) -> dict[str, object]:
@@ -189,6 +225,7 @@ class LanceSource(BaseSource):
                     start=start,
                     end=end,
                     global_ordinal=index,
+                    source_version=self.version,
                 )
             )
             start = end
@@ -241,7 +278,7 @@ class LanceSource(BaseSource):
                 raise TypeError(
                     f"Lance blob column {name!r} has an invalid description"
                 )
-            field = self._schema.field(name)
+            field = self.schema.field(name)
             reference = pa.StructArray.from_arrays(
                 [
                     pa.array([path] * len(descriptions), type=pa.string()),
@@ -277,8 +314,11 @@ class LanceSource(BaseSource):
         blob_paths: dict[str, str],
     ) -> Iterator[SourceUnit]:
         """Read a fragment prefix without scanning projected value columns."""
+        source_schema = self.schema
         selected_columns = (
-            list(self.columns) if self.columns is not None else list(self._schema.names)
+            list(self.columns)
+            if self.columns is not None
+            else list(source_schema.names)
         )
         blob_columns = [
             name for name in selected_columns if name in self._blob_field_ids
@@ -326,7 +366,7 @@ class LanceSource(BaseSource):
                 fields.append(source.schema.field(name))
             table = pa.Table.from_arrays(
                 arrays,
-                schema=pa.schema(fields, metadata=self._schema.metadata),
+                schema=pa.schema(fields, metadata=source_schema.metadata),
             )
             row_addresses = address_table.column(_LANCE_ROW_ADDRESS_COLUMN)
             rows_read += batch_rows
@@ -346,6 +386,7 @@ class LanceSource(BaseSource):
         descriptor = shard.descriptor
         if not isinstance(descriptor, RowRangeDescriptor):
             raise TypeError("LanceSource requires row-range shards")
+        self.prepare_shard(shard)
         fragments = self._dataset().get_fragments()
         if (
             descriptor.start < 0
@@ -402,6 +443,25 @@ class LanceSource(BaseSource):
             if remaining_rows is not None:
                 remaining_rows -= expected_rows
 
+    def prepare_shard(self, shard: Shard) -> None:
+        descriptor = shard.descriptor
+        if not isinstance(descriptor, RowRangeDescriptor):
+            raise TypeError("LanceSource requires row-range shards")
+        source_version = descriptor.source_version
+        if source_version is None:
+            return
+        if self._requested_version is not None and self.version != source_version:
+            raise ValueError(
+                "Lance shard source version does not match the requested version"
+            )
+        if self._version_ref[0] == source_version:
+            return
+        if self._version_ref[0] is not None:
+            raise ValueError("Lance worker received shards from multiple versions")
+        self._initialize_from_dataset(
+            _import_lance().dataset(self.dataset_uri, version=source_version)
+        )
+
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         return self._read_shard(shard, None)
 
@@ -415,7 +475,11 @@ class LanceSource(BaseSource):
     def describe(self) -> dict[str, object]:
         return {
             "path": self.dataset_uri,
-            "version": self.version,
+            "version": (
+                self._version_ref[0]
+                if self._version_ref[0] is not None
+                else self._requested_version
+            ),
             "columns": list(self.columns) if self.columns is not None else None,
             "read_batch_rows": self._read_batch_rows,
             "num_shards": self.num_shards,

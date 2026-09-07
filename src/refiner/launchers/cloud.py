@@ -43,6 +43,7 @@ from refiner.launchers.base import BaseLauncher
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
+    from refiner.pipeline.sequence import PipelineSequence
     from refiner.pipeline.planning import PlannedStage
 
 
@@ -174,7 +175,7 @@ class CloudLauncher(BaseLauncher):
     def __init__(
         self,
         *,
-        pipeline: "RefinerPipeline",
+        pipeline: "RefinerPipeline | PipelineSequence",
         name: str,
         provider: str = "modal",
         num_workers: int | Literal["auto"] = 1,
@@ -509,9 +510,11 @@ class CloudLauncher(BaseLauncher):
     ) -> PreparedDebugSync:
         if self.continue_from_job is not None:
             raise ValueError("cloud debug cannot be combined with continue_from_job")
+        self._validate_debug_stages(self._resolved_stages())
         stages, manifest, _, resolved_secret_sources, resolved_env = (
             self._resolve_submission()
         )
+        self._validate_debug_stages(stages)
         stage = next((item for item in stages if item.index == 0), None)
         if stage is None:
             raise ValueError("pipeline has no stage 0")
@@ -541,7 +544,16 @@ class CloudLauncher(BaseLauncher):
         return self._launch(debug=False)
 
     def launch_debug(self) -> CloudLaunchResult:
+        self._validate_debug_stages(self._resolved_stages())
         return self._launch(debug=True)
+
+    @staticmethod
+    def _validate_debug_stages(stages: list[PlannedStage]) -> None:
+        if len(stages) != 1:
+            raise ValueError(
+                "cloud debug does not support multi-stage pipelines; "
+                "launch the workflow normally or debug one stage at a time"
+            )
 
     def _launch(self, *, debug: bool) -> CloudLaunchResult:
         if debug and self.continue_from_job is not None:
@@ -557,6 +569,7 @@ class CloudLauncher(BaseLauncher):
             self._resolve_submission()
         )
         if debug:
+            self._validate_debug_stages(stages)
             workspace_secret_versions = self._workspace_secret_versions(
                 client=client,
                 resolved_secret_sources=resolved_secret_sources,
@@ -572,12 +585,13 @@ class CloudLauncher(BaseLauncher):
                 )
             )
         try:
-            if self.provider == "aws" and any(
-                collect_pipeline_services(stage.pipeline) for stage in stages
-            ):
-                raise ValueError(
-                    "provider='aws' does not support managed runtime services"
-                )
+            if self.provider == "aws":
+                if any(stage.compute.gpu is not None for stage in stages):
+                    raise ValueError("provider='aws' does not support GPU workers")
+                if any(collect_pipeline_services(stage.pipeline) for stage in stages):
+                    raise ValueError(
+                        "provider='aws' does not support managed runtime services"
+                    )
             pipeline_payloads = self._upload_stage_payloads(
                 client=client, stages=stages
             )

@@ -25,7 +25,7 @@ and local modes remain open to all users.
 | Source | The reader that plans shards and emits input rows or tables. |
 | Shard | A unit of source work assigned to a worker. |
 | Worker | A process that claims shards, runs transforms, and writes output. |
-| Stage | A contiguous execution segment. Writer reducers may add later stages. |
+| Stage | A named pipeline with its own source, sink, and resources. Stages in one job run in order; writers may add internal follow-up stages. |
 | Sink | A writer attached to the end of the pipeline. |
 
 For input planning details, see [Reader Model](../reading-data/reader-model.md)

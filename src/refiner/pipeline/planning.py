@@ -34,6 +34,7 @@ from refiner.services.discovery import (
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
+    from refiner.pipeline.sequence import PipelineSequence
 
 
 _REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
@@ -501,52 +502,40 @@ def _compile_stage_steps(
 
 
 def plan_pipeline_stages(
-    pipeline: "RefinerPipeline", *, default_num_workers: WorkerCount
+    pipeline: "RefinerPipeline | PipelineSequence", *, default_num_workers: WorkerCount
 ) -> list[PlannedStage]:
     """Return the ordered execution stages for a pipeline.
 
-    This is currently a placeholder splitter that yields a single stage. Future
-    multi-stage planning logic should live here.
+    Configured sequences preserve their declared order and resource profiles.
     """
     if default_num_workers != "auto" and (
         not isinstance(default_num_workers, int) or default_num_workers <= 0
     ):
         raise ValueError("default_num_workers must be > 0")
 
-    from refiner.pipeline.pipeline import RefinerPipeline
-    from refiner.pipeline.sources.task import TaskSource
+    from refiner.pipeline.sequence import PipelineSequence
 
-    sink = pipeline.sink
-    reducer = sink.build_reducer() if sink is not None else None
-    if reducer is not None:
-        assert sink is not None
-        reducer_stage = RefinerPipeline(
-            source=TaskSource(num_tasks=1),
-            pipeline_steps=(),
-            max_block_rows=pipeline.max_block_rows,
-            max_vectorized_block_bytes=pipeline.max_vectorized_block_bytes,
-            sink=reducer,
-        )
-        sink_description = sink.describe()
-        stage_base_name = (
-            sink_description[0] if sink_description is not None else "writer"
-        )
+    if isinstance(pipeline, PipelineSequence):
         return [
             PlannedStage(
-                index=0,
-                name=f"{stage_base_name}_stage_0",
-                pipeline=pipeline,
-                compute=StageComputeRequirements(num_workers=default_num_workers),
-            ),
-            PlannedStage(
-                index=1,
-                name=f"{stage_base_name}_stage_1",
-                pipeline=reducer_stage,
+                index=index,
+                name=configured_stage.name,
+                pipeline=configured_stage.pipeline,
                 compute=StageComputeRequirements(
-                    num_workers=1,
-                    inherit_launcher_resources=False,
+                    num_workers=(
+                        default_num_workers
+                        if configured_stage.inherit_launcher_resources
+                        else configured_stage.num_workers
+                    ),
+                    cpus_per_worker=configured_stage.cpus_per_worker,
+                    memory_mb_per_worker=configured_stage.mem_mb_per_worker,
+                    gpu=configured_stage.gpu,
+                    inherit_launcher_resources=(
+                        configured_stage.inherit_launcher_resources
+                    ),
                 ),
-            ),
+            )
+            for index, configured_stage in enumerate(pipeline.stages)
         ]
 
     return [
@@ -583,9 +572,11 @@ def compile_planned_stages(
 
 
 def compile_pipeline_plan(
-    pipeline: "RefinerPipeline", *, secret_values: tuple[str, ...] = ()
+    pipeline: "RefinerPipeline | PipelineSequence",
+    *,
+    secret_values: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    """Compile a transport-neutral single-pipeline plan description."""
+    """Compile a transport-neutral pipeline plan description."""
     return compile_planned_stages(
         plan_pipeline_stages(pipeline, default_num_workers=1),
         secret_values=secret_values,

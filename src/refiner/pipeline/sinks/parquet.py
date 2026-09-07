@@ -22,7 +22,6 @@ from refiner.pipeline.sinks.assets import (
     asset_config_to_plan,
 )
 from refiner.pipeline.sinks.base import BaseSink
-from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
 from refiner.worker.context import get_active_worker_token
 from refiner.worker.metrics.api import log_throughput
 
@@ -137,14 +136,6 @@ class ParquetSink(BaseSink):
                 key: dtype_to_plan(dtype) for key, dtype in self.dtypes.items()
             }
         return ("write_parquet", "writer", args)
-
-    def build_reducer(self) -> BaseSink | None:
-        return FileCleanupReducerSink(
-            output=self.output,
-            filename_template=self.filename_template,
-            reducer_name="write_parquet_reduce",
-            assets_subdir=self.assets.subdir if self.assets is not None else None,
-        )
 
 
 __all__ = ["ParquetSink"]

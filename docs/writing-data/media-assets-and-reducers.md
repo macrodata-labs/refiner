@@ -121,19 +121,21 @@ Use `"error"` for training data. Missing media should usually fail the job.
 `"set_null"` retains the row and replaces a missing asset with null.
 `"drop_row"` removes the complete row containing a missing asset.
 
-## Reducers
+## Automatic writer stages
 
-Some writers add a reducer stage. A reducer stage finalizes outputs after
-workers finish shard-local writes.
+Some writer methods return a complete `PipelineSequence` containing the primary
+write and any required finalization stages. You do not need to construct these
+stages with `then(...)`; calling the writer normally is enough.
 
-| Writer | Reducer purpose |
+| Writer | Follow-up purpose |
 | --- | --- |
 | Parquet / JSONL / standalone Lance | Remove files and asset blocks from rejected worker attempts. |
 | Lance dataset | Commit finalized fragments and remove rejected metadata and assets. |
 | LeRobot | Merge metadata, tasks, stats, and staged chunks. |
 | Zarr | Merge shard-local stores into a single store when configured. |
 
-Reducers are part of the launched pipeline plan and are visible in job progress.
+These stages are part of the launched pipeline plan and are visible in job
+progress.
 
 ## Internal Notes
 

@@ -100,6 +100,7 @@ def _stub_cloud_submit(
     fail_on_upload: bool = False,
     fail_on_complete: bool = False,
     workspace_secrets: list[dict[str, str]] | None = None,
+    stub_planner: bool = True,
 ) -> dict[str, object]:
     captured: dict[str, object] = {
         "events": [],
@@ -191,17 +192,18 @@ def _stub_cloud_submit(
         "refiner.launchers.cloud.PreparedPipelinePayload.from_pipeline",
         lambda pipeline: _prepared_payload(b"AQID"),
     )
-    monkeypatch.setattr(
-        "refiner.launchers.base.plan_pipeline_stages",
-        lambda pipeline, default_num_workers: [
-            PlannedStage(
-                index=0,
-                name="stage_0",
-                pipeline=pipeline,
-                compute=StageComputeRequirements(num_workers=default_num_workers),
-            )
-        ],
-    )
+    if stub_planner:
+        monkeypatch.setattr(
+            "refiner.launchers.base.plan_pipeline_stages",
+            lambda pipeline, default_num_workers: [
+                PlannedStage(
+                    index=0,
+                    name="stage_0",
+                    pipeline=pipeline,
+                    compute=StageComputeRequirements(num_workers=default_num_workers),
+                )
+            ],
+        )
     monkeypatch.setattr(
         "refiner.launchers.cloud.build_run_manifest",
         manifest if callable(manifest) else (lambda **_: manifest or {"version": 1}),
@@ -335,6 +337,19 @@ def test_pipeline_launch_cloud_rejects_gpu_for_aws() -> None:
         )
 
 
+def test_pipeline_sequence_launch_cloud_rejects_gpu_for_aws(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch, stub_planner=False)
+    sequence = read_jsonl("input.jsonl").as_stage(
+        name="gpu",
+        gpu=GPU(count=1, type="h100", cuda_version="12.8"),
+    )
+
+    with pytest.raises(SystemExit, match="does not support GPU"):
+        sequence.launch_cloud(name="invalid aws gpu job", provider="aws")
+
+    assert captured["events"] == []
+
+
 def test_pipeline_launch_cloud_rejects_runtime_services_for_aws_before_upload(
     monkeypatch,
 ) -> None:
@@ -413,6 +428,30 @@ def test_debug_launch_rejects_continue() -> None:
 
     with pytest.raises(ValueError, match="debug cannot be combined"):
         launcher.launch_debug()
+
+
+def test_debug_launch_rejects_pipeline_sequence() -> None:
+    sequence = (
+        read_jsonl("first.jsonl")
+        .as_stage(name="first")
+        .then(read_jsonl("second.jsonl"), name="second")
+    )
+    launcher = CloudLauncher(pipeline=sequence, name="debug cloud")
+
+    with pytest.raises(ValueError, match="does not support multi-stage pipelines"):
+        launcher.launch_debug()
+
+
+def test_debug_sync_rejects_pipeline_sequence() -> None:
+    sequence = (
+        read_jsonl("first.jsonl")
+        .as_stage(name="first")
+        .then(read_jsonl("second.jsonl"), name="second")
+    )
+    launcher = CloudLauncher(pipeline=sequence, name="debug cloud")
+
+    with pytest.raises(ValueError, match="does not support multi-stage pipelines"):
+        launcher.prepare_debug_sync()
 
 
 def test_launcher_prepares_debug_sync_payload(monkeypatch) -> None:
@@ -579,6 +618,58 @@ def test_pipeline_launch_cloud_preserves_auto_workers_without_listing_shards(
     assert request.plan["stages"][0]["requested_num_workers"] == "auto"
     assert stage.runtime.num_workers == "auto"
     assert "num_shards" not in stage.to_dict()
+
+
+def test_pipeline_sequence_launch_cloud_submits_named_stage_resources(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch, stub_planner=False)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+    first = read_jsonl("input.jsonl")
+    second = read_jsonl("prepared.jsonl")
+
+    result = (
+        first.as_stage(
+            name="prepare",
+            num_workers=3,
+            cpus_per_worker=2,
+        )
+        .then(
+            second,
+            name="publish",
+            num_workers=1,
+            mem_mb_per_worker=4096,
+        )
+        .launch_cloud(
+            name="multi-stage cloud",
+            cloud="gcp",
+            region="eu-west",
+        )
+    )
+
+    assert result.job_id == "job-123"
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.name == "multi-stage cloud"
+    assert [stage["name"] for stage in request.plan["stages"]] == [
+        "prepare",
+        "publish",
+    ]
+    assert [payload.stage_index for payload in request.stage_payloads] == [0, 1]
+    runtimes = [payload.runtime for payload in request.stage_payloads]
+    assert all(runtime is not None for runtime in runtimes)
+    assert [runtime.num_workers for runtime in runtimes if runtime is not None] == [
+        3,
+        1,
+    ]
+    assert runtimes[0] is not None
+    assert runtimes[0].cpus_per_worker == 2
+    assert runtimes[0].cloud == "gcp"
+    assert runtimes[0].region == ("eu-west",)
+    assert runtimes[1] is not None
+    assert runtimes[1].mem_mb_per_worker == 4096
 
 
 def test_pipeline_launch_cloud_embeds_runtime_services(monkeypatch) -> None:

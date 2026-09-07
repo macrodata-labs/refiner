@@ -28,6 +28,10 @@ class BaseSource(ABC):
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         raise NotImplementedError
 
+    def prepare_shard(self, shard: Shard) -> None:
+        """Prepare source state encoded by a claimed shard before schema access."""
+        del shard
+
     def iter_shard_units(self, shard: Shard) -> Iterator[SourceUnit]:
         next_source_row_id = 0
         for unit in self.read_shard(shard):

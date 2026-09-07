@@ -25,8 +25,12 @@ pipeline = mdr.load_lance(
 )
 ```
 
-When `version` is omitted, Refiner resolves the latest version once and pins it
-for the pipeline. Column projection is pushed into Lance.
+When `version` is omitted, Refiner resolves and pins the latest version when
+that execution stage starts. This lets a later stage read a Lance dataset
+created or updated by an earlier stage in the same job. Pass `version=...` when
+you want to pin a specific version while constructing the pipeline.
+
+Column projection is pushed into Lance.
 
 Use the pipeline-wide execution block limit when rows contain large media or
 other variable-sized values:

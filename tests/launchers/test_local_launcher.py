@@ -27,6 +27,8 @@ from refiner.cli.ui.console import (
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline import RefinerPipeline, from_items, read_csv, read_jsonl
 from refiner.pipeline.resources import GPU
+from refiner.pipeline.sequence import ConfiguredStage, PipelineSequence
+from refiner.pipeline.sinks.base import BaseSink
 from refiner.launchers.local import LaunchStats, LocalLauncher
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
 from refiner.pipeline.sources.readers.base import BaseReader
@@ -35,6 +37,11 @@ from refiner.platform.auth import MacrodataCredentialsError
 from refiner.worker.resources.gpu import build_gpu_sets
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+class _NoopSink(BaseSink):
+    def write_shard_block(self, shard_id, block) -> None:
+        del shard_id, block
 
 
 @pytest.fixture(autouse=True)
@@ -1558,10 +1565,8 @@ def test_launch_local_runs_planned_stages_sequentially(
     assert (rundir / "stage-1").exists()
 
 
-@pytest.mark.parametrize(("items", "expected_workers"), [([1, 2, 3], 2), ([], 0)])
-def test_local_launcher_auto_workers_uses_stage_shard_count(
-    items, expected_workers
-) -> None:
+@pytest.mark.parametrize("items", [[1, 2, 3], []])
+def test_local_launcher_preserves_auto_workers_until_stage_starts(items) -> None:
     launcher = LocalLauncher(
         pipeline=from_items(items, items_per_shard=2),
         name="local-auto-workers",
@@ -1570,7 +1575,31 @@ def test_local_launcher_auto_workers_uses_stage_shard_count(
 
     stages = launcher._resolved_stages()
 
-    assert stages[0].compute.num_workers == expected_workers
+    assert stages[0].compute.num_workers == "auto"
+
+
+def test_local_sequence_does_not_list_auto_stage_shards_during_planning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = from_items([1])
+    second = from_items([2])
+    sequence = first.as_stage(name="prepare").then(
+        second,
+        name="publish",
+        num_workers="auto",
+    )
+    monkeypatch.setattr(
+        second.source,
+        "list_shards",
+        lambda: pytest.fail("downstream shards were listed before the stage started"),
+    )
+
+    stages = LocalLauncher(
+        pipeline=sequence,
+        name="deferred-auto-workers",
+    )._resolved_stages()
+
+    assert stages[1].compute.num_workers == "auto"
 
 
 def test_empty_auto_workers_stage_skips_gpu_discovery(
@@ -1641,6 +1670,84 @@ def test_resumed_auto_workers_use_remaining_shard_count(
 
     assert captured["num_workers"] == 1
     assert stats.workers == 1
+
+
+def test_pipeline_sequence_launch_local_uses_each_stage_worker_count(tmp_path) -> None:
+    first_path = tmp_path / "stage0.jsonl"
+    second_path = tmp_path / "stage1.jsonl"
+    first_path.write_text('{"x": 1}\n')
+    second_path.write_text('{"x": 2}\n')
+    sequence = (
+        read_jsonl(str(first_path))
+        .as_stage(
+            name="prepare",
+            num_workers=1,
+        )
+        .then(
+            read_jsonl(str(second_path)),
+            name="publish",
+            num_workers=2,
+        )
+    )
+    rundir = tmp_path / "sequence-run"
+
+    stats = sequence.launch_local(name="local sequence", rundir=str(rundir))
+
+    assert stats.workers == 3
+    assert stats.claimed == 2
+    assert stats.completed == 2
+    assert stats.failed == 0
+    assert stats.output_rows == 2
+    assert (rundir / "stage-0").exists()
+    assert (rundir / "stage-1").exists()
+
+
+@pytest.mark.parametrize(
+    ("cpus_per_worker", "mem_mb_per_worker"),
+    [
+        (2, None),
+        (None, 4096),
+    ],
+)
+def test_pipeline_sequence_launch_local_rejects_unsupported_resources(
+    cpus_per_worker: int | None,
+    mem_mb_per_worker: int | None,
+) -> None:
+    sequence = read_jsonl("input.jsonl").as_stage(
+        name="prepare",
+        cpus_per_worker=cpus_per_worker,
+        mem_mb_per_worker=mem_mb_per_worker,
+    )
+
+    with pytest.raises(ValueError, match="launch_local does not support"):
+        sequence.launch_local(name="local sequence")
+
+
+def test_launch_local_rejects_writer_finalizer_resources() -> None:
+    source = read_jsonl("input.jsonl").source
+    sequence = PipelineSequence(
+        (
+            ConfiguredStage(
+                RefinerPipeline(source, sink=_NoopSink()),
+                "writer",
+                1,
+                None,
+                None,
+                None,
+            ),
+            ConfiguredStage(
+                RefinerPipeline(source, sink=_NoopSink()),
+                "writer_finalize",
+                1,
+                2,
+                None,
+                None,
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="remove them from stages: writer_finalize"):
+        sequence.launch_local(name="local writer")
 
 
 def test_launch_local_uses_explicit_rundir(tmp_path) -> None:
