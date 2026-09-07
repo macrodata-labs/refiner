@@ -625,9 +625,11 @@ def compile_planned_stages(
 
 
 def compile_pipeline_plan(
-    pipeline: "RefinerPipeline", *, secret_values: tuple[str, ...] = ()
+    pipeline: "RefinerPipeline | PipelineSequence",
+    *,
+    secret_values: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    """Compile a transport-neutral single-pipeline plan description."""
+    """Compile a transport-neutral pipeline plan description."""
     return compile_planned_stages(
         plan_pipeline_stages(pipeline, default_num_workers=1),
         secret_values=secret_values,

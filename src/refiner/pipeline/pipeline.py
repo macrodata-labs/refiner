@@ -1606,7 +1606,9 @@ def load_lance(
     number of scheduling shards without splitting individual fragments.
     ``max_rows`` reads at most that many leading rows from the pinned version.
     ``read_batch_rows`` overrides Lance's scanner batch size independently of
-    downstream execution block sizing.
+    downstream execution block sizing. An explicit ``version`` is pinned while
+    constructing the pipeline. When omitted, the latest version is resolved and
+    pinned when the source first plans or reads its stage.
     """
     max_rows = _validated_max_rows(max_rows)
     return RefinerPipeline(

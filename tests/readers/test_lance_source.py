@@ -4,7 +4,7 @@ import pyarrow as pa
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
 
-from refiner import AddColumns, load_lance, read_blob
+from refiner import AddColumns, from_items, load_lance, read_blob
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.shard import (
     SOURCE_ROW_ID_COLUMN,
@@ -14,6 +14,7 @@ from refiner.pipeline.data.shard import (
 from refiner.pipeline.sources.lance import LanceSource
 from refiner.pipeline.sources.limited import LimitedSource
 from refiner.pipeline.data.tabular import Tabular
+from refiner.pipeline.planning import compile_pipeline_plan
 
 
 def test_load_lance_rejects_explicit_shard_count_above_limit() -> None:
@@ -67,6 +68,48 @@ def test_load_lance_pins_version_and_shards_by_fragment(tmp_path) -> None:
         (1, 2),
     ]
     assert [int(row["x"]) for row in pipeline.iter_rows()] == [1, 2, 3]
+
+
+def test_load_lance_defers_and_pins_latest_version_until_first_use(tmp_path) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "deferred.lance"
+    pipeline = load_lance(dataset_uri)
+
+    version_one = lance.write_dataset(
+        pa.table({"x": [1]}),
+        str(dataset_uri),
+    ).version
+    assert pipeline.source.describe()["version"] is None
+
+    pipeline.list_shards()
+    assert isinstance(pipeline.source, LanceSource)
+    assert pipeline.source.version == version_one
+
+    lance.write_dataset(pa.table({"x": [2]}), str(dataset_uri), mode="append")
+    assert [int(row["x"]) for row in pipeline.iter_rows()] == [1]
+
+
+def test_multistage_workflow_plans_lance_input_before_it_exists(tmp_path) -> None:
+    pytest.importorskip("lance")
+    dataset_uri = tmp_path / "produced.lance"
+    workflow = (
+        from_items([{"x": 1}])
+        .write_lance_dataset(dataset_uri)
+        .as_stage(name="produce")
+        .then(
+            load_lance(dataset_uri),
+            name="consume",
+        )
+    )
+
+    stages = compile_pipeline_plan(workflow)["stages"]
+
+    assert [stage["name"] for stage in stages] == [
+        "produce",
+        "produce_finalize",
+        "consume",
+    ]
+    assert stages[2]["steps"][0]["args"]["version"] is None
 
 
 def test_max_block_rows_bounds_lance_scanner_batches(tmp_path) -> None:
@@ -246,7 +289,7 @@ def test_load_lance_rejects_selected_blob_v2_columns(tmp_path) -> None:
     )
 
     with pytest.raises(ValueError, match="Lance Blob V2 columns"):
-        load_lance(dataset_uri)
+        load_lance(dataset_uri).list_shards()
 
     assert [
         row["id"] for row in load_lance(dataset_uri, columns=["id"]).iter_rows()
@@ -336,6 +379,7 @@ def test_load_lance_uses_indexed_reads_for_partial_fragment(tmp_path) -> None:
     assert isinstance(limited_source, LimitedSource)
     source = limited_source.source
     assert isinstance(source, LanceSource)
+    _ = source.schema
     source._dataset_cache = TrackingDataset()
 
     assert [int(row["id"]) for row in pipeline.iter_rows()] == [0, 1, 2]
@@ -541,7 +585,7 @@ def test_load_lance_rejects_reserved_shard_id_column(tmp_path) -> None:
     )
 
     with pytest.raises(ValueError, match="reserved column __shard_id"):
-        load_lance(dataset_uri)
+        load_lance(dataset_uri).list_shards()
 
 
 def test_load_lance_cache_does_not_cross_source_instances(tmp_path) -> None:
