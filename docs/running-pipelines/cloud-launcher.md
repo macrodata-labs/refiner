@@ -132,8 +132,9 @@ job.
 
 Refiner does not implicitly pass rows between stages. This keeps stage inputs
 reproducible and makes continuation safe: the earlier stage's writer and the
-later stage's reader define the durable handoff. Writers that require a
-finalization pass may add an internal finalizer stage automatically.
+later stage's reader define the durable handoff. Writers may add one or more
+internal follow-up stages automatically; those stages do not need to be
+expressed with `then(...)`.
 
 ## What gets submitted
 

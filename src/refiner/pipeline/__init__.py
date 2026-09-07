@@ -12,6 +12,7 @@ _LAZY_ATTRS = {
     "Row": "refiner.pipeline.data.row",
     "Shard": "refiner.pipeline.data.shard",
     "RefinerPipeline": "refiner.pipeline.pipeline",
+    "FollowupStage": "refiner.pipeline.sequence",
     "PipelineSequence": "refiner.pipeline.sequence",
     "from_items": "refiner.pipeline.pipeline",
     "from_source": "refiner.pipeline.pipeline",
@@ -48,6 +49,7 @@ __all__ = [
     "GPU",
     "GPUType",
     "GPUTypeRequest",
+    "FollowupStage",
     "RefinerPipeline",
     "PipelineSequence",
     "Row",
@@ -118,7 +120,7 @@ if TYPE_CHECKING:
         read_zarr,
         task,
     )
-    from refiner.pipeline.sequence import PipelineSequence
+    from refiner.pipeline.sequence import FollowupStage, PipelineSequence
     from refiner.pipeline.resources import (
         CUDAVersion,
         GPU,

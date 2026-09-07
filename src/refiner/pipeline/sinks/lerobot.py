@@ -21,6 +21,7 @@ from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.data.tabular import Tabular, set_or_append_column
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.reducer.lerobot import LeRobotMetaReduceSink
+from refiner.pipeline.sequence import FollowupStage
 from refiner.robotics.lerobot_format import (
     LeRobotFeatureInfo,
     LeRobotFeatureStats,
@@ -709,8 +710,13 @@ class LeRobotWriterSink(BaseSink):
             },
         )
 
-    def build_reducer(self) -> BaseSink:
-        return LeRobotMetaReduceSink(output=self.output)
+    def followup_stages(self) -> tuple[FollowupStage, ...]:
+        return (
+            FollowupStage.from_sink(
+                name="finalize",
+                sink=LeRobotMetaReduceSink(output=self.output),
+            ),
+        )
 
 
 def _metadata_with_lerobot_fps(metadata: LeRobotMetadata) -> LeRobotMetadata:

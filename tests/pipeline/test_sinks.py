@@ -2989,7 +2989,7 @@ def test_jsonl_reducer_keeps_only_finalized_worker_outputs(tmp_path) -> None:
             sink.write_block([DictRow({"x": value}, shard_id=shard_id)])
             sink.on_shard_complete(shard_id)
 
-    reducer = JsonlSink(output_dir).build_reducer()
+    reducer = JsonlSink(output_dir).followup_stages()[0].pipeline.sink
     assert reducer is not None
     with set_active_run_context(
         job_id="job",
@@ -3035,7 +3035,7 @@ def test_parquet_reducer_keeps_only_finalized_worker_outputs(tmp_path) -> None:
             sink.write_block([DictRow({"x": value}, shard_id=shard_id)])
             sink.on_shard_complete(shard_id)
 
-    reducer = ParquetSink(output_dir).build_reducer()
+    reducer = ParquetSink(output_dir).followup_stages()[0].pipeline.sink
     assert reducer is not None
     with set_active_run_context(
         job_id="job",
@@ -3859,7 +3859,7 @@ def test_jsonl_sink_rejects_unsupported_cleanup_filename_template(tmp_path) -> N
     )
 
     with pytest.raises(ValueError, match="requires fields"):
-        sink.build_reducer()
+        sink.followup_stages()
 
 
 def test_jsonl_sink_rejects_asset_subdir_filename_template(tmp_path) -> None:
@@ -3885,4 +3885,4 @@ def test_parquet_sink_rejects_unsupported_cleanup_filename_template(tmp_path) ->
     )
 
     with pytest.raises(ValueError, match="without conversion or format specifiers"):
-        sink.build_reducer()
+        sink.followup_stages()

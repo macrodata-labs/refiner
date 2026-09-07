@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 import inspect
 import textwrap
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from types import CodeType
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
@@ -507,8 +507,7 @@ def plan_pipeline_stages(
     """Return the ordered execution stages for a pipeline.
 
     Configured sequences preserve their declared order and resource profiles.
-    An individual pipeline may also add a generated reducer stage when its sink
-    requires finalization.
+    A pipeline sink may transparently add writer-owned follow-up stages.
     """
     if default_num_workers != "auto" and (
         not isinstance(default_num_workers, int) or default_num_workers <= 0
@@ -520,99 +519,86 @@ def plan_pipeline_stages(
     if isinstance(pipeline, PipelineSequence):
         planned: list[PlannedStage] = []
         for configured_stage in pipeline.stages:
-            stage_parts = _plan_single_pipeline_stages(
+            stage_parts = _expand_pipeline_stage(
                 configured_stage.pipeline,
-                default_num_workers=configured_stage.num_workers,
+                name=configured_stage.name,
+                compute=StageComputeRequirements(
+                    num_workers=configured_stage.num_workers,
+                    cpus_per_worker=configured_stage.cpus_per_worker,
+                    memory_mb_per_worker=configured_stage.mem_mb_per_worker,
+                    gpu=configured_stage.gpu,
+                    inherit_launcher_resources=False,
+                ),
             )
-            for part_index, stage_part in enumerate(stage_parts):
-                stage_name = _configured_stage_part_name(
-                    configured_stage.name, part_index
-                )
-                compute = stage_part.compute
-                if compute.inherit_launcher_resources:
-                    compute = StageComputeRequirements(
-                        num_workers=configured_stage.num_workers,
-                        cpus_per_worker=configured_stage.cpus_per_worker,
-                        memory_mb_per_worker=configured_stage.mem_mb_per_worker,
-                        gpu=configured_stage.gpu,
-                        inherit_launcher_resources=False,
-                    )
+            for stage_part in stage_parts:
                 planned.append(
-                    replace(
-                        stage_part,
+                    PlannedStage(
                         index=len(planned),
-                        name=stage_name,
-                        compute=compute,
+                        name=stage_part.name,
+                        pipeline=stage_part.pipeline,
+                        compute=stage_part.compute,
                     )
                 )
         planned_names = [stage.name for stage in planned]
         if len(set(planned_names)) != len(planned_names):
-            raise ValueError("stage names conflict with a generated finalizer name")
+            raise ValueError("stage names conflict with a writer follow-up stage")
         return planned
 
-    return _plan_single_pipeline_stages(
+    planned = _expand_pipeline_stage(
         pipeline,
-        default_num_workers=default_num_workers,
+        name="stage_0",
+        compute=StageComputeRequirements(num_workers=default_num_workers),
     )
-
-
-def _configured_stage_part_name(name: str, part_index: int) -> str:
-    if part_index == 0:
-        return name
-    if part_index == 1:
-        return f"{name}_finalize"
-    return f"{name}_finalize_{part_index}"
-
-
-def _plan_single_pipeline_stages(
-    pipeline: "RefinerPipeline", *, default_num_workers: int
-) -> list[PlannedStage]:
-    """Plan one pipeline and any finalizer stage required by its sink."""
-
-    from refiner.pipeline.pipeline import RefinerPipeline
-    from refiner.pipeline.sources.task import TaskSource
+    if len(planned) == 1:
+        return planned
 
     sink = pipeline.sink
-    reducer = sink.build_reducer() if sink is not None else None
-    if reducer is not None:
-        assert sink is not None
-        reducer_stage = RefinerPipeline(
-            source=TaskSource(num_tasks=1),
-            pipeline_steps=(),
-            max_block_rows=pipeline.max_block_rows,
-            max_vectorized_block_bytes=pipeline.max_vectorized_block_bytes,
-            sink=reducer,
-        )
-        sink_description = sink.describe()
-        stage_base_name = (
-            sink_description[0] if sink_description is not None else "writer"
-        )
-        return [
-            PlannedStage(
-                index=0,
-                name=f"{stage_base_name}_stage_0",
-                pipeline=pipeline,
-                compute=StageComputeRequirements(num_workers=default_num_workers),
-            ),
-            PlannedStage(
-                index=1,
-                name=f"{stage_base_name}_stage_1",
-                pipeline=reducer_stage,
-                compute=StageComputeRequirements(
-                    num_workers=1,
-                    inherit_launcher_resources=False,
-                ),
-            ),
-        ]
-
+    sink_description = sink.describe() if sink is not None else None
+    stage_base_name = sink_description[0] if sink_description is not None else "writer"
     return [
         PlannedStage(
+            index=index,
+            name=f"{stage_base_name}_stage_{index}",
+            pipeline=stage.pipeline,
+            compute=stage.compute,
+        )
+        for index, stage in enumerate(planned)
+    ]
+
+
+def _expand_pipeline_stage(
+    pipeline: "RefinerPipeline",
+    *,
+    name: str,
+    compute: StageComputeRequirements,
+) -> list[PlannedStage]:
+    """Expand one pipeline and any follow-up stages declared by its sink."""
+    planned = [
+        PlannedStage(
             index=0,
-            name="stage_0",
+            name=name,
             pipeline=pipeline,
-            compute=StageComputeRequirements(num_workers=default_num_workers),
+            compute=compute,
         )
     ]
+    if pipeline.sink is None:
+        return planned
+
+    for generated_stage in pipeline.sink.followup_stages():
+        planned.extend(
+            _expand_pipeline_stage(
+                generated_stage.pipeline,
+                name=f"{name}_{generated_stage.name}",
+                compute=StageComputeRequirements(
+                    num_workers=generated_stage.num_workers,
+                    cpus_per_worker=generated_stage.cpus_per_worker,
+                    memory_mb_per_worker=generated_stage.mem_mb_per_worker,
+                    gpu=generated_stage.gpu,
+                    inherit_launcher_resources=False,
+                ),
+            )
+        )
+    return planned
 
 
 def compile_planned_stages(

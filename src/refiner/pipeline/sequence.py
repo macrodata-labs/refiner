@@ -11,6 +11,26 @@ if TYPE_CHECKING:
     from refiner.launchers.local import LaunchStats
     from refiner.launchers.secrets import SecretInput
     from refiner.pipeline.pipeline import RefinerPipeline
+    from refiner.pipeline.sinks.base import BaseSink
+
+
+def _validate_stage_configuration(
+    *,
+    name: str,
+    num_workers: int,
+    cpus_per_worker: int | None,
+    mem_mb_per_worker: int | None,
+) -> str:
+    normalized_name = name.strip()
+    if not normalized_name:
+        raise ValueError("stage name must be non-empty")
+    if num_workers <= 0:
+        raise ValueError("num_workers must be > 0")
+    if cpus_per_worker is not None and cpus_per_worker <= 0:
+        raise ValueError("cpus_per_worker must be > 0")
+    if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
+        raise ValueError("mem_mb_per_worker must be > 0")
+    return normalized_name
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,16 +45,60 @@ class ConfiguredStage:
     gpu: GPU | None
 
     def __post_init__(self) -> None:
-        normalized_name = self.name.strip()
-        if not normalized_name:
-            raise ValueError("stage name must be non-empty")
-        if self.num_workers <= 0:
-            raise ValueError("num_workers must be > 0")
-        if self.cpus_per_worker is not None and self.cpus_per_worker <= 0:
-            raise ValueError("cpus_per_worker must be > 0")
-        if self.mem_mb_per_worker is not None and self.mem_mb_per_worker <= 0:
-            raise ValueError("mem_mb_per_worker must be > 0")
+        normalized_name = _validate_stage_configuration(
+            name=self.name,
+            num_workers=self.num_workers,
+            cpus_per_worker=self.cpus_per_worker,
+            mem_mb_per_worker=self.mem_mb_per_worker,
+        )
         object.__setattr__(self, "name", normalized_name)
+
+
+@dataclass(frozen=True, slots=True)
+class FollowupStage:
+    """A writer-owned stage that runs after its parent stage succeeds."""
+
+    pipeline: RefinerPipeline
+    name: str
+    num_workers: int = 1
+    cpus_per_worker: int | None = None
+    mem_mb_per_worker: int | None = None
+    gpu: GPU | None = None
+
+    def __post_init__(self) -> None:
+        normalized_name = _validate_stage_configuration(
+            name=self.name,
+            num_workers=self.num_workers,
+            cpus_per_worker=self.cpus_per_worker,
+            mem_mb_per_worker=self.mem_mb_per_worker,
+        )
+        object.__setattr__(self, "name", normalized_name)
+
+    @classmethod
+    def from_sink(
+        cls,
+        *,
+        name: str,
+        sink: BaseSink,
+        num_workers: int = 1,
+        cpus_per_worker: int | None = None,
+        mem_mb_per_worker: int | None = None,
+        gpu: GPU | None = None,
+    ) -> FollowupStage:
+        """Create a task-backed follow-up stage for a finalizer sink."""
+        from refiner.pipeline.pipeline import RefinerPipeline
+        from refiner.pipeline.sources.task import TaskSource
+
+        return cls(
+            pipeline=RefinerPipeline(
+                source=TaskSource(num_tasks=num_workers), sink=sink
+            ),
+            name=name,
+            num_workers=num_workers,
+            cpus_per_worker=cpus_per_worker,
+            mem_mb_per_worker=mem_mb_per_worker,
+            gpu=gpu,
+        )
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -120,4 +184,4 @@ class PipelineSequence:
         ).launch()
 
 
-__all__ = ["ConfiguredStage", "PipelineSequence"]
+__all__ = ["ConfiguredStage", "FollowupStage", "PipelineSequence"]

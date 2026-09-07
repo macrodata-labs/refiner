@@ -23,6 +23,7 @@ from refiner.pipeline.sinks.assets import (
 )
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.reducer.file import FileCleanupReducerSink
+from refiner.pipeline.sequence import FollowupStage
 from refiner.worker.context import get_active_worker_token
 from refiner.worker.metrics.api import log_throughput
 
@@ -138,12 +139,19 @@ class ParquetSink(BaseSink):
             }
         return ("write_parquet", "writer", args)
 
-    def build_reducer(self) -> BaseSink | None:
-        return FileCleanupReducerSink(
-            output=self.output,
-            filename_template=self.filename_template,
-            reducer_name="write_parquet_reduce",
-            assets_subdir=self.assets.subdir if self.assets is not None else None,
+    def followup_stages(self) -> tuple[FollowupStage, ...]:
+        return (
+            FollowupStage.from_sink(
+                name="finalize",
+                sink=FileCleanupReducerSink(
+                    output=self.output,
+                    filename_template=self.filename_template,
+                    reducer_name="write_parquet_reduce",
+                    assets_subdir=(
+                        self.assets.subdir if self.assets is not None else None
+                    ),
+                ),
+            ),
         )
 
 

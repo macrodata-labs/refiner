@@ -15,7 +15,7 @@ workers and writes files, media, metadata, or reducer inputs.
 | Shard-local writes | Workers can write independently. |
 | Worker-aware filenames | Avoids collisions between workers. |
 | Asset handling | Media columns can be copied, uploaded, remuxed, or transcoded. |
-| Reducer stage | Some formats need a final merge or metadata pass. |
+| Follow-up stages | Some formats need final cleanup, merging, or metadata passes. |
 
 ## Attaching a writer
 
@@ -24,6 +24,10 @@ pipeline = pipeline.write_parquet("/tmp/output")
 ```
 
 This returns a new pipeline with a sink. It does not write immediately.
+
+Writers that need multiple execution stages expand automatically when the
+pipeline is launched. Keep using the normal `write_*` method; `then(...)` is
+only needed when you are composing separate pipelines yourself.
 
 ## Launching
 
