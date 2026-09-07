@@ -286,7 +286,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert captured["events"] == ["upload-urls", "upload", "complete", "submit"]
 
 
-def test_pipeline_launch_cloud_selects_aws_batch(monkeypatch) -> None:
+def test_pipeline_launch_cloud_selects_aws_batch(monkeypatch, capsys) -> None:
     captured = _stub_cloud_submit(monkeypatch)
     monkeypatch.setattr(
         "refiner.launchers.cloud.refiner_ref_exists_on_remote",
@@ -304,6 +304,7 @@ def test_pipeline_launch_cloud_selects_aws_batch(monkeypatch) -> None:
     request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.provider == "aws_batch"
     assert request.stage_payloads[0].runtime.gpu is None
+    assert "Modal workers are preemptible" not in capsys.readouterr().out
 
 
 def test_pipeline_launch_cloud_rejects_gpu_for_aws() -> None:
@@ -1417,10 +1418,13 @@ def test_pipeline_launch_cloud_detached_mode_prints_followup_commands(
     out = capsys.readouterr()
 
     assert result.job_id == "job-123"
+    assert "Modal workers are preemptible" in out.out
+    assert "25 minutes per shard for CPU-only workloads" in out.out
+    assert "2 hours per shard for GPU workloads" in out.out
     assert "attach job-123" in out.out
 
 
-def test_pipeline_launch_cloud_attached_mode_calls_attach(monkeypatch) -> None:
+def test_pipeline_launch_cloud_attached_mode_calls_attach(monkeypatch, capsys) -> None:
     _stub_cloud_submit(monkeypatch)
     monkeypatch.setattr(
         "refiner.launchers.cloud.refiner_ref_exists_on_remote",
@@ -1441,8 +1445,12 @@ def test_pipeline_launch_cloud_attached_mode_calls_attach(monkeypatch) -> None:
     )
 
     result = read_jsonl("input.jsonl").launch_cloud(name="demo cloud")
+    out = capsys.readouterr()
 
     assert result.job_id == "job-123"
+    assert "Modal workers are preemptible" in out.out
+    assert "25 minutes per shard for CPU-only workloads" in out.out
+    assert "2 hours per shard for GPU workloads" in out.out
     assert captured["job_id"] == "job-123"
     assert captured["stage_index_hint"] == 0
     assert captured["force_attach"] is True

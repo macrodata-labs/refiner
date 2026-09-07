@@ -114,6 +114,10 @@ Workers: macrodata jobs workers job_123
 Cancel: macrodata jobs cancel job_123
 ```
 
+Every successful cloud submission also prints a hint that Modal workers are
+preemptible and recommends shard runtimes of approximately 25 minutes for
+CPU-only workloads and 2 hours for GPU workloads.
+
 Pass script arguments after the script path:
 
 ```bash
