@@ -105,7 +105,7 @@ class StageSnapshot:
     stage_workers: int
     tracking_url: str | None
     status: str
-    worker_total: int
+    worker_total: int | None
     worker_running: int
     worker_completed: int
     worker_failed: int
@@ -113,6 +113,7 @@ class StageSnapshot:
     shard_total: int | None = None
     shard_completed: int | None = None
     shard_running: int | None = None
+    shard_pending: int | None = None
 
 
 def _loguru_markup_to_ansi(markup: str) -> str:
@@ -347,13 +348,14 @@ class StageConsole:
         self._total_stages = total_stages
         self._tracking_url = tracking_url
         self._status = "running"
-        self._worker_total = stage_workers
+        self._worker_total: int | None = stage_workers
         self._worker_running = stage_workers
         self._worker_completed = 0
         self._worker_failed = 0
         self._shard_total: int | None = None
         self._shard_completed: int | None = None
         self._shard_running: int | None = None
+        self._shard_pending: int | None = None
         self._elapsed_seconds = 0.0
         self._elapsed_synced_at = time.monotonic()
         self._lines: deque[str] = deque(maxlen=self._MAX_BUFFERED_LINES)
@@ -412,6 +414,7 @@ class StageConsole:
         previous_shard_total = self._shard_total
         previous_shard_completed = self._shard_completed
         previous_shard_running = self._shard_running
+        previous_shard_pending = self._shard_pending
         previous_elapsed_seconds = int(self._elapsed_seconds)
         self._apply_snapshot_values(snapshot)
         if (
@@ -425,6 +428,7 @@ class StageConsole:
             or self._shard_total != previous_shard_total
             or self._shard_completed != previous_shard_completed
             or self._shard_running != previous_shard_running
+            or self._shard_pending != previous_shard_pending
             or int(self._elapsed_seconds) != previous_elapsed_seconds
         ):
             self._render()
@@ -440,6 +444,7 @@ class StageConsole:
         self._shard_total = snapshot.shard_total
         self._shard_completed = snapshot.shard_completed
         self._shard_running = snapshot.shard_running
+        self._shard_pending = snapshot.shard_pending
         self._elapsed_seconds = snapshot.elapsed_seconds
         self._elapsed_synced_at = time.monotonic()
 
@@ -624,38 +629,28 @@ class StageConsole:
         return stage_token(self._stage_index)
 
     def _format_worker_counts(self, *, max_width: int) -> str:
+        requested = "N/A" if self._worker_total is None else str(self._worker_total)
         if not self._interactive:
             return _truncate_plain(
-                f"running={self._worker_running} "
-                f"completed={self._worker_completed} "
-                f"failed={self._worker_failed} "
-                f"total={self._worker_total}",
+                f"active={self._worker_running} requested={requested}",
                 max_width,
             )
-        variants = [
-            ("running", "completed", "failed", "total"),
-            ("run", "done", "fail", "tot"),
-            ("r", "d", "f", "t"),
-        ]
-        for variant in variants:
+        for active_label, requested_label in [
+            ("active", "requested"),
+            ("act", "req"),
+            ("a", "r"),
+        ]:
             text = " ".join(
                 [
-                    f"{variant[0]}={_STATUS_COLORS['running']}{self._worker_running}{_ANSI_RESET}",
-                    f"{variant[1]}={_STATUS_COLORS['completed']}{self._worker_completed}{_ANSI_RESET}",
-                    f"{variant[2]}={_STATUS_COLORS['failed']}{self._worker_failed}{_ANSI_RESET}",
-                    f"{variant[3]}={_VALUE_COLOR}{self._worker_total}{_ANSI_RESET}",
+                    f"{active_label}={_STATUS_COLORS['running']}{self._worker_running}{_ANSI_RESET}",
+                    f"{requested_label}={_VALUE_COLOR}{requested}{_ANSI_RESET}",
                 ]
             )
             if _visible_width(text) <= max_width:
                 return text
-        last = variants[-1]
-        return " ".join(
-            [
-                f"{last[0]}={_STATUS_COLORS['running']}{self._worker_running}{_ANSI_RESET}",
-                f"{last[1]}={_STATUS_COLORS['completed']}{self._worker_completed}{_ANSI_RESET}",
-                f"{last[2]}={_STATUS_COLORS['failed']}{self._worker_failed}{_ANSI_RESET}",
-                f"{last[3]}={_VALUE_COLOR}{self._worker_total}{_ANSI_RESET}",
-            ]
+        return (
+            f"a={_STATUS_COLORS['running']}{self._worker_running}{_ANSI_RESET} "
+            f"r={_VALUE_COLOR}{requested}{_ANSI_RESET}"
         )
 
     def _format_shard_counts(self, *, max_width: int) -> str:
@@ -664,28 +659,37 @@ class StageConsole:
         completed = max(0, self._shard_completed or 0)
         total = max(0, self._shard_total)
         running = max(0, self._shard_running or 0)
+        pending = max(0, self._shard_pending or 0)
         percent = 0 if total == 0 else int((completed / total) * 100)
         percent_color = _STATUS_COLORS.get(self._status, _VALUE_COLOR)
         if not self._interactive:
             return _truncate_plain(
-                f"running={running} completed={completed} total={total} ({percent}%)",
+                f"completed={completed} active={running} pending={pending} total={total} ({percent}%)",
                 max_width,
             )
         variants = [
             (
-                "running",
                 "completed",
+                "active",
+                "pending",
                 "total",
                 f"({percent}%)",
             ),
-            ("run", "done", "tot", f"({percent}%)"),
-            ("r", "d", "t", f"{percent}%"),
+            ("done", "act", "pend", "tot", f"({percent}%)"),
+            ("d", "a", "p", "t", f"{percent}%"),
         ]
-        for running_label, completed_label, total_label, percent_label in variants:
+        for (
+            completed_label,
+            active_label,
+            pending_label,
+            total_label,
+            percent_label,
+        ) in variants:
             text = " ".join(
                 [
-                    f"{running_label}={_STATUS_COLORS['running']}{running}{_ANSI_RESET}",
                     f"{completed_label}={_STATUS_COLORS['completed']}{completed}{_ANSI_RESET}",
+                    f"{active_label}={_STATUS_COLORS['running']}{running}{_ANSI_RESET}",
+                    f"{pending_label}={_VALUE_COLOR}{pending}{_ANSI_RESET}",
                     f"{total_label}={_VALUE_COLOR}{total}{_ANSI_RESET}",
                     f"{percent_color}{percent_label}{_ANSI_RESET}",
                 ]
@@ -693,8 +697,9 @@ class StageConsole:
             if _visible_width(text) <= max_width:
                 return text
         return (
-            f"r={_STATUS_COLORS['running']}{running}{_ANSI_RESET} "
             f"d={_STATUS_COLORS['completed']}{completed}{_ANSI_RESET} "
+            f"a={_STATUS_COLORS['running']}{running}{_ANSI_RESET} "
+            f"p={_VALUE_COLOR}{pending}{_ANSI_RESET} "
             f"t={_VALUE_COLOR}{total}{_ANSI_RESET} "
             f"{percent_color}{percent}%{_ANSI_RESET}"
         )
