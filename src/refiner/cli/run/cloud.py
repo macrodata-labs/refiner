@@ -290,11 +290,11 @@ def _build_snapshot(
         if current_stage is not None
         else _job_status(job_payload)
     )
-    stage_workers = (
-        int(current_stage.get("totalWorkers", 0) or 0)
-        if current_stage is not None
-        else 0
+    requested_workers = (
+        current_stage.get("totalWorkers") if current_stage is not None else None
     )
+    worker_total = int(requested_workers) if requested_workers is not None else None
+    stage_workers = worker_total or 0
     running_workers = (
         int(current_stage.get("runningWorkers", 0) or 0)
         if current_stage is not None
@@ -329,7 +329,7 @@ def _build_snapshot(
         stage_workers=stage_workers,
         tracking_url=context.tracking_url,
         status=stage_status,
-        worker_total=stage_workers,
+        worker_total=worker_total,
         worker_running=running_workers,
         worker_completed=0,
         worker_failed=0,

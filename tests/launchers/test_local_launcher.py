@@ -424,6 +424,44 @@ def test_stage_console_shows_shards_on_cloud_runtime_row(
     assert any("completed=4 active=2 pending=3 total=9" in line for line in plain_lines)
 
 
+def test_stage_console_shows_unknown_requested_worker_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("refiner.cli.ui.console.stdout_is_interactive", lambda: False)
+    console = StageConsole(
+        job_id="job-1",
+        job_name="cloud-attach-demo",
+        rundir=None,
+        stage_index=0,
+        total_stages=1,
+        stage_workers=0,
+        tracking_url="https://example.com/jobs/job-1",
+    )
+    try:
+        console.apply_snapshot(
+            StageSnapshot(
+                job_id="job-1",
+                job_name="cloud-attach-demo",
+                rundir=None,
+                stage_index=0,
+                total_stages=1,
+                stage_workers=0,
+                tracking_url="https://example.com/jobs/job-1",
+                status="pending",
+                worker_total=None,
+                worker_running=0,
+                worker_completed=0,
+                worker_failed=0,
+                elapsed_seconds=0,
+            )
+        )
+        worker_counts = console._format_worker_counts(max_width=80)
+    finally:
+        console.close()
+
+    assert worker_counts == "active=0 requested=N/A"
+
+
 def test_stage_console_runtime_advances_between_snapshot_polls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -164,6 +164,37 @@ def test_build_snapshot_preserves_stage_zero_progress() -> None:
     assert snapshot.shard_pending == 3
 
 
+def test_build_snapshot_preserves_unknown_requested_worker_capacity() -> None:
+    context = cloud_run.CloudAttachContext(
+        job_id="job-1",
+        job_name="cloud pipeline",
+        tracking_url="https://example.com/jobs/job-1",
+        stage_index=0,
+    )
+
+    snapshot = cloud_run._build_snapshot(
+        context=context,
+        job_payload={
+            "id": "job-1",
+            "name": "cloud pipeline",
+            "status": "pending",
+            "createdAt": 1_700_000_000_000,
+            "startedAt": None,
+            "stages": [
+                {
+                    "index": 0,
+                    "status": "pending",
+                    "runningWorkers": 0,
+                    "totalWorkers": None,
+                }
+            ],
+        },
+    )
+
+    assert snapshot.worker_running == 0
+    assert snapshot.worker_total is None
+
+
 def test_build_snapshot_reads_stage_shard_running() -> None:
     context = cloud_run.CloudAttachContext(
         job_id="job-1",

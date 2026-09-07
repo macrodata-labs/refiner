@@ -313,6 +313,26 @@ def test_jobs_get_plain_output(monkeypatch, capsys) -> None:
     assert "\x1b[" not in out.out
 
 
+def test_jobs_get_plain_output_shows_unknown_requested_capacity(
+    monkeypatch, capsys
+) -> None:
+    class UnknownCapacityClient(_FakeClient):
+        def cli_get_job(self, *, job_id: str) -> dict[str, object]:
+            payload = super().cli_get_job(job_id=job_id)
+            stages = cast(list[dict[str, object]], payload["stages"])
+            stages[0]["totalWorkers"] = None
+            return payload
+
+    _patch_job_client(monkeypatch, UnknownCapacityClient)
+    monkeypatch.setattr("refiner.cli.jobs.common.stdout_is_interactive", lambda: False)
+
+    rc = jobs.cmd_jobs_get(Namespace(job_id="job-1", json=False))
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "active=2 requested=N/A" in out.out
+
+
 def test_jobs_get_json_output_prints_job_object(monkeypatch, capsys) -> None:
     _patch_job_client(monkeypatch, lambda: _FakeClient())
 

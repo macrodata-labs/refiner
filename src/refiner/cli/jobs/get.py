@@ -117,6 +117,10 @@ def _stage_gpu_text(runtime_config: Any) -> str:
     return f"{count} {gpu_type}"
 
 
+def _worker_requested_text(value: Any) -> str:
+    return "N/A" if value is None else _safe_text(value)
+
+
 def _render_job(payload: dict[str, Any]) -> int:
     job = payload
     if not isinstance(job.get("id"), str):
@@ -195,7 +199,7 @@ def _render_job(payload: dict[str, Any]) -> int:
                     ),
                     (
                         f"active={_safe_text(stage.get('runningWorkers'))} "
-                        f"requested={_safe_text(stage.get('totalWorkers'))}"
+                        f"requested={_worker_requested_text(stage.get('totalWorkers'))}"
                     ),
                     _stage_runtime_value(runtime_config, "cpuCores"),
                     _stage_runtime_value(runtime_config, "memoryMb"),

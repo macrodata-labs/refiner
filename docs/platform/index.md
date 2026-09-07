@@ -28,7 +28,7 @@ keeps the run inspectable after submission:
 
 - what code and pipeline plan was submitted
 - who submitted it and when it started
-- active worker slots versus requested capacity, plus completed, active, and pending shards
+- active worker slots versus requested capacity (`N/A` until automatic capacity registers a logical slot), plus completed, active, and pending shards
 - where logs, metrics, services, manifests, and output references live
 - whether the run is queued, running, succeeded, failed, or canceled
 

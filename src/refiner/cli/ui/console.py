@@ -105,7 +105,7 @@ class StageSnapshot:
     stage_workers: int
     tracking_url: str | None
     status: str
-    worker_total: int
+    worker_total: int | None
     worker_running: int
     worker_completed: int
     worker_failed: int
@@ -348,7 +348,7 @@ class StageConsole:
         self._total_stages = total_stages
         self._tracking_url = tracking_url
         self._status = "running"
-        self._worker_total = stage_workers
+        self._worker_total: int | None = stage_workers
         self._worker_running = stage_workers
         self._worker_completed = 0
         self._worker_failed = 0
@@ -629,9 +629,10 @@ class StageConsole:
         return stage_token(self._stage_index)
 
     def _format_worker_counts(self, *, max_width: int) -> str:
+        requested = "N/A" if self._worker_total is None else str(self._worker_total)
         if not self._interactive:
             return _truncate_plain(
-                f"active={self._worker_running} requested={self._worker_total}",
+                f"active={self._worker_running} requested={requested}",
                 max_width,
             )
         for active_label, requested_label in [
@@ -642,14 +643,14 @@ class StageConsole:
             text = " ".join(
                 [
                     f"{active_label}={_STATUS_COLORS['running']}{self._worker_running}{_ANSI_RESET}",
-                    f"{requested_label}={_VALUE_COLOR}{self._worker_total}{_ANSI_RESET}",
+                    f"{requested_label}={_VALUE_COLOR}{requested}{_ANSI_RESET}",
                 ]
             )
             if _visible_width(text) <= max_width:
                 return text
         return (
             f"a={_STATUS_COLORS['running']}{self._worker_running}{_ANSI_RESET} "
-            f"r={_VALUE_COLOR}{self._worker_total}{_ANSI_RESET}"
+            f"r={_VALUE_COLOR}{requested}{_ANSI_RESET}"
         )
 
     def _format_shard_counts(self, *, max_width: int) -> str:
