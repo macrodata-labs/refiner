@@ -513,6 +513,7 @@ class CloudLauncher(BaseLauncher):
         stages, manifest, _, resolved_secret_sources, resolved_env = (
             self._resolve_submission()
         )
+        self._validate_debug_stages(stages)
         stage = next((item for item in stages if item.index == 0), None)
         if stage is None:
             raise ValueError("pipeline has no stage 0")
@@ -542,7 +543,16 @@ class CloudLauncher(BaseLauncher):
         return self._launch(debug=False)
 
     def launch_debug(self) -> CloudLaunchResult:
+        self._validate_debug_stages(self._resolved_stages())
         return self._launch(debug=True)
+
+    @staticmethod
+    def _validate_debug_stages(stages: list[PlannedStage]) -> None:
+        if len(stages) != 1:
+            raise ValueError(
+                "cloud debug does not support multi-stage pipelines; "
+                "launch the workflow normally or debug one stage at a time"
+            )
 
     def _launch(self, *, debug: bool) -> CloudLaunchResult:
         if debug and self.continue_from_job is not None:
@@ -558,6 +568,7 @@ class CloudLauncher(BaseLauncher):
             self._resolve_submission()
         )
         if debug:
+            self._validate_debug_stages(stages)
             workspace_secret_versions = self._workspace_secret_versions(
                 client=client,
                 resolved_secret_sources=resolved_secret_sources,

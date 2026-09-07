@@ -33,6 +33,10 @@ job registers its real stage-0 shards and allocates one retained worker.
 The CLI remembers the session for the pipeline path, waits for the worker, and
 synchronizes the current project before returning.
 
+Cloud debug sessions currently support single-stage pipelines only. For a
+multi-stage workflow, debug each pipeline stage separately or launch the full
+workflow normally.
+
 The session uses the provider selected by `launch_cloud`. To retain an on-demand
 AWS Batch CPU worker instead of the default Modal worker, set `provider="aws"`
 in the pipeline script:

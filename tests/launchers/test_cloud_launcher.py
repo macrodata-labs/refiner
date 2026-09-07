@@ -430,6 +430,30 @@ def test_debug_launch_rejects_continue() -> None:
         launcher.launch_debug()
 
 
+def test_debug_launch_rejects_pipeline_sequence() -> None:
+    sequence = (
+        read_jsonl("first.jsonl")
+        .as_stage(name="first")
+        .then(read_jsonl("second.jsonl"), name="second")
+    )
+    launcher = CloudLauncher(pipeline=sequence, name="debug cloud")
+
+    with pytest.raises(ValueError, match="does not support multi-stage pipelines"):
+        launcher.launch_debug()
+
+
+def test_debug_sync_rejects_pipeline_sequence() -> None:
+    sequence = (
+        read_jsonl("first.jsonl")
+        .as_stage(name="first")
+        .then(read_jsonl("second.jsonl"), name="second")
+    )
+    launcher = CloudLauncher(pipeline=sequence, name="debug cloud")
+
+    with pytest.raises(ValueError, match="does not support multi-stage pipelines"):
+        launcher.prepare_debug_sync()
+
+
 def test_launcher_prepares_debug_sync_payload(monkeypatch) -> None:
     monkeypatch.setattr(
         "refiner.launchers.cloud.refiner_ref_exists_on_remote", lambda _ref: True
