@@ -307,6 +307,25 @@ def test_pipeline_launch_cloud_selects_aws_batch(monkeypatch, capsys) -> None:
     assert "Modal workers are preemptible" not in capsys.readouterr().out
 
 
+def test_pipeline_launch_cloud_suggests_debug_mode_for_smoke_job(
+    monkeypatch, capsys
+) -> None:
+    _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(name="Reader SMOKE check")
+
+    out = capsys.readouterr().out
+    assert "Refiner debug mode" in out
+    assert "macrodata debug pipeline.py" in out
+    assert "macrodata debug run pipeline.py --max-shards 1" in out
+    assert "macrodata debug --help" in out
+    assert "Modal workers are preemptible" not in out
+
+
 def test_pipeline_launch_cloud_rejects_gpu_for_aws() -> None:
     with pytest.raises(ValueError, match="does not support GPU"):
         read_jsonl("input.jsonl").launch_cloud(

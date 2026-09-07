@@ -27,6 +27,11 @@ pipeline.launch_cloud(
 To validate one retained worker before scaling out, see
 [Cloud debug sessions](cloud-debug-sessions.md).
 
+When a successfully submitted job name contains `smoke` (case-insensitive),
+Refiner suggests the retained debug workflow instead of the Modal preemption
+hint. The message shows how to start a session, run one shard, and discover all
+options with `macrodata debug --help`. The job still launches normally.
+
 Set `num_workers="auto"` to request one worker for every shard in each stage.
 The cloud registration runtime discovers shards after secrets and environment
 variables are mounted, then Macrodata Cloud applies its normal worker and GPU

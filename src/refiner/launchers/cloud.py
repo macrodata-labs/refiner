@@ -48,6 +48,13 @@ if TYPE_CHECKING:
 
 _FALLBACK_ENV_VAR = "MACRODATA_FALLBACK_TO_LATEST_PYPI"
 _CLOUD_FILE_BATCH_SIZE = 100
+_SMOKE_DEBUG_HINT = (
+    "Hint: Refiner debug mode is usually a better fit than smoke jobs. "
+    "Run `macrodata debug pipeline.py`, then "
+    "`macrodata debug run pipeline.py --max-shards 1` (replace "
+    "`pipeline.py` with the script that calls `launch_cloud(...)`). "
+    "Run `macrodata debug --help` to learn more."
+)
 _CLOUD_PROVIDER_KEYS = {"modal": "modal", "aws": "aws_batch"}
 _SUPPORTED_CLOUDS = frozenset({"aws", "oci", "gcp"})
 _SUPPORTED_REGIONS = frozenset(
@@ -626,7 +633,9 @@ class CloudLauncher(BaseLauncher):
             stage_index=resp.stage_index,
         )
         print(f"Cloud job launched. View job:\n  {tracking_url}", flush=True)
-        if self.provider == "modal":
+        if "smoke" in self.name.casefold():
+            print(_SMOKE_DEBUG_HINT, flush=True)
+        elif self.provider == "modal":
             print(
                 "Hint: Modal workers are preemptible. For resilient runs, target about "
                 "25 minutes per shard for CPU-only workloads and 2 hours per shard for "
