@@ -4,7 +4,6 @@ import json
 import subprocess
 import sys
 import threading
-from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
@@ -70,24 +69,6 @@ class LocalLauncher(BaseLauncher):
         )
         self.job_tracking_url: str | None = None
         self._total_stages = 1
-
-    def _resolved_stages(
-        self,
-        stages: list[PlannedStage] | None = None,
-    ) -> list[PlannedStage]:
-        resolved = super()._resolved_stages(stages)
-        return [
-            replace(
-                stage,
-                compute=replace(
-                    stage.compute,
-                    num_workers=len(stage.pipeline.list_shards()),
-                ),
-            )
-            if stage.compute.num_workers == "auto"
-            else stage
-            for stage in resolved
-        ]
 
     def _collect_worker_results(
         self,
@@ -301,10 +282,10 @@ class LocalLauncher(BaseLauncher):
         *,
         stage: PlannedStage,
     ) -> LaunchStats:
-        # Resolve worker capacity and remaining stage shards.
+        # Resolve remaining shards before sizing automatic worker capacity. This
+        # must happen when the stage starts because earlier stages may produce
+        # the current stage's input.
         stage_workers = stage.compute.num_workers
-        if not isinstance(stage_workers, int):
-            raise RuntimeError("local stage worker count was not resolved")
         if self.job_id is None or self.rundir is None:
             raise RuntimeError(
                 "local launcher must be initialized in launch() before running stages"
@@ -334,7 +315,7 @@ class LocalLauncher(BaseLauncher):
                 output_rows=0,
             )
 
-        if self.num_workers == "auto" and stage.compute.inherit_launcher_resources:
+        if stage_workers == "auto":
             stage_workers = len(shards)
         available_cpus = len(available_cpu_ids())
         if stage_workers > available_cpus:

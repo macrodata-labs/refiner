@@ -1576,10 +1576,8 @@ def test_launch_local_runs_planned_stages_sequentially(
     assert (rundir / "stage-1").exists()
 
 
-@pytest.mark.parametrize(("items", "expected_workers"), [([1, 2, 3], 2), ([], 0)])
-def test_local_launcher_auto_workers_uses_stage_shard_count(
-    items, expected_workers
-) -> None:
+@pytest.mark.parametrize("items", [[1, 2, 3], []])
+def test_local_launcher_preserves_auto_workers_until_stage_starts(items) -> None:
     launcher = LocalLauncher(
         pipeline=from_items(items, items_per_shard=2),
         name="local-auto-workers",
@@ -1588,7 +1586,31 @@ def test_local_launcher_auto_workers_uses_stage_shard_count(
 
     stages = launcher._resolved_stages()
 
-    assert stages[0].compute.num_workers == expected_workers
+    assert stages[0].compute.num_workers == "auto"
+
+
+def test_local_sequence_does_not_list_auto_stage_shards_during_planning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = from_items([1])
+    second = from_items([2])
+    sequence = first.as_stage(name="prepare").then(
+        second,
+        name="publish",
+        num_workers="auto",
+    )
+    monkeypatch.setattr(
+        second.source,
+        "list_shards",
+        lambda: pytest.fail("downstream shards were listed before the stage started"),
+    )
+
+    stages = LocalLauncher(
+        pipeline=sequence,
+        name="deferred-auto-workers",
+    )._resolved_stages()
+
+    assert stages[1].compute.num_workers == "auto"
 
 
 def test_empty_auto_workers_stage_skips_gpu_discovery(
