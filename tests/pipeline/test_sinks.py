@@ -21,6 +21,7 @@ from refiner.pipeline.data.shard import SHARD_ID_COLUMN, SOURCE_ROW_ID_COLUMN
 from refiner.pipeline.data.tabular import Tabular
 from refiner.pipeline import from_items, load_lance
 from refiner.pipeline.sinks import JsonlSink
+from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.sinks.assets import (
     AssetUploadManager,
     BlobAssetConfig,
@@ -55,6 +56,14 @@ class _FinalizedWorkersRuntime:
     ) -> list[FinalizedShardWorker]:
         assert stage_index == 0
         return self._rows
+
+
+def _followup_sink(sink: BaseSink) -> BaseSink:
+    stages = sink.followup_stages()
+    assert len(stages) == 1
+    followup_sink = stages[0].pipeline.sink
+    assert followup_sink is not None
+    return followup_sink
 
 
 @pytest.mark.parametrize(
@@ -1433,9 +1442,7 @@ def test_source_row_identity_is_not_a_user_column() -> None:
     assert rows[0].source_row_id == 0
 
 
-def test_lance_overwrite_build_reducer_does_not_open_dataset(
-    tmp_path, monkeypatch
-) -> None:
+def test_lance_overwrite_followup_does_not_open_dataset(tmp_path, monkeypatch) -> None:
     sink = LanceDatasetSink(tmp_path / "overwrite.lance", mode="overwrite")
     monkeypatch.setattr(
         sink,
@@ -1443,7 +1450,7 @@ def test_lance_overwrite_build_reducer_does_not_open_dataset(
         lambda: pytest.fail("submission host opened the output dataset"),
     )
 
-    reducer = sink.build_reducer()
+    reducer = _followup_sink(sink)
 
     assert isinstance(reducer, LanceDatasetCommitReducerSink)
     assert reducer.source_version is None
@@ -1615,7 +1622,7 @@ def test_lance_append_rejects_concurrent_dataset_version(tmp_path) -> None:
     appended = lance.write_dataset(
         pa.table({"x": [3]}), str(dataset_uri), mode="append"
     )
-    reducer = sink.build_reducer()
+    reducer = _followup_sink(sink)
     assert isinstance(reducer, LanceDatasetCommitReducerSink)
     with set_active_run_context(
         job_id="job",
@@ -1633,7 +1640,7 @@ def test_lance_append_rejects_concurrent_dataset_version(tmp_path) -> None:
     assert base.version < appended.version
     assert not list((dataset_uri / "data").glob("_refiner_lance_attempt_*"))
     assert list((dataset_uri / "_refiner_lance_fragments").glob("**/*.jsonl"))
-    retry = sink.build_reducer()
+    retry = _followup_sink(sink)
     assert isinstance(retry, LanceDatasetCommitReducerSink)
     with set_active_run_context(
         job_id="job",
@@ -3086,7 +3093,7 @@ def test_lance_reducer_keeps_only_finalized_worker_outputs(tmp_path) -> None:
 
     reducer = from_items([]).write_lance(output_dir).sink
     assert reducer is not None
-    reducer = reducer.build_reducer()
+    reducer = _followup_sink(reducer)
     assert reducer is not None
     with set_active_run_context(
         job_id="job",
@@ -3180,7 +3187,7 @@ def test_lance_dataset_reducer_commits_only_finalized_worker_outputs(
             sink.write_block([DictRow({"x": value}, shard_id=shard_id)])
             sink.on_shard_complete(shard_id)
 
-    reducer = LanceDatasetSink(output_dir).build_reducer()
+    reducer = _followup_sink(LanceDatasetSink(output_dir))
     assert isinstance(reducer, LanceDatasetCommitReducerSink)
     listed_prefixes: list[str] = []
     original_find = reducer.output.find
@@ -3258,7 +3265,7 @@ def test_lance_dataset_reducer_rejects_missing_finalized_sidecar(tmp_path) -> No
         sink.write_block([DictRow({"x": 1}, shard_id=finalized[0].shard_id)])
         sink.on_shard_complete(finalized[0].shard_id)
 
-    reducer = sink.build_reducer()
+    reducer = _followup_sink(sink)
     assert isinstance(reducer, LanceDatasetCommitReducerSink)
     with set_active_run_context(
         job_id="job",
@@ -3307,7 +3314,7 @@ def test_lance_dataset_reducer_finds_finalized_metadata_from_resumed_job(
             sink.write_block([DictRow({"x": value}, shard_id=shard_id)])
             sink.on_shard_complete(shard_id)
 
-    reducer = sink.build_reducer()
+    reducer = _followup_sink(sink)
     assert isinstance(reducer, LanceDatasetCommitReducerSink)
     with set_active_run_context(
         job_id="resumed-job",
@@ -3351,7 +3358,7 @@ def test_lance_dataset_reducer_prefers_current_job_metadata(tmp_path) -> None:
             sink.write_block([DictRow({"x": value}, shard_id=shard_id)])
             sink.on_shard_complete(shard_id)
 
-    reducer = sink.build_reducer()
+    reducer = _followup_sink(sink)
     assert isinstance(reducer, LanceDatasetCommitReducerSink)
     with set_active_run_context(
         job_id="current-job",
@@ -3394,12 +3401,12 @@ def test_lance_dataset_reducer_retry_is_idempotent(tmp_path) -> None:
         worker_name=None,
         runtime_lifecycle=runtime,
     ):
-        first = sink.build_reducer()
+        first = _followup_sink(sink)
         assert isinstance(first, LanceDatasetCommitReducerSink)
         first.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
         committed_version = lance.dataset(str(output_dir)).version
 
-        retry = sink.build_reducer()
+        retry = _followup_sink(sink)
         assert isinstance(retry, LanceDatasetCommitReducerSink)
         retry.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
         assert lance.dataset(str(output_dir)).version == committed_version
@@ -3438,13 +3445,13 @@ def test_lance_overwrite_retry_finds_historical_commit(tmp_path) -> None:
         worker_name=None,
         runtime_lifecycle=runtime,
     ):
-        first = sink.build_reducer()
+        first = _followup_sink(sink)
         assert isinstance(first, LanceDatasetCommitReducerSink)
         first.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
         lance.write_dataset(pa.table({"x": [10]}), str(output_dir), mode="append")
         concurrent_version = lance.dataset(str(output_dir)).version
 
-        retry = sink.build_reducer()
+        retry = _followup_sink(sink)
         assert isinstance(retry, LanceDatasetCommitReducerSink)
         retry.write_block([DictRow({"task_rank": 0}, shard_id="reduce")])
 
@@ -3476,7 +3483,7 @@ def test_lance_dataset_reducer_rejects_ambiguous_resume_metadata(tmp_path) -> No
             sink.write_block([DictRow({"x": value}, shard_id=shard_id)])
             sink.on_shard_complete(shard_id)
 
-    reducer = sink.build_reducer()
+    reducer = _followup_sink(sink)
     assert isinstance(reducer, LanceDatasetCommitReducerSink)
     with set_active_run_context(
         job_id="resumed-job",
@@ -3537,7 +3544,7 @@ def test_lance_dataset_post_commit_metadata_cleanup_is_best_effort(
         sink.write_block([DictRow({"x": 1}, shard_id=shard_id)])
         sink.on_shard_complete(shard_id)
 
-    reducer = sink.build_reducer()
+    reducer = _followup_sink(sink)
     assert isinstance(reducer, LanceDatasetCommitReducerSink)
 
     def _failed_rm(_path: str) -> None:

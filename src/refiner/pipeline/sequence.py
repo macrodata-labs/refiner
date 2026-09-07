@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from refiner.pipeline.resources import GPU
+from refiner.pipeline.planning import WorkerCount
 
 if TYPE_CHECKING:
     from refiner.launchers.cloud import CloudLaunchResult
@@ -12,20 +13,21 @@ if TYPE_CHECKING:
     from refiner.launchers.secrets import SecretInput
     from refiner.pipeline.pipeline import RefinerPipeline
     from refiner.pipeline.sinks.base import BaseSink
+    from refiner.platform.client import CloudProvider, CloudRegion
 
 
 def _validate_stage_configuration(
     *,
     name: str,
-    num_workers: int,
+    num_workers: WorkerCount,
     cpus_per_worker: int | None,
     mem_mb_per_worker: int | None,
 ) -> str:
     normalized_name = name.strip()
     if not normalized_name:
         raise ValueError("stage name must be non-empty")
-    if num_workers <= 0:
-        raise ValueError("num_workers must be > 0")
+    if num_workers != "auto" and num_workers <= 0:
+        raise ValueError("num_workers must be > 0 or 'auto'")
     if cpus_per_worker is not None and cpus_per_worker <= 0:
         raise ValueError("cpus_per_worker must be > 0")
     if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
@@ -39,7 +41,7 @@ class ConfiguredStage:
 
     pipeline: RefinerPipeline
     name: str
-    num_workers: int
+    num_workers: WorkerCount
     cpus_per_worker: int | None
     mem_mb_per_worker: int | None
     gpu: GPU | None
@@ -121,7 +123,7 @@ class PipelineSequence:
         pipeline: RefinerPipeline,
         *,
         name: str,
-        num_workers: int = 1,
+        num_workers: WorkerCount = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpu: GPU | None = None,
@@ -172,6 +174,9 @@ class PipelineSequence:
         self,
         *,
         name: str,
+        provider: str = "modal",
+        cloud: CloudProvider = "aws",
+        region: CloudRegion | Sequence[CloudRegion] = ("us", "eu", "ca"),
         sync_local_dependencies: bool = False,
         dependencies: Sequence[str] | None = None,
         refiner_extras: Sequence[str] | None = None,
@@ -186,6 +191,9 @@ class PipelineSequence:
         return CloudLauncher(
             pipeline=self,
             name=name,
+            provider=provider,
+            cloud=cloud,
+            region=region,
             sync_local_dependencies=sync_local_dependencies,
             dependencies=dependencies,
             refiner_extras=refiner_extras,

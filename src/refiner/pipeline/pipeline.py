@@ -914,7 +914,7 @@ class RefinerPipeline:
         self,
         *,
         name: str,
-        num_workers: int = 1,
+        num_workers: int | Literal["auto"] = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpu: GPU | None = None,

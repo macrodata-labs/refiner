@@ -573,12 +573,13 @@ class CloudLauncher(BaseLauncher):
                 )
             )
         try:
-            if self.provider == "aws" and any(
-                collect_pipeline_services(stage.pipeline) for stage in stages
-            ):
-                raise ValueError(
-                    "provider='aws' does not support managed runtime services"
-                )
+            if self.provider == "aws":
+                if any(stage.compute.gpu is not None for stage in stages):
+                    raise ValueError("provider='aws' does not support GPU workers")
+                if any(collect_pipeline_services(stage.pipeline) for stage in stages):
+                    raise ValueError(
+                        "provider='aws' does not support managed runtime services"
+                    )
             pipeline_payloads = self._upload_stage_payloads(
                 client=client, stages=stages
             )

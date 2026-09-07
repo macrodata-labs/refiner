@@ -420,7 +420,7 @@ def test_writer_can_declare_multiple_followup_stages() -> None:
         "write_publish",
     ]
     assert [stage.compute.num_workers for stage in stages] == [8, 2, 1]
-    assert stages[1].pipeline.source.describe() == {"num_tasks": 2}
+    assert stages[1].pipeline.source.describe()["num_tasks"] == 2
     assert stages[1].compute.cpus_per_worker == 4
     assert stages[1].compute.inherit_launcher_resources is False
     assert stages[2].compute.inherit_launcher_resources is False
@@ -446,3 +446,14 @@ def test_pipeline_sequence_rejects_invalid_or_duplicate_stage_configuration() ->
     )
     with pytest.raises(ValueError, match="writer follow-up stage"):
         plan_pipeline_stages(finalizing, default_num_workers=1)
+
+
+def test_pipeline_sequence_preserves_auto_worker_count() -> None:
+    sequence = from_items([{"x": 1}]).as_stage(
+        name="prepare",
+        num_workers="auto",
+    )
+
+    stages = plan_pipeline_stages(sequence, default_num_workers=1)
+
+    assert stages[0].compute.num_workers == "auto"

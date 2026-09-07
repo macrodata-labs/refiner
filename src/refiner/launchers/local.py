@@ -409,7 +409,12 @@ class LocalLauncher(BaseLauncher):
         stages = self._resolved_stages()
         available_cpus = len(available_cpu_ids())
         max_stage_workers = max(
-            (stage.compute.num_workers for stage in stages), default=self.num_workers
+            (
+                stage.compute.num_workers
+                for stage in stages
+                if isinstance(stage.compute.num_workers, int)
+            ),
+            default=0,
         )
         if max_stage_workers > available_cpus:
             logger.warning(

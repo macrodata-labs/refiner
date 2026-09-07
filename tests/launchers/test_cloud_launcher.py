@@ -337,6 +337,19 @@ def test_pipeline_launch_cloud_rejects_gpu_for_aws() -> None:
         )
 
 
+def test_pipeline_sequence_launch_cloud_rejects_gpu_for_aws(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch, stub_planner=False)
+    sequence = read_jsonl("input.jsonl").as_stage(
+        name="gpu",
+        gpu=GPU(count=1, type="h100", cuda_version="12.8"),
+    )
+
+    with pytest.raises(SystemExit, match="does not support GPU"):
+        sequence.launch_cloud(name="invalid aws gpu job", provider="aws")
+
+    assert captured["events"] == []
+
+
 def test_pipeline_launch_cloud_rejects_runtime_services_for_aws_before_upload(
     monkeypatch,
 ) -> None:
@@ -606,7 +619,11 @@ def test_pipeline_sequence_launch_cloud_submits_named_stage_resources(
             num_workers=1,
             mem_mb_per_worker=4096,
         )
-        .launch_cloud(name="multi-stage cloud")
+        .launch_cloud(
+            name="multi-stage cloud",
+            cloud="gcp",
+            region="eu-west",
+        )
     )
 
     assert result.job_id == "job-123"
@@ -625,6 +642,8 @@ def test_pipeline_sequence_launch_cloud_submits_named_stage_resources(
     ]
     assert runtimes[0] is not None
     assert runtimes[0].cpus_per_worker == 2
+    assert runtimes[0].cloud == "gcp"
+    assert runtimes[0].region == ("eu-west",)
     assert runtimes[1] is not None
     assert runtimes[1].mem_mb_per_worker == 4096
 

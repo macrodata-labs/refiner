@@ -40,6 +40,7 @@ from refiner.pipeline.sinks.lance_utils import block_to_table, validate_lance_ur
 from refiner.pipeline.sinks.reducer.file import (
     _compile_output_path_patterns,
 )
+from refiner.pipeline.sequence import FollowupStage
 from refiner.utils import check_required_dependencies
 from refiner.worker.context import (
     get_active_stage_index,
@@ -1573,16 +1574,23 @@ class LanceDatasetSink(BaseSink):
         args["io"] = self.io.to_plan()
         return ("write_lance_dataset", "writer", args)
 
-    def build_reducer(self) -> BaseSink | None:
-        return LanceDatasetCommitReducerSink(
-            self.output,
-            mode=self.mode,
-            source_version=self.source_version,
-            assets_subdir=self.assets.subdir if self.assets is not None else None,
-            columns=self.columns,
-            fill_missing=self.fill_missing,
-            fill=self.fill,
-            io=self.io,
+    def followup_stages(self) -> tuple[FollowupStage, ...]:
+        return (
+            FollowupStage.from_sink(
+                name="finalize",
+                sink=LanceDatasetCommitReducerSink(
+                    self.output,
+                    mode=self.mode,
+                    source_version=self.source_version,
+                    assets_subdir=(
+                        self.assets.subdir if self.assets is not None else None
+                    ),
+                    columns=self.columns,
+                    fill_missing=self.fill_missing,
+                    fill=self.fill,
+                    io=self.io,
+                ),
+            ),
         )
 
 
