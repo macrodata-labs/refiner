@@ -50,6 +50,19 @@ Macrodata Cloud supports these GPU types:
 - `a10`
 - `l4`
 - `t4`
+- `any`
+
+Pass an ordered list to fall back when the preferred GPU is unavailable:
+
+```python
+pipeline.launch_cloud(
+    name="gpu-inference",
+    gpu=mdr.GPU(type=["a10", "l4", "t4"], count=1),
+)
+```
+
+Refiner preserves the order. Choices must be unique, and `any` may only be the
+last choice, as in `["a10", "any"]`.
 
 ## Runtime services
 

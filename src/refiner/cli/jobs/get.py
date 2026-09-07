@@ -109,7 +109,14 @@ def _stage_gpu_text(runtime_config: Any) -> str:
     if not isinstance(runtime_config, dict):
         return "-"
     count = _safe_text(runtime_config.get("gpuCount"))
-    gpu_type = _safe_text(runtime_config.get("gpuType"))
+    gpu_types = runtime_config.get("gpuTypes")
+    gpu_type = (
+        " → ".join(gpu_types)
+        if isinstance(gpu_types, list)
+        and gpu_types
+        and all(isinstance(value, str) and value for value in gpu_types)
+        else _safe_text(runtime_config.get("gpuType"))
+    )
     if count in {"", "-"}:
         return "-"
     if gpu_type in {"", "-", "None"}:
