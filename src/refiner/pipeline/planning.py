@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from types import CodeType
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
+from refiner.pipeline.builtins import describe_builtin as describe_builtin
 from refiner.pipeline.steps import (
     CastStep,
     DropStep,
@@ -369,25 +370,6 @@ def _builtin_description(fn: Any) -> dict[str, Any] | None:
             return None
         parsed_services.append(service)
     return {"name": name, "args": args, "services": tuple(parsed_services)}
-
-
-def describe_builtin(
-    name: str, *, refiner_extras: tuple[str, ...] = (), **args: Any
-) -> Any:
-    def _decorate(fn: Any) -> Any:
-        setattr(
-            fn,
-            _REFINER_BUILTIN_CALL_ATTR,
-            {
-                "name": name,
-                "args": args,
-                "services": (),
-                "refiner_extras": refiner_extras,
-            },
-        )
-        return fn
-
-    return _decorate
 
 
 def _step_payload(
