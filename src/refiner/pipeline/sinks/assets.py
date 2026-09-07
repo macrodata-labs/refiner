@@ -777,7 +777,16 @@ class BlobAssetManager:
         rewritten: dict[int, object] = {}
         for path, references in grouped.items():
             source = DataFile.resolve(path)
-            source_size = int(source.fs.size(source.path))
+            try:
+                raw_source_size = source.fs.size(source.path)
+            except (NotImplementedError, OSError):
+                continue
+            try:
+                source_size = int(raw_source_size)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if source_size < 0:
+                continue
             if not self._covers_entire_blob(
                 [(offset, size) for _, offset, size in references], source_size
             ):

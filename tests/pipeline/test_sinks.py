@@ -14,7 +14,7 @@ from fsspec.implementations.memory import MemoryFileSystem
 
 import refiner.pipeline.sinks.lance as lance_sink_module
 from refiner import AddColumns, Append, Create, Overwrite, col, read_blob
-from refiner.io import DataFolder
+from refiner.io import DataFile, DataFolder
 from refiner.pipeline.data import datatype
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.data.shard import SHARD_ID_COLUMN, SOURCE_ROW_ID_COLUMN
@@ -2189,6 +2189,65 @@ def test_blob_writer_coalesces_complete_source_blob_references(
     assert references[0]["path"] == references[1]["path"]
     assert references[0]["offset"] == 0
     assert references[1]["offset"] == 3
+
+
+def test_blob_writer_falls_back_when_source_size_is_unavailable(
+    tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "source.blob"
+    source.write_bytes(b"abcdef")
+    source_file = DataFile.resolve(source)
+    original_size = source_file.fs.size
+
+    def size_without_source_metadata(path):
+        if path == source_file.path:
+            return None
+        return original_size(path)
+
+    monkeypatch.setattr(source_file.fs, "size", size_without_source_metadata)
+    output = DataFolder.resolve(tmp_path / "fallback-assets")
+    field = datatype.blob_reference("video").with_name("video")
+    table = pa.Table.from_arrays(
+        [
+            pa.array(
+                [
+                    {"path": str(source), "offset": 0, "size": 3},
+                    {"path": str(source), "offset": 3, "size": 3},
+                ],
+                type=field.type,
+            )
+        ],
+        schema=pa.schema([field]),
+    )
+    manager = BlobAssetManager(
+        output,
+        config=BlobAssetConfig(target_bytes=1024),
+        filename_template="{shard_id}.parquet",
+    )
+    manager.set_input_schema(table.schema)
+    range_copies = 0
+    original_append = manager._append
+
+    def count_range_copy(*args, **kwargs):
+        nonlocal range_copies
+        range_copies += 1
+        return original_append(*args, **kwargs)
+
+    monkeypatch.setattr(manager, "_append", count_range_copy)
+    with set_active_run_context(
+        job_id="job",
+        stage_index=0,
+        worker_id="worker-1",
+        worker_name=None,
+        runtime_lifecycle=cast(RuntimeLifecycle, _FinalizedWorkersRuntime([])),
+    ):
+        rewritten = manager.rewrite_table("0123456789ab", table)
+        manager.close()
+
+    assert range_copies == 2
+    assert [
+        read_blob(reference) for reference in rewritten.column("video").to_pylist()
+    ] == [b"abc", b"def"]
 
 
 def test_blob_writer_rejects_same_complete_source_and_retry_destination(
