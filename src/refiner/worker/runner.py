@@ -92,9 +92,16 @@ class Worker:
         )
         runtime_services = self.runtime_services
         sink = self.pipeline.sink or NullSink()
-        sink_schema = self.pipeline.output_schema()
-        sink.set_input_schema(sink_schema)
-        sink.set_input_dtype_columns(self.pipeline._output_dtype_columns())
+        sink_initialized = False
+
+        def _initialize_sink() -> None:
+            nonlocal sink_initialized
+            if sink_initialized:
+                return
+            sink.set_input_schema(self.pipeline.output_schema())
+            sink.set_input_dtype_columns(self.pipeline._output_dtype_columns())
+            sink_initialized = True
+
         sink_step_index = (
             self.pipeline._next_step_index() if self.pipeline.sink is not None else None
         )
@@ -183,34 +190,45 @@ class Worker:
             )
             heartbeat_thread.start()
 
-        def _source_rows(*, claim_one_shard: bool = False):
-            nonlocal previous, claimed, runtime_services_started, source_exhausted
-            while True:
-                if heartbeat_error is not None:
-                    raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
-                shard = self.runtime_lifecycle.claim(previous=previous)
-                if shard is None:
-                    source_exhausted = True
-                    logger.info(
-                        "no more shards worker_id={} claimed={}",
-                        self.worker_id,
-                        claimed,
-                    )
-                    break
-                claimed += 1
-                rows_read = 0
-                with inflight_lock:
-                    inflight_by_id[shard.id] = shard
-                if runtime_services and not runtime_services_started:
-                    asyncio.run(service_manager.start_services(runtime_services))
-                    runtime_services_started = True
+        def _claim_next_shard() -> Shard | None:
+            nonlocal claimed, runtime_services_started, source_exhausted
+            if heartbeat_error is not None:
+                raise RuntimeError(f"heartbeat failed: {heartbeat_error}")
+            shard = self.runtime_lifecycle.claim(previous=previous)
+            if shard is None:
+                source_exhausted = True
                 logger.info(
-                    "shard claimed shard_id={} global_ordinal={} start_key={} end_key={}",
-                    shard.id,
-                    shard.global_ordinal,
-                    shard.start_key,
-                    shard.end_key,
+                    "no more shards worker_id={} claimed={}",
+                    self.worker_id,
+                    claimed,
                 )
+                return None
+            claimed += 1
+            with inflight_lock:
+                inflight_by_id[shard.id] = shard
+            self.pipeline.source.prepare_shard(shard)
+            _initialize_sink()
+            if runtime_services and not runtime_services_started:
+                asyncio.run(service_manager.start_services(runtime_services))
+                runtime_services_started = True
+            logger.info(
+                "shard claimed shard_id={} global_ordinal={} start_key={} end_key={}",
+                shard.id,
+                shard.global_ordinal,
+                shard.start_key,
+                shard.end_key,
+            )
+            return shard
+
+        def _source_rows(*, initial_shard: Shard, claim_one_shard: bool = False):
+            nonlocal previous
+            shard: Shard | None = initial_shard
+            while True:
+                if shard is None:
+                    shard = _claim_next_shard()
+                if shard is None:
+                    break
+                rows_read = 0
                 logger.info(
                     "shard source started shard_id={} global_ordinal={}",
                     shard.id,
@@ -243,14 +261,22 @@ class Worker:
                 previous = shard
                 if claim_one_shard:
                     break
+                shard = None
 
         def _source_windows():
             if not self.pipeline.source.claim_shards_sequentially:
-                yield _source_rows()
+                first_shard = _claim_next_shard()
+                if first_shard is not None:
+                    yield _source_rows(initial_shard=first_shard)
                 return
 
             while not source_exhausted:
-                yield _source_rows(claim_one_shard=True)
+                first_shard = _claim_next_shard()
+                if first_shard is not None:
+                    yield _source_rows(
+                        initial_shard=first_shard,
+                        claim_one_shard=True,
+                    )
 
         with set_active_run_context(
             job_id=self.job_id,
@@ -306,6 +332,7 @@ class Worker:
                         )
                         if sink.counts_output_rows:
                             output_rows += written_output_rows
+                    _initialize_sink()
                 except KeyboardInterrupt as e:
                     execution_error = e
                     logger.warning(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import cloudpickle
 import pyarrow as pa
 import pytest
 from fsspec.implementations.memory import MemoryFileSystem
@@ -9,6 +10,7 @@ from refiner.pipeline.data import datatype
 from refiner.pipeline.data.shard import (
     SOURCE_ROW_ID_COLUMN,
     RowRangeDescriptor,
+    Shard,
     ShardGroupDescriptor,
 )
 from refiner.pipeline.sources.lance import LanceSource
@@ -30,6 +32,7 @@ def test_load_lance_caps_automatic_shards_without_dropping_fragments() -> None:
         (),
         {"get_fragments": lambda self: [None] * 1_001},
     )()
+    source._version_ref = [1]
 
     shards = source.list_shards()
 
@@ -87,6 +90,32 @@ def test_load_lance_defers_and_pins_latest_version_until_first_use(tmp_path) -> 
 
     lance.write_dataset(pa.table({"x": [2]}), str(dataset_uri), mode="append")
     assert [int(row["x"]) for row in pipeline.iter_rows()] == [1]
+
+
+def test_lance_shards_pin_version_across_independent_pipeline_payloads(
+    tmp_path,
+) -> None:
+    lance = pytest.importorskip("lance")
+    dataset_uri = tmp_path / "cloud-version-pin.lance"
+    version_one = lance.write_dataset(pa.table({"x": [1]}), str(dataset_uri)).version
+    payload = cloudpickle.dumps(load_lance(dataset_uri))
+
+    planner_pipeline = cloudpickle.loads(payload)
+    shards = planner_pipeline.list_shards()
+    assert all(
+        shard.descriptor.source_version == version_one
+        for shard in shards
+        if isinstance(shard.descriptor, RowRangeDescriptor)
+    )
+
+    lance.write_dataset(pa.table({"x": [2]}), str(dataset_uri), mode="append")
+    worker_pipeline = cloudpickle.loads(payload)
+    claimed_shard = Shard.from_dict(shards[0].to_dict())
+    worker_pipeline.source.prepare_shard(claimed_shard)
+
+    assert worker_pipeline.source.version == version_one
+    units = list(worker_pipeline.source.read_shard(claimed_shard))
+    assert [value for unit in units for value in unit.table["x"].to_pylist()] == [1]
 
 
 def test_multistage_workflow_plans_lance_input_before_it_exists(tmp_path) -> None:

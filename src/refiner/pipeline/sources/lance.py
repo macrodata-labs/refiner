@@ -225,6 +225,7 @@ class LanceSource(BaseSource):
                     start=start,
                     end=end,
                     global_ordinal=index,
+                    source_version=self.version,
                 )
             )
             start = end
@@ -385,6 +386,7 @@ class LanceSource(BaseSource):
         descriptor = shard.descriptor
         if not isinstance(descriptor, RowRangeDescriptor):
             raise TypeError("LanceSource requires row-range shards")
+        self.prepare_shard(shard)
         fragments = self._dataset().get_fragments()
         if (
             descriptor.start < 0
@@ -440,6 +442,25 @@ class LanceSource(BaseSource):
                     )
             if remaining_rows is not None:
                 remaining_rows -= expected_rows
+
+    def prepare_shard(self, shard: Shard) -> None:
+        descriptor = shard.descriptor
+        if not isinstance(descriptor, RowRangeDescriptor):
+            raise TypeError("LanceSource requires row-range shards")
+        source_version = descriptor.source_version
+        if source_version is None:
+            return
+        if self._requested_version is not None and self.version != source_version:
+            raise ValueError(
+                "Lance shard source version does not match the requested version"
+            )
+        if self._version_ref[0] == source_version:
+            return
+        if self._version_ref[0] is not None:
+            raise ValueError("Lance worker received shards from multiple versions")
+        self._initialize_from_dataset(
+            _import_lance().dataset(self.dataset_uri, version=source_version)
+        )
 
     def read_shard(self, shard: Shard) -> Iterator[SourceUnit]:
         return self._read_shard(shard, None)

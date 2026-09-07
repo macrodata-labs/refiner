@@ -106,27 +106,38 @@ class FilePartsDescriptor:
 
 @dataclass(frozen=True, slots=True)
 class RowRangeDescriptor:
-    """Descriptor for synthetic row-backed sources such as `from_items()`."""
+    """Descriptor for row-backed sources, optionally pinned to a source version."""
 
     start: int
     end: int
+    source_version: int | None = None
 
     def __post_init__(self) -> None:
         if self.end < self.start:
             raise ValueError("row-range end must be >= start")
+        if self.source_version is not None and self.source_version < 0:
+            raise ValueError("row-range source version must be >= 0")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "kind": "row_range",
             "start": int(self.start),
             "end": int(self.end),
         }
+        if self.source_version is not None:
+            payload["source_version"] = int(self.source_version)
+        return payload
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> RowRangeDescriptor:
         return cls(
             start=int(payload["start"]),
             end=int(payload["end"]),
+            source_version=(
+                int(payload["source_version"])
+                if payload.get("source_version") is not None
+                else None
+            ),
         )
 
     def update_hash(self, h: _HashWriter) -> None:
@@ -135,6 +146,9 @@ class RowRangeDescriptor:
         h.update(b"\0")
         h.update(str(self.end).encode("ascii"))
         h.update(b"\0")
+        if self.source_version is not None:
+            h.update(str(self.source_version).encode("ascii"))
+            h.update(b"\0")
 
     @property
     def descriptor_start_key(self) -> str | None:
@@ -238,11 +252,13 @@ class Shard:
         global_ordinal: int | None = None,
         start_key: str | None = None,
         end_key: str | None = None,
+        source_version: int | None = None,
     ) -> Shard:
         return cls(
             descriptor=RowRangeDescriptor(
                 start=start,
                 end=end,
+                source_version=source_version,
             ),
             global_ordinal=global_ordinal,
             start_key=start_key,
