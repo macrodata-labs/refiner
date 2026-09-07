@@ -1673,6 +1673,27 @@ def test_pipeline_sequence_launch_local_uses_each_stage_worker_count(tmp_path) -
     assert (rundir / "stage-1").exists()
 
 
+@pytest.mark.parametrize(
+    ("cpus_per_worker", "mem_mb_per_worker"),
+    [
+        (2, None),
+        (None, 4096),
+    ],
+)
+def test_pipeline_sequence_launch_local_rejects_unsupported_resources(
+    cpus_per_worker: int | None,
+    mem_mb_per_worker: int | None,
+) -> None:
+    sequence = read_jsonl("input.jsonl").as_stage(
+        name="prepare",
+        cpus_per_worker=cpus_per_worker,
+        mem_mb_per_worker=mem_mb_per_worker,
+    )
+
+    with pytest.raises(ValueError, match="launch_local does not support"):
+        sequence.launch_local(name="local sequence")
+
+
 def test_launch_local_uses_explicit_rundir(tmp_path) -> None:
     path = tmp_path / "a.jsonl"
     path.write_text('{"x": 1}\n')

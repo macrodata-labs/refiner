@@ -150,6 +150,18 @@ class PipelineSequence:
         """Run the configured stages sequentially on the local machine."""
         from refiner.launchers.local import LocalLauncher
 
+        unsupported_stages = [
+            stage.name
+            for stage in self.stages
+            if stage.cpus_per_worker is not None or stage.mem_mb_per_worker is not None
+        ]
+        if unsupported_stages:
+            names = ", ".join(unsupported_stages)
+            raise ValueError(
+                "launch_local does not support cpus_per_worker or "
+                f"mem_mb_per_worker; remove them from stages: {names}"
+            )
+
         return LocalLauncher(
             pipeline=self,
             name=name,
