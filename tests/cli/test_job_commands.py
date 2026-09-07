@@ -95,6 +95,7 @@ class _FakeClient:
                         "memoryMb": 16384,
                         "gpuCount": 1,
                         "gpuType": "a10g",
+                        "gpuTypes": ["a10", "l4", "t4"],
                     },
                     "steps": [
                         {
@@ -306,7 +307,7 @@ def test_jobs_get_plain_output(monkeypatch, capsys) -> None:
     assert "GPU" in out.out
     assert "  8  " in out.out
     assert "16384" in out.out
-    assert "1 a10g" in out.out
+    assert "1 a10 → l4 → t4" in out.out
     assert "Progress:" not in out.out
     assert "columns=18" in out.out
     assert "__meta" not in out.out

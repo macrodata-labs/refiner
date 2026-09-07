@@ -634,11 +634,42 @@ def test_pipeline_launch_cloud_accepts_structured_gpu(
     assert runtime.gpu == GPU(count=1, type=gpu_type, cuda_version="12.4")
 
 
+def test_pipeline_launch_cloud_preserves_ordered_gpu_fallbacks(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    read_jsonl("input.jsonl").launch_cloud(
+        name="demo cloud",
+        gpu=GPU(count=1, type=["a10", "l4", "t4"], cuda_version="12.4"),
+    )
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.plan["stages"][0]["gpu"] == {
+        "count": 1,
+        "type": ["a10", "l4", "t4"],
+        "cuda_version": "12.4",
+    }
+    assert request.stage_payloads[0].runtime.gpu == GPU(
+        count=1,
+        type=("a10", "l4", "t4"),
+        cuda_version="12.4",
+    )
+
+
 def test_gpu_rejects_unsupported_values() -> None:
     with pytest.raises(ValueError, match="gpu.count must be > 0"):
         GPU(count=0, type="h100")
     with pytest.raises(ValueError, match="gpu.type must be one of"):
         GPU(count=1, type="v100")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="between 1 and 8"):
+        GPU(count=1, type=[])
+    with pytest.raises(ValueError, match="unique"):
+        GPU(count=1, type=["l4", "l4"])
+    with pytest.raises(ValueError, match="'any' must be the final"):
+        GPU(count=1, type=["any", "l4"])
     with pytest.raises(ValueError, match="gpu.cuda_version must be one of"):
         GPU(count=1, type="h100", cuda_version="13.0")  # type: ignore[arg-type]
 

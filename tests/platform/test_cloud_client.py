@@ -69,6 +69,18 @@ def test_cloud_runtime_config_preserves_positional_resource_order() -> None:
     assert runtime.region == ("us", "eu", "ca")
 
 
+def test_cloud_runtime_config_serializes_ordered_gpu_fallbacks() -> None:
+    runtime = CloudRuntimeConfig(
+        num_workers=1,
+        gpu=GPU(count=1, type=["a10", "l4", "any"]),
+    )
+
+    assert runtime.to_dict()["gpu"] == {
+        "count": 1,
+        "type": ["a10", "l4", "any"],
+    }
+
+
 def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

@@ -32,6 +32,7 @@ _LAZY_ATTRS = {
     "CUDAVersion": "refiner.pipeline.resources",
     "GPU": "refiner.pipeline.resources",
     "GPUType": "refiner.pipeline.resources",
+    "GPUTypeRequest": "refiner.pipeline.resources",
     "SUPPORTED_CUDA_VERSIONS": "refiner.pipeline.resources",
     "SUPPORTED_GPU_TYPES": "refiner.pipeline.resources",
 }
@@ -45,6 +46,7 @@ __all__ = [
     "CUDAVersion",
     "GPU",
     "GPUType",
+    "GPUTypeRequest",
     "RefinerPipeline",
     "Row",
     "Shard",
@@ -118,6 +120,7 @@ if TYPE_CHECKING:
         CUDAVersion,
         GPU,
         GPUType,
+        GPUTypeRequest,
         SUPPORTED_CUDA_VERSIONS,
         SUPPORTED_GPU_TYPES,
     )
