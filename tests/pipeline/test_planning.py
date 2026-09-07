@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import refiner as rf
+import pytest
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner import col
 from refiner.pipeline import RefinerPipeline, from_items
@@ -10,6 +11,7 @@ from refiner.pipeline.sources.readers.base import BaseReader
 from refiner.pipeline.data.row import DictRow, Row
 from refiner.pipeline.sinks.base import BaseSink
 from refiner.pipeline.planning import (
+    StageComputeRequirements,
     _extract_lambda_source,
     compile_pipeline_plan,
     plan_pipeline_stages,
@@ -335,3 +337,80 @@ def test_plan_pipeline_stages_adds_writer_reducer_stage() -> None:
     assert stages[1].compute.num_workers == 1
     assert stages[1].compute.inherit_launcher_resources is False
     assert stages[1].pipeline.source.name == "task"
+
+
+def test_plan_pipeline_sequence_preserves_names_resources_and_order() -> None:
+    first = from_items([{"x": 1}])
+    second = from_items([{"x": 2}])
+    gpu = rf.GPU(count=1, type="h100")
+    sequence = first.as_stage(
+        name="prepare",
+        num_workers=3,
+        cpus_per_worker=2,
+    ).then(
+        second,
+        name="publish",
+        num_workers=5,
+        mem_mb_per_worker=8192,
+        gpu=gpu,
+    )
+
+    stages = plan_pipeline_stages(sequence, default_num_workers=99)
+
+    assert [stage.index for stage in stages] == [0, 1]
+    assert [stage.name for stage in stages] == ["prepare", "publish"]
+    assert [stage.pipeline for stage in stages] == [first, second]
+    assert stages[0].compute == StageComputeRequirements(
+        num_workers=3,
+        cpus_per_worker=2,
+        inherit_launcher_resources=False,
+    )
+    assert stages[1].compute == StageComputeRequirements(
+        num_workers=5,
+        memory_mb_per_worker=8192,
+        gpu=gpu,
+        inherit_launcher_resources=False,
+    )
+
+
+def test_plan_pipeline_sequence_keeps_generated_finalizer_adjacent() -> None:
+    first = from_items([{"x": 1}]).write_parquet("/tmp/output")
+    second = from_items([{"x": 2}])
+    sequence = first.as_stage(name="prepare", num_workers=3).then(
+        second,
+        name="publish",
+        num_workers=2,
+    )
+
+    stages = plan_pipeline_stages(sequence, default_num_workers=99)
+
+    assert [stage.index for stage in stages] == [0, 1, 2]
+    assert [stage.name for stage in stages] == [
+        "prepare",
+        "prepare_finalize",
+        "publish",
+    ]
+    assert [stage.compute.num_workers for stage in stages] == [3, 1, 2]
+    assert stages[1].compute.inherit_launcher_resources is False
+
+
+def test_pipeline_sequence_rejects_invalid_or_duplicate_stage_configuration() -> None:
+    pipeline = from_items([{"x": 1}])
+
+    with pytest.raises(ValueError, match="stage name must be non-empty"):
+        pipeline.as_stage(name=" ")
+
+    sequence = pipeline.as_stage(name="prepare")
+    with pytest.raises(ValueError, match="stage names must be unique"):
+        sequence.then(pipeline, name="prepare")
+
+    finalizing = (
+        pipeline.write_parquet("/tmp/output")
+        .as_stage(name="prepare")
+        .then(
+            pipeline,
+            name="prepare_finalize",
+        )
+    )
+    with pytest.raises(ValueError, match="generated finalizer name"):
+        plan_pipeline_stages(finalizing, default_num_workers=1)

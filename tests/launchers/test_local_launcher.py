@@ -1643,6 +1643,36 @@ def test_resumed_auto_workers_use_remaining_shard_count(
     assert stats.workers == 1
 
 
+def test_pipeline_sequence_launch_local_uses_each_stage_worker_count(tmp_path) -> None:
+    first_path = tmp_path / "stage0.jsonl"
+    second_path = tmp_path / "stage1.jsonl"
+    first_path.write_text('{"x": 1}\n')
+    second_path.write_text('{"x": 2}\n')
+    sequence = (
+        read_jsonl(str(first_path))
+        .as_stage(
+            name="prepare",
+            num_workers=1,
+        )
+        .then(
+            read_jsonl(str(second_path)),
+            name="publish",
+            num_workers=2,
+        )
+    )
+    rundir = tmp_path / "sequence-run"
+
+    stats = sequence.launch_local(name="local sequence", rundir=str(rundir))
+
+    assert stats.workers == 3
+    assert stats.claimed == 2
+    assert stats.completed == 2
+    assert stats.failed == 0
+    assert stats.output_rows == 2
+    assert (rundir / "stage-0").exists()
+    assert (rundir / "stage-1").exists()
+
+
 def test_launch_local_uses_explicit_rundir(tmp_path) -> None:
     path = tmp_path / "a.jsonl"
     path.write_text('{"x": 1}\n')

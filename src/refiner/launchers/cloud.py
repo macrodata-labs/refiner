@@ -43,6 +43,7 @@ from refiner.launchers.base import BaseLauncher
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
+    from refiner.pipeline.sequence import PipelineSequence
     from refiner.pipeline.planning import PlannedStage
 
 
@@ -174,7 +175,7 @@ class CloudLauncher(BaseLauncher):
     def __init__(
         self,
         *,
-        pipeline: "RefinerPipeline",
+        pipeline: "RefinerPipeline | PipelineSequence",
         name: str,
         provider: str = "modal",
         num_workers: int | Literal["auto"] = 1,

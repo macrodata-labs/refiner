@@ -40,6 +40,7 @@ from refiner.worker.workdir import resolve_workdir
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
     from refiner.pipeline.data.shard import Shard
+    from refiner.pipeline.sequence import PipelineSequence
 
 
 class LocalLauncher(BaseLauncher):
@@ -51,7 +52,7 @@ class LocalLauncher(BaseLauncher):
     def __init__(
         self,
         *,
-        pipeline: RefinerPipeline,
+        pipeline: RefinerPipeline | PipelineSequence,
         name: str,
         num_workers: int | Literal["auto"] = 1,
         rundir: str | None = None,
@@ -405,13 +406,16 @@ class LocalLauncher(BaseLauncher):
     def launch(self) -> LaunchStats:
         if attach_mode_override() == "detach":
             raise SystemExit("--detach is only supported for cloud launches.")
+        stages = self._resolved_stages()
         available_cpus = len(available_cpu_ids())
-        if isinstance(self.num_workers, int) and self.num_workers > available_cpus:
+        max_stage_workers = max(
+            (stage.compute.num_workers for stage in stages), default=self.num_workers
+        )
+        if max_stage_workers > available_cpus:
             logger.warning(
-                f"launch requested {self.num_workers} workers, but only {available_cpus} CPUs are available on this machine."
+                f"launch requested {max_stage_workers} workers, but only {available_cpus} CPUs are available on this machine."
             )
         self.job_tracking_url = None
-        stages = self._resolved_stages()
         self._total_stages = max(1, len(stages))
         tracking_client, self.job_id = self._register_tracked_job(stages=stages)
         if self.job_id is None:

@@ -25,6 +25,26 @@ The local launcher is useful for:
 - checking that a transform is safe across multiple shards
 - debugging resource assumptions before a cloud launch
 
+## Run ordered stages locally
+
+A staged pipeline uses the same ordering locally as it does in Macrodata Cloud:
+
+```python
+workflow = prepare.as_stage(
+    name="prepare",
+    num_workers=4,
+).then(
+    publish,
+    name="publish",
+    num_workers=1,
+)
+
+workflow.launch_local(name="staged-local")
+```
+
+Each stage is a complete pipeline with its own source and sink. The next stage
+starts only after the previous stage completes successfully.
+
 ## Run directory
 
 Local runs write run metadata under a local run directory. Pass `rundir` when

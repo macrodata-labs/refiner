@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 import inspect
 import textwrap
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import CodeType
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
@@ -34,6 +34,7 @@ from refiner.services.discovery import (
 
 if TYPE_CHECKING:
     from refiner.pipeline import RefinerPipeline
+    from refiner.pipeline.sequence import PipelineSequence
 
 
 _REFINER_BUILTIN_CALL_ATTR = "__refiner_builtin_call__"
@@ -501,17 +502,72 @@ def _compile_stage_steps(
 
 
 def plan_pipeline_stages(
-    pipeline: "RefinerPipeline", *, default_num_workers: WorkerCount
+    pipeline: "RefinerPipeline | PipelineSequence", *, default_num_workers: WorkerCount
 ) -> list[PlannedStage]:
     """Return the ordered execution stages for a pipeline.
 
-    This is currently a placeholder splitter that yields a single stage. Future
-    multi-stage planning logic should live here.
+    Configured sequences preserve their declared order and resource profiles.
+    An individual pipeline may also add a generated reducer stage when its sink
+    requires finalization.
     """
     if default_num_workers != "auto" and (
         not isinstance(default_num_workers, int) or default_num_workers <= 0
     ):
         raise ValueError("default_num_workers must be > 0")
+
+    from refiner.pipeline.sequence import PipelineSequence
+
+    if isinstance(pipeline, PipelineSequence):
+        planned: list[PlannedStage] = []
+        for configured_stage in pipeline.stages:
+            stage_parts = _plan_single_pipeline_stages(
+                configured_stage.pipeline,
+                default_num_workers=configured_stage.num_workers,
+            )
+            for part_index, stage_part in enumerate(stage_parts):
+                stage_name = _configured_stage_part_name(
+                    configured_stage.name, part_index
+                )
+                compute = stage_part.compute
+                if compute.inherit_launcher_resources:
+                    compute = StageComputeRequirements(
+                        num_workers=configured_stage.num_workers,
+                        cpus_per_worker=configured_stage.cpus_per_worker,
+                        memory_mb_per_worker=configured_stage.mem_mb_per_worker,
+                        gpu=configured_stage.gpu,
+                        inherit_launcher_resources=False,
+                    )
+                planned.append(
+                    replace(
+                        stage_part,
+                        index=len(planned),
+                        name=stage_name,
+                        compute=compute,
+                    )
+                )
+        planned_names = [stage.name for stage in planned]
+        if len(set(planned_names)) != len(planned_names):
+            raise ValueError("stage names conflict with a generated finalizer name")
+        return planned
+
+    return _plan_single_pipeline_stages(
+        pipeline,
+        default_num_workers=default_num_workers,
+    )
+
+
+def _configured_stage_part_name(name: str, part_index: int) -> str:
+    if part_index == 0:
+        return name
+    if part_index == 1:
+        return f"{name}_finalize"
+    return f"{name}_finalize_{part_index}"
+
+
+def _plan_single_pipeline_stages(
+    pipeline: "RefinerPipeline", *, default_num_workers: int
+) -> list[PlannedStage]:
+    """Plan one pipeline and any finalizer stage required by its sink."""
 
     from refiner.pipeline.pipeline import RefinerPipeline
     from refiner.pipeline.sources.task import TaskSource

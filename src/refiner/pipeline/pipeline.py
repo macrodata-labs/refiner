@@ -109,6 +109,7 @@ if TYPE_CHECKING:
     from refiner.launchers.local import LaunchStats
     from refiner.launchers.secrets import SecretInput
     from refiner.platform.client import CloudProvider, CloudRegion
+    from refiner.pipeline.sequence import PipelineSequence
 
 
 class RefinerPipeline:
@@ -908,6 +909,43 @@ class RefinerPipeline:
             gpu=gpu,
         )
         return launcher.launch()
+
+    def as_stage(
+        self,
+        *,
+        name: str,
+        num_workers: int = 1,
+        cpus_per_worker: int | None = None,
+        mem_mb_per_worker: int | None = None,
+        gpu: GPU | None = None,
+    ) -> "PipelineSequence":
+        """Configure this pipeline as the first stage of a staged job.
+
+        The pipeline remains responsible for its own source and sink. Use
+        :meth:`PipelineSequence.then` to append independently executable
+        pipelines that start only after this stage completes successfully.
+
+        Args:
+            name: User-visible stage name.
+            num_workers: Logical workers assigned to this stage.
+            cpus_per_worker: Optional CPU cores assigned to each worker.
+            mem_mb_per_worker: Optional memory in MB assigned to each worker.
+            gpu: Optional GPU request assigned to each worker.
+        """
+        from refiner.pipeline.sequence import ConfiguredStage, PipelineSequence
+
+        return PipelineSequence(
+            (
+                ConfiguredStage(
+                    pipeline=self,
+                    name=name,
+                    num_workers=num_workers,
+                    cpus_per_worker=cpus_per_worker,
+                    mem_mb_per_worker=mem_mb_per_worker,
+                    gpu=gpu,
+                ),
+            )
+        )
 
     def launch_cloud(
         self,
