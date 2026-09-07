@@ -154,13 +154,6 @@ session to continue. Synchronized files, profiles, and changes made through
 exec are ephemeral. AWS debug sessions remain CPU-only and do not support
 runtime services.
 
-## Internal Notes
-
-Shard claims and completions are written to an atomic, private SQLite ledger in
-the retained worker rather than the job's canonical shard ledger. Each attempt
-resets that private ledger and passes it explicitly to the normal cloud worker
-entrypoint.
-
 ## Resume a debug command after a connection failure
 
 `macrodata debug run` and `macrodata debug exec` print an attempt ID before
@@ -183,3 +176,11 @@ and keep the output prefix fixed between create and sync. Otherwise the changed
 hash is an environment change and requires a new worker. Source-only changes
 can reuse the worker; dependency, resource, secret, and environment changes still
 require recreating the session.
+
+
+## Internal Notes
+
+Shard claims and completions are written to an atomic, private SQLite ledger in
+the retained worker rather than the job's canonical shard ledger. Each attempt
+resets that private ledger and passes it explicitly to the normal cloud worker
+entrypoint.
