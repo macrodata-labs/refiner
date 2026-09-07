@@ -174,11 +174,18 @@ def test_cloud_debug_client_uses_retained_session_routes(monkeypatch) -> None:
     client.cloud_debug_status(job_id="job/1")
     client.cloud_debug_exec(
         job_id="job/1",
+        attempt_id="00000000-0000-4000-8000-000000000001",
         command=["python", "-V"],
         workdir="/tmp/refiner-debug",
         timeout_secs=12,
     )
-    client.cloud_debug_run(job_id="job/1", max_shards=1, timeout_secs=30, profile=True)
+    client.cloud_debug_run(
+        job_id="job/1",
+        attempt_id="00000000-0000-4000-8000-000000000002",
+        max_shards=1,
+        timeout_secs=30,
+        profile=True,
+    )
     client.cloud_debug_profile(job_id="job/1")
     client.cloud_debug_stop(job_id="job/1")
     client.cloud_debug_doctor(job_id="job/1")
@@ -192,13 +199,13 @@ def test_cloud_debug_client_uses_retained_session_routes(monkeypatch) -> None:
         "/api/cloud/debug/job%2F1/doctor",
     ]
     assert calls[1]["json_payload"] == {
-        "attempt_id": calls[1]["json_payload"]["attempt_id"],
+        "attempt_id": "00000000-0000-4000-8000-000000000001",
         "command": ["python", "-V"],
         "timeout_secs": 12,
         "workdir": "/tmp/refiner-debug",
     }
     assert calls[2]["json_payload"] == {
-        "attempt_id": calls[2]["json_payload"]["attempt_id"],
+        "attempt_id": "00000000-0000-4000-8000-000000000002",
         "timeout_secs": 30,
         "max_shards": 1,
         "profile": True,
