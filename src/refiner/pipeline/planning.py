@@ -48,6 +48,7 @@ class StageComputeRequirements:
     num_workers: WorkerCount
     cpus_per_worker: int | None = None
     memory_mb_per_worker: int | None = None
+    scratch_disk_mb_per_worker: int | None = None
     gpu: GPU | None = None
     inherit_launcher_resources: bool = True
 
@@ -57,6 +58,8 @@ class StageComputeRequirements:
             payload["cpus_per_worker"] = self.cpus_per_worker
         if self.memory_mb_per_worker is not None:
             payload["memory_mb_per_worker"] = self.memory_mb_per_worker
+        if self.scratch_disk_mb_per_worker is not None:
+            payload["scratch_disk_mb_per_worker"] = self.scratch_disk_mb_per_worker
         if self.gpu is not None:
             payload["gpu"] = self.gpu.to_dict()
         return payload

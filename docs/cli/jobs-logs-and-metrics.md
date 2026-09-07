@@ -68,8 +68,8 @@ Created By: ada@example.com
 Available: manifest, logs, metrics
 
 Stages
-Index  Name    Status   Progress
-0      ingest  running  run=2 done=1 tot=4
+Idx  Name    Status   Shards                 Workers               CPU  Memory  Scratch  GPU
+0    ingest  running  c=1 a=2 p=1 t=4 (25%)  active=2 requested=4  8    16384   512000   1 a10
 
 Steps
 Stage  Step  Name          Type  Columns

@@ -1046,6 +1046,7 @@ class RefinerPipeline:
         num_workers: int | Literal["auto"] = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
+        scratch_disk_mb_per_worker: int | None = None,
         gpu: GPU | None = None,
         cloud: CloudProvider = "aws",
         region: CloudRegion | Sequence[CloudRegion] = ("us", "eu", "ca"),
@@ -1067,6 +1068,7 @@ class RefinerPipeline:
                 launch one worker per stage shard.
             cpus_per_worker: Optional requested CPU cores per worker.
             mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
+            scratch_disk_mb_per_worker: Optional scratch disk in MB per worker.
             gpu: Optional structured GPU request.
             cloud: Public cloud provider. Supported values are ``"aws"``,
                 ``"oci"``, and ``"gcp"``.
@@ -1102,6 +1104,7 @@ class RefinerPipeline:
             num_workers=num_workers,
             cpus_per_worker=cpus_per_worker,
             mem_mb_per_worker=mem_mb_per_worker,
+            scratch_disk_mb_per_worker=scratch_disk_mb_per_worker,
             gpu=gpu,
             cloud=cloud,
             region=region,
