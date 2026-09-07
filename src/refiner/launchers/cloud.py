@@ -510,6 +510,7 @@ class CloudLauncher(BaseLauncher):
     ) -> PreparedDebugSync:
         if self.continue_from_job is not None:
             raise ValueError("cloud debug cannot be combined with continue_from_job")
+        self._validate_debug_stages(self._resolved_stages())
         stages, manifest, _, resolved_secret_sources, resolved_env = (
             self._resolve_submission()
         )
