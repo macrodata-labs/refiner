@@ -407,6 +407,18 @@ class LocalLauncher(BaseLauncher):
         if attach_mode_override() == "detach":
             raise SystemExit("--detach is only supported for cloud launches.")
         stages = self._resolved_stages()
+        unsupported_stages = [
+            stage.name
+            for stage in stages
+            if stage.compute.cpus_per_worker is not None
+            or stage.compute.memory_mb_per_worker is not None
+        ]
+        if unsupported_stages:
+            names = ", ".join(unsupported_stages)
+            raise ValueError(
+                "launch_local does not support cpus_per_worker or "
+                f"mem_mb_per_worker; remove them from stages: {names}"
+            )
         available_cpus = len(available_cpu_ids())
         max_stage_workers = max(
             (

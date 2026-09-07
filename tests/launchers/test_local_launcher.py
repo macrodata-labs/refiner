@@ -27,6 +27,8 @@ from refiner.cli.ui.console import (
 from refiner.pipeline.data.shard import FilePart, Shard
 from refiner.pipeline import RefinerPipeline, from_items, read_csv, read_jsonl
 from refiner.pipeline.resources import GPU
+from refiner.pipeline.sequence import FollowupStage
+from refiner.pipeline.sinks.base import BaseSink
 from refiner.launchers.local import LaunchStats, LocalLauncher
 from refiner.pipeline.planning import PlannedStage, StageComputeRequirements
 from refiner.pipeline.sources.readers.base import BaseReader
@@ -35,6 +37,22 @@ from refiner.platform.auth import MacrodataCredentialsError
 from refiner.worker.resources.gpu import build_gpu_sets
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+class _NoopSink(BaseSink):
+    def write_shard_block(self, shard_id, block) -> None:
+        del shard_id, block
+
+
+class _FollowupResourceSink(_NoopSink):
+    def followup_stages(self) -> tuple[FollowupStage, ...]:
+        return (
+            FollowupStage.from_sink(
+                name="finalize",
+                sink=_NoopSink(),
+                cpus_per_worker=2,
+            ),
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -1692,6 +1710,14 @@ def test_pipeline_sequence_launch_local_rejects_unsupported_resources(
 
     with pytest.raises(ValueError, match="launch_local does not support"):
         sequence.launch_local(name="local sequence")
+
+
+def test_launch_local_rejects_followup_stage_resources() -> None:
+    source = read_jsonl("input.jsonl").source
+    pipeline = RefinerPipeline(source, sink=_FollowupResourceSink())
+
+    with pytest.raises(ValueError, match="remove them from stages: writer_stage_1"):
+        pipeline.launch_local(name="local writer")
 
 
 def test_launch_local_uses_explicit_rundir(tmp_path) -> None:
