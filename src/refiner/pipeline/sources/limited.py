@@ -77,7 +77,7 @@ class LimitedSource(BaseSource):
         if remaining == 0:
             return
         for source_shard in descriptor.shards:
-            source_units = iter(self.source.read_shard(source_shard))
+            source_units = iter(self.source.read_shard_prefix(source_shard, remaining))
             try:
                 for unit in source_units:
                     if isinstance(unit, Row):

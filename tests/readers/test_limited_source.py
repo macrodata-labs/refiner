@@ -46,6 +46,15 @@ class _RecordingSource(BaseSource):
         self.list_calls = 0
         self.read_starts: list[int] = []
         self.units_started: list[str] = []
+        self.row_limit_hints: list[int] = []
+
+    def read_shard_prefix(
+        self,
+        shard: Shard,
+        max_rows: int,
+    ) -> Iterator[SourceUnit]:
+        self.row_limit_hints.append(max_rows)
+        return self.read_shard(shard)
 
     @property
     def schema(self) -> pa.Schema:
@@ -135,6 +144,7 @@ def test_limited_source_applies_one_global_limit_across_source_shards() -> None:
     assert source.list_calls == 1
     assert source.read_starts == [0, 1]
     assert source.units_started == ["table-0", "row-2"]
+    assert source.row_limit_hints == [3, 1]
 
 
 def test_limited_source_claim_carries_plan_to_serialized_worker() -> None:

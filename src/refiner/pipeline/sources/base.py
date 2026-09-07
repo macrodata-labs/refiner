@@ -59,6 +59,21 @@ class BaseSource(ABC):
         """Return a source whose existing scanner window is no larger than a cap."""
         return self
 
+    def read_shard_prefix(
+        self,
+        shard: Shard,
+        max_rows: int,
+    ) -> Iterator[SourceUnit]:
+        """Read a shard with an optional physical prefix pushdown.
+
+        ``LimitedSource`` remains responsible for enforcing the exact global
+        limit. Sources may override this hook to avoid physical reads beyond
+        the remaining prefix; sources that cannot push down the cap may ignore
+        it.
+        """
+        del max_rows
+        return self.read_shard(shard)
+
     @property
     def schema(self) -> pa.Schema | None:
         return None

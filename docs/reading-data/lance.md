@@ -58,9 +58,9 @@ scanner inheritance from `with_max_block_rows`.
 
 Set `max_rows` to a non-negative integer to read only that many leading rows from
 the pinned dataset version. Refiner uses the same global bounded-source wrapper
-as other built-in readers, stops after the final required Arrow batch, and
-slices that batch when necessary. Datasets with fewer rows simply yield all
-available rows.
+as other built-in readers while avoiding projected-value reads beyond the final
+requested prefix. This keeps quick tests bounded even for wide or binary-heavy
+datasets. Datasets with fewer rows simply yield all available rows.
 
 The limit is applied before pipeline transforms. Omit `max_rows` to read the
 entire pinned version, or use `max_rows=0` to produce no source rows. For
