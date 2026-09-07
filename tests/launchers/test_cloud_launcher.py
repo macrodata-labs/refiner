@@ -356,7 +356,7 @@ def test_pipeline_launch_cloud_rejects_runtime_services_for_aws_before_upload(
     assert captured["events"] == []
 
 
-def test_captured_pipeline_launch_submits_debug_and_does_not_attach(
+def test_captured_smoke_launch_submits_debug_without_smoke_hint_or_attach(
     monkeypatch, capsys
 ) -> None:
     from refiner.launchers.cloud_debug_capture import capture_cloud_launches
@@ -370,7 +370,7 @@ def test_captured_pipeline_launch_submits_debug_and_does_not_attach(
 
     with capture_cloud_launches() as capture:
         placeholder = read_jsonl("input.jsonl").launch_cloud(
-            name="debug cloud",
+            name="smoke debug",
             num_workers=16,
         )
     assert placeholder.status == "captured"
@@ -380,7 +380,9 @@ def test_captured_pipeline_launch_submits_debug_and_does_not_attach(
     assert request.debug is True
     assert request.stage_payloads[0].runtime.num_workers == 16
     assert result.job_id == "job-123"
-    assert "Cloud job launched" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Cloud job launched" in out
+    assert "better fit than smoke jobs" not in out
 
 
 def test_debug_launch_preserves_aws_batch_provider(monkeypatch) -> None:

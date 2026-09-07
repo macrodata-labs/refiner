@@ -633,7 +633,7 @@ class CloudLauncher(BaseLauncher):
             stage_index=resp.stage_index,
         )
         print(f"Cloud job launched. View job:\n  {tracking_url}", flush=True)
-        if "smoke" in self.name.casefold():
+        if not debug and "smoke" in self.name.casefold():
             print(_SMOKE_DEBUG_HINT, flush=True)
         elif self.provider == "modal":
             print(
