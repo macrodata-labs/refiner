@@ -28,7 +28,7 @@ keeps the run inspectable after submission:
 
 - what code and pipeline plan was submitted
 - who submitted it and when it started
-- which stages, workers, and shards are running
+- active worker slots versus requested capacity, plus completed, active, and pending shards
 - where logs, metrics, services, manifests, and output references live
 - whether the run is queued, running, succeeded, failed, or canceled
 

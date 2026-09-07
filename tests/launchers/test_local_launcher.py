@@ -336,7 +336,8 @@ def test_local_stage_console_colors_timestamp_level_and_message(
     assert "2" in header_lines[2]
     assert "Job ID:" in header_lines[3]
     assert "Workers:" in header_lines[3]
-    assert "running=\x1b[" in header_lines[3] or "run=\x1b[" in header_lines[3]
+    assert "active=\x1b[" in header_lines[3]
+    assert "requested=\x1b[" in header_lines[3]
     assert "\x1b[1;38;5;220m1\x1b[0m" in header_lines[3]
     assert "Rundir:" in header_lines[4]
     assert "Runtime:" in header_lines[4]
@@ -408,6 +409,7 @@ def test_stage_console_shows_shards_on_cloud_runtime_row(
                 shard_total=9,
                 shard_completed=4,
                 shard_running=2,
+                shard_pending=3,
             )
         )
         header_lines = console._build_header_lines(width=100)
@@ -419,7 +421,7 @@ def test_stage_console_shows_shards_on_cloud_runtime_row(
         "Runtime:" in line and "00:12" in line and "Shards:" in line
         for line in plain_lines
     )
-    assert any("running=2 completed=4 total=9 (44%)" in line for line in plain_lines)
+    assert any("completed=4 active=2 pending=3 total=9" in line for line in plain_lines)
 
 
 def test_stage_console_runtime_advances_between_snapshot_polls(
@@ -500,6 +502,7 @@ def test_stage_console_shows_zero_percent_when_shard_total_is_zero(
                 shard_total=0,
                 shard_completed=0,
                 shard_running=0,
+                shard_pending=0,
             )
         )
         header_lines = console._build_header_lines(width=100)
@@ -507,7 +510,7 @@ def test_stage_console_shows_zero_percent_when_shard_total_is_zero(
         console.close()
 
     plain_lines = [_ANSI_RE.sub("", line) for line in header_lines]
-    assert any("running=0 completed=0 total=0 (0%)" in line for line in plain_lines)
+    assert any("completed=0 active=0 pending=0 total=0" in line for line in plain_lines)
 
 
 def test_stage_console_colors_shard_percent_with_status_color(

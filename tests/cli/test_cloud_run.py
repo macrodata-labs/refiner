@@ -131,22 +131,23 @@ def test_build_snapshot_preserves_stage_zero_progress() -> None:
             "status": "running",
             "createdAt": 1_700_000_000_000,
             "startedAt": 1_700_000_001_000,
-            "runningWorkers": 2,
+            "runningWorkers": 9,
             "totalWorkers": 4,
             "stages": [
                 {
                     "index": 0,
                     "status": "running",
-                    "completedWorkers": 3,
+                    "runningWorkers": 2,
                     "totalWorkers": 5,
                     "shardDone": 4,
                     "shardTotal": 9,
                     "shardRunning": 2,
+                    "shardPending": 3,
                 },
                 {
                     "index": 1,
                     "status": "queued",
-                    "completedWorkers": 0,
+                    "runningWorkers": 0,
                     "totalWorkers": 7,
                 },
             ],
@@ -154,11 +155,13 @@ def test_build_snapshot_preserves_stage_zero_progress() -> None:
     )
 
     assert snapshot.stage_index == 0
-    assert snapshot.worker_completed == 3
+    assert snapshot.worker_running == 2
+    assert snapshot.worker_completed == 0
     assert snapshot.stage_workers == 5
     assert snapshot.shard_completed == 4
     assert snapshot.shard_total == 9
     assert snapshot.shard_running == 2
+    assert snapshot.shard_pending == 3
 
 
 def test_build_snapshot_reads_stage_shard_running() -> None:
@@ -183,7 +186,7 @@ def test_build_snapshot_reads_stage_shard_running() -> None:
                 {
                     "index": 0,
                     "status": "running",
-                    "completedWorkers": 3,
+                    "runningWorkers": 2,
                     "totalWorkers": 5,
                     "shardDone": 4,
                     "shardTotal": 9,
@@ -220,13 +223,13 @@ def test_build_snapshot_tolerates_null_stage_indexes() -> None:
                 {
                     "index": None,
                     "status": "running",
-                    "completedWorkers": 3,
+                    "runningWorkers": 2,
                     "totalWorkers": 5,
                 },
                 {
                     "index": 1,
                     "status": "queued",
-                    "completedWorkers": 0,
+                    "runningWorkers": 0,
                     "totalWorkers": 7,
                 },
             ],
@@ -234,7 +237,8 @@ def test_build_snapshot_tolerates_null_stage_indexes() -> None:
     )
 
     assert snapshot.stage_index == 0
-    assert snapshot.worker_completed == 3
+    assert snapshot.worker_running == 2
+    assert snapshot.worker_completed == 0
     assert snapshot.stage_workers == 5
 
 

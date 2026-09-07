@@ -173,7 +173,6 @@ def _render_job(payload: dict[str, Any]) -> int:
                 _dim_text("Status"),
                 _dim_text("Shards"),
                 _dim_text("Workers"),
-                _dim_text("Req"),
                 _dim_text("CPU"),
                 _dim_text("Memory"),
                 _dim_text("GPU"),
@@ -188,13 +187,16 @@ def _render_job(payload: dict[str, Any]) -> int:
                     _safe_text(stage.get("index")),
                     _safe_text(stage.get("name")),
                     _status_text(stage.get("status")),
-                    f"{_safe_text(stage.get('shardDone'))}/{_safe_text(stage.get('shardTotal'))}",
                     (
-                        f"run={_safe_text(stage.get('runningWorkers'))} "
-                        f"done={_safe_text(stage.get('completedWorkers'))} "
-                        f"tot={_safe_text(stage.get('totalWorkers'))}"
+                        f"c={_safe_text(stage.get('shardDone'))} "
+                        f"a={_safe_text(stage.get('shardRunning'))} "
+                        f"p={_safe_text(stage.get('shardPending'))} "
+                        f"t={_safe_text(stage.get('shardTotal'))}"
                     ),
-                    _stage_runtime_value(runtime_config, "requestedNumWorkers"),
+                    (
+                        f"active={_safe_text(stage.get('runningWorkers'))} "
+                        f"requested={_safe_text(stage.get('totalWorkers'))}"
+                    ),
                     _stage_runtime_value(runtime_config, "cpuCores"),
                     _stage_runtime_value(runtime_config, "memoryMb"),
                     _stage_gpu_text(runtime_config),

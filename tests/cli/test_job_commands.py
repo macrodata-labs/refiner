@@ -83,9 +83,10 @@ class _FakeClient:
                     "index": 0,
                     "status": "running",
                     "shardDone": 3,
+                    "shardRunning": 2,
+                    "shardPending": 5,
                     "shardTotal": 10,
                     "runningWorkers": 2,
-                    "completedWorkers": 1,
                     "totalWorkers": 4,
                     "name": "stage-0",
                     "runtimeConfig": {
@@ -298,12 +299,11 @@ def test_jobs_get_plain_output(monkeypatch, capsys) -> None:
     assert "Workers:" not in out.out
     assert "Stages" in out.out
     assert "Steps" in out.out
-    assert "run=2 done=1 tot=4" in out.out
-    assert "Req" in out.out
+    assert "active=2 requested=4" in out.out
+    assert "c=3 a=2 p=5 t=10" in out.out
     assert "CPU" in out.out
     assert "Memory" in out.out
     assert "GPU" in out.out
-    assert "  4  " in out.out
     assert "  8  " in out.out
     assert "16384" in out.out
     assert "1 a10g" in out.out

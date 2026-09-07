@@ -285,22 +285,20 @@ def _build_snapshot(
             ):
                 current_stage = stage_dict
                 break
-    total_workers = int(job.get("totalWorkers", 0) or 0)
-    running_workers = int(job.get("runningWorkers", 0) or 0)
     stage_status = (
         _safe_text(current_stage.get("status")).lower()
         if current_stage is not None
         else _job_status(job_payload)
     )
-    completed_workers = (
-        int(current_stage.get("completedWorkers", 0) or 0)
+    stage_workers = (
+        int(current_stage.get("totalWorkers", 0) or 0)
         if current_stage is not None
         else 0
     )
-    stage_workers = (
-        int(current_stage.get("totalWorkers", total_workers) or total_workers)
+    running_workers = (
+        int(current_stage.get("runningWorkers", 0) or 0)
         if current_stage is not None
-        else total_workers
+        else 0
     )
     shard_total = (
         int(current_stage.get("shardTotal", 0) or 0)
@@ -317,6 +315,11 @@ def _build_snapshot(
         if current_stage is not None and current_stage.get("shardRunning") is not None
         else None
     )
+    shard_pending = (
+        int(current_stage.get("shardPending", 0) or 0)
+        if current_stage is not None and current_stage.get("shardPending") is not None
+        else None
+    )
     return StageSnapshot(
         job_id=context.job_id,
         job_name=context.job_name,
@@ -326,14 +329,15 @@ def _build_snapshot(
         stage_workers=stage_workers,
         tracking_url=context.tracking_url,
         status=stage_status,
-        worker_total=max(total_workers, stage_workers),
+        worker_total=stage_workers,
         worker_running=running_workers,
-        worker_completed=completed_workers,
+        worker_completed=0,
         worker_failed=0,
         elapsed_seconds=_elapsed_seconds(job),
         shard_total=shard_total,
         shard_completed=shard_completed,
         shard_running=shard_running,
+        shard_pending=shard_pending,
     )
 
 
