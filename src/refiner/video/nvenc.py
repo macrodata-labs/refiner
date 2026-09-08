@@ -23,7 +23,7 @@ _T = TypeVar("_T")
 class NVENCConfig:
     """H.264 settings for L4 dataset preparation; requires NVIDIA FFmpeg."""
 
-    preset: Literal["p1", "p2", "p3", "p4", "p5", "p6", "p7"] = "p1"
+    preset: Literal["p1", "p2", "p3", "p4", "p5", "p6", "p7"] = "p4"
     cq: int = 29
     gop: int = 17
     max_width: int = 1920
@@ -192,9 +192,9 @@ def _command(
         command += ["-an"]
     if cuda:
         # passthrough=0 gives the encoder its own frames, releasing decoder surfaces.
-        filters = f"scale_cuda={width}:{height}:format=yuv420p:passthrough=0"
+        filters = f"scale_cuda={width}:{height}:format=yuv420p:interp_algo=lanczos:passthrough=0"
     else:
-        filters = f"scale={width}:{height}:out_range=tv,format=yuv420p"
+        filters = f"scale={width}:{height}:flags=lanczos:out_range=tv,format=yuv420p"
     command += [
         "-vf",
         filters,

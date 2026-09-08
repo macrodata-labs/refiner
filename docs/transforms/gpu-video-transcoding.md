@@ -67,7 +67,7 @@ RGB frame arrays are created. The output frame count must match the list length.
 | Setting | Default | Behavior |
 | --- | --- | --- |
 | Codec | H.264 NVENC | 8-bit `yuv420p`, limited range, MP4 faststart |
-| `preset` | `"p1"` | Fastest NVENC preset; `"p6"` spends more work on compression |
+| `preset` | `"p4"` | FFmpeg NVENC default preset; choose `"p1"` for faster encoding or `"p6"` for more compression effort |
 | `cq` | `29` | VBR constant-quality target; lower values request higher quality |
 | `gop` | `17` | Fixed keyframe interval in frames, no scene cuts or B-frames |
 | Bounds | 1920 × 1080 | Keep aspect ratio approximately, round down to even dimensions, never upscale |
@@ -85,14 +85,16 @@ Resize associated keypoints, boxes, and intrinsics to match output dimensions;
 these blocks do not modify annotation columns. HDR inputs require tone mapping
 before this SDR block.
 
+Resizing uses Lanczos on both the CUDA and CPU paths.
+
 On the CUDA path, decode surfaces remain on the GPU through `scale_cuda` and
 NVENC. Full-range inputs use CPU range conversion in `auto` mode. `decode="cpu"`
 still uses NVENC for encoding. `decode="cuda"` forces hardware decoding and
 reports unsupported input/build errors; it does not silently retry on the CPU.
 
-The defaults prioritize throughput. Choosing `preset="p6"` restores the preset
-used in earlier dataset converters, but does not promise bit-identical output:
-this block disables lookahead, multipass, and B-frames and fixes the GOP.
+The defaults use p4/HQ, VBR CQ29, and Lanczos scaling. The earlier dataset
+quality calibration used p6 and does not validate this exact configuration.
+This block disables lookahead, multipass, and B-frames and fixes the GOP at 17.
 CQ 29 is an encoder quality target, not an equivalence to x264 CRF 29.
 
 Measure on your own videos before scaling worker count:
@@ -109,7 +111,8 @@ which configuration wins.
 
 An L4 validation run on September 8, 2026 used 8 CPUs, 8 GiB RAM, NVIDIA driver
 580.95.05, and FFmpeg 8.1. It encoded eight copies of a 600-frame, 1920×1080
-`testsrc2` H.264 video for each configuration:
+`testsrc2` H.264 video for each configuration. This run predates explicit Lanczos
+scaling and does not measure the current defaults:
 
 | Concurrent lanes | `p1` aggregate fps | `p6` aggregate fps |
 | --- | --- | --- |
@@ -118,7 +121,7 @@ An L4 validation run on September 8, 2026 used 8 CPUs, 8 GiB RAM, NVIDIA driver
 | 3 | 663.1 | 395.3 |
 | 4 | 660.6 | 394.7 |
 
-Three and four lanes performed similarly on the final implementation. These are
+Three and four lanes performed similarly in that run. These are
 single-run synthetic local-file measurements, not a throughput guarantee for
 datasets or remote storage. Earlier runs varied, so benchmark both settings on
 your worker image and representative input.

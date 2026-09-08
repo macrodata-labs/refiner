@@ -55,15 +55,20 @@ def test_gpu_path_has_no_host_download_or_frame_rate_conversion():
     )
     assert command[command.index("-hwaccel_device") + 1] == "1"
     assert command[command.index("-gpu") + 1] == "1"
-    assert "scale_cuda=640:480:format=yuv420p:passthrough=0" in command
+    assert (
+        "scale_cuda=640:480:format=yuv420p:interp_algo=lanczos:passthrough=0" in command
+    )
     assert command[command.index("-c:v") + 1] == "h264_nvenc"
-    assert command[command.index("-preset") + 1] == "p1"
+    assert command[command.index("-preset") + 1] == "p4"
     assert command[command.index("-fps_mode") + 1] == "passthrough"
     assert command[command.index("-enc_time_base") + 1] == "demux"
     assert "hwdownload" not in " ".join(command)
     assert "-r" not in command
     assert command[command.index("-g") + 1] == "17"
     assert command[command.index("-bf") + 1] == "0"
+    assert command[command.index("-cq") + 1] == "29"
+    assert command[command.index("-rc-lookahead") + 1] == "0"
+    assert command[command.index("-multipass") + 1] == "disabled"
 
 
 @pytest.mark.parametrize(
@@ -78,7 +83,7 @@ def test_gpu_path_has_no_host_download_or_frame_rate_conversion():
 def test_auto_selects_cpu_conversion_but_always_gpu_encoding(stream):
     command = nvenc._command(Path("in"), Path("out"), stream, nvenc.NVENCConfig())
     assert "-hwaccel" not in command
-    assert "scale=640:480:out_range=tv,format=yuv420p" in command
+    assert "scale=640:480:flags=lanczos:out_range=tv,format=yuv420p" in command
     assert command[command.index("-c:v") + 1] == "h264_nvenc"
 
 
