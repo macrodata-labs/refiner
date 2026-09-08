@@ -124,19 +124,86 @@ def _fake_encoder(monkeypatch, *, output_stream=None, failure=False):
     return commands
 
 
-def test_transcode_stages_remote_input_and_publishes_after_validation(
+def test_transcode_reads_local_input_and_publishes_after_validation(
     tmp_path, monkeypatch
 ):
     commands = _fake_encoder(monkeypatch)
-    source = mdr.io.DataFile.resolve("memory://nvenc-tests/input.mp4")
-    with source.open("wb") as handle:
-        handle.write(b"remote input")
+    source = tmp_path / "input.mp4"
+    source.write_bytes(b"local input")
     target = tmp_path / "output.mp4"
     video = asyncio.run(nvenc.transcode_video(source, target))
     assert video.data_file.path == str(target)
     assert target.read_bytes() == b"validated video"
-    assert commands[0][-1].endswith("/input")
-    assert list(tmp_path.iterdir()) == [target]
+    assert commands[0][-1] == str(source)
+    assert set(tmp_path.iterdir()) == {source, target}
+
+
+@pytest.mark.parametrize(
+    "remote",
+    [
+        "s3://bucket/video.mp4",
+        "gs://bucket/video.mp4",
+        "https://example.com/video.mp4",
+        "memory://video.mp4",
+        "simplecache::s3://bucket/video.mp4",
+    ],
+)
+def test_remote_inputs_and_outputs_fail_before_filesystem_or_encoder_access(
+    tmp_path, monkeypatch, remote
+):
+    def no_resolution(self):
+        raise AssertionError("must not resolve a remote filesystem")
+
+    async def no_encode(*args, **kwargs):
+        raise AssertionError("must not start FFmpeg")
+
+    monkeypatch.setattr(mdr.io.DataFile, "_resolve", no_resolution)
+    monkeypatch.setattr(nvenc, "_run", no_encode)
+    with pytest.raises(ValueError, match="local files only"):
+        asyncio.run(nvenc.transcode_video(remote, tmp_path / "out.mp4"))
+    # Remote destinations can be tested directly without resolving a local source.
+    with pytest.raises(ValueError, match="local files only"):
+        nvenc._local_path(remote)
+    with pytest.raises(ValueError, match="local files only"):
+        asyncio.run(nvenc.encode_image_sequence([remote], tmp_path / "out.mp4", fps=30))
+    with pytest.raises(ValueError, match="local files only"):
+        mdr.video.transcode_videos(output_folder=remote, video_key="video")
+    with pytest.raises(ValueError, match="local files only"):
+        mdr.video.encode_image_sequences(
+            output_folder=remote, images_key="images", fps=30
+        )
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("source_kind", ["path", "data_file", "video_file"])
+def test_local_wrappers_and_file_urls_are_supported(tmp_path, monkeypatch, source_kind):
+    _fake_encoder(monkeypatch)
+    source = tmp_path / "input.mp4"
+    source.write_bytes(b"input")
+    value = source
+    if source_kind == "data_file":
+        value = mdr.io.DataFile.resolve(source)
+    elif source_kind == "video_file":
+        value = mdr.video.VideoFile(mdr.io.DataFile.resolve(source))
+    target = tmp_path / "output.mp4"
+    asyncio.run(nvenc.transcode_video(value, target.as_uri()))
+    assert target.exists()
+
+
+def test_remote_destinations_rejected_before_output_creation(tmp_path, monkeypatch):
+    commands = _fake_encoder(monkeypatch)
+    with pytest.raises(ValueError, match="local files only"):
+        asyncio.run(
+            nvenc.transcode_video(tmp_path / "input.mp4", "s3://bucket/out.mp4")
+        )
+    with pytest.raises(ValueError, match="local files only"):
+        asyncio.run(
+            nvenc.encode_image_sequence(
+                [tmp_path / "input.jpg"], "gs://bucket/out.mp4", fps=30
+            )
+        )
+    assert not commands
+    assert not list(tmp_path.iterdir())
 
 
 @pytest.mark.parametrize(
@@ -213,7 +280,7 @@ def test_blocks_are_serializable_and_use_pipeline_concurrency(tmp_path, monkeypa
         peak = max(peak, active)
         await asyncio.sleep(0.01)
         active -= 1
-        return mdr.video.VideoFile(destination)
+        return mdr.video.VideoFile(mdr.io.DataFile.resolve(destination))
 
     monkeypatch.setattr(blocks, "transcode_video", transcode)
     block = mdr.video.transcode_videos(video_key="video", output_folder=tmp_path)

@@ -25,17 +25,19 @@ pipeline = mdr.read_videos("/data/source/*.mp4", file_path_column="video").map_a
 )
 ```
 
-Input values can be paths, `mdr.io.DataFile` objects, or whole
-`mdr.video.VideoFile` objects. Each output row keeps its original fields and adds
-the new MP4 path. Use a durable shared `output_folder` for cloud pipelines,
-for example an S3 bucket accessible to the worker. Clipped views are rejected;
-materialize the desired clip before using this block.
+Inputs and outputs must be local files. Input values can be local paths,
+`mdr.io.DataFile` objects, or whole `mdr.video.VideoFile` objects. Each output
+row keeps its original fields and adds the new local MP4 path. Remote URLs are
+rejected before accessing their storage backend, including S3, GCS, and HTTP.
+The copying job owns downloading, uploading, and checkpoints: download to a local
+path, call the encoder, then upload its completed output. On cloud workers,
+`output_folder` is worker-local storage; transfer results before the worker exits.
+Clipped views are rejected; materialize the desired clip before using this block.
 
 Request one L4 per worker on the launch call and begin with three or four in-flight rows.
-Each row uses one FFmpeg process. `max_in_flight` bounds decoding, encoding, and
-file staging together; it is per worker, not a global limit. Start with 8 CPUs
-and 8 GiB RAM per worker and provision scratch disk for the concurrently staged
-inputs and outputs. GPU allocation belongs on the launcher, not the block.
+Each row uses one FFmpeg process. `max_in_flight` bounds concurrent local encodes;
+it is per worker, not a global limit. Start with 8 CPUs and 8 GiB RAM per worker
+and provision scratch disk for the local inputs and concurrent outputs. GPU allocation belongs on the launcher, not the block.
 
 ## Encode ordered images
 
@@ -55,7 +57,7 @@ pipeline = mdr.from_items([
 )
 ```
 
-Supply a nonempty list of uniformly sized files, all JPEG or all PNG. List order
+Supply a nonempty list of uniformly sized local files, all JPEG or all PNG. List order
 is frame order; the block does not sort filenames. Image decode and conversion
 to limited-range YUV happen on the CPU; encoding happens on the GPU. No Python
 RGB frame arrays are created. The output frame count must match the list length.
@@ -138,8 +140,8 @@ REFINER_TEST_NVENC=1 pytest tests/test_video_nvenc.py -q
 
 The CUDA and CPU-decode tests check frame count, a variable-rate timeline,
 keyframe positions, and faststart MP4. The image test also checks frame order and
-color conversion. All 40 tests passed on the L4 validation worker. Ordinary unit
-tests run without a GPU.
+color conversion. The encoding path was validated on an L4. Ordinary unit tests
+run without a GPU and verify that remote inputs and outputs are rejected.
 
 Each encode checks codec, pixel format, dimensions, and positive output frame
 count before publishing. It also compares frame counts when the source container
@@ -160,11 +162,10 @@ video = await mdr.video.encode_image_sequence(
 ```
 
 Direct calls return `mdr.video.VideoFile`. Existing destinations are rejected.
-Local files publish atomically. For remote storage, use a unique destination
-per invocation: object-store publication is not a cross-worker lock or transaction.
-The map blocks generate unique names automatically. Retries can leave orphaned
-objects from earlier attempts; these helpers do not implement dataset checkpoints
-or garbage collection.
+Completed local files publish atomically. The map blocks generate unique names
+automatically. Use direct calls with job-controlled destinations for checkpointed
+copying jobs. The caller owns retries and cleanup of earlier outputs; these
+helpers do not implement dataset checkpoints or garbage collection.
 
 Very small images or extreme resize bounds can fall below the GPU encoder's
 minimum supported dimensions. The block reports FFmpeg's error rather than
@@ -172,11 +173,10 @@ upscaling or switching to a software encoder.
 
 ## Internal Notes
 
-Remote files are staged through `DataFile` so configured storage credentials
-remain with fsspec. Local videos are read directly; local image sequences use
-numbered links. Completed MP4s are validated on disk before upload. Timeout and
-cancellation kill and reap FFmpeg; outstanding file copies finish before scratch
-cleanup. The async block uses the existing pipeline window, without another pool
+Videos are read directly from local paths; image sequences use numbered links.
+Completed MP4s are validated in a temporary directory beside the destination,
+then published with an atomic hard link. Timeout and cancellation kill and reap
+FFmpeg; outstanding local filesystem operations finish before scratch cleanup. The async block uses the existing pipeline window, without another pool
 of GPU workers.
 The H.264 bitstream filter explicitly signals limited range even when NVENC
 omits that tag. Callable descriptions live in a lightweight module so video

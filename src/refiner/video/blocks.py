@@ -9,7 +9,12 @@ from refiner.io.datafolder import DataFolderLike
 from refiner.pipeline.builtins import describe_builtin
 from refiner.pipeline.data.row import Row
 from refiner.pipeline.steps import AsyncMapFn
-from refiner.video.nvenc import NVENCConfig, encode_image_sequence, transcode_video
+from refiner.video.nvenc import (
+    NVENCConfig,
+    _local_path,
+    encode_image_sequence,
+    transcode_video,
+)
 
 
 def transcode_videos(
@@ -22,24 +27,24 @@ def transcode_videos(
     """Build an NVENC ``map_async`` block; start with max_in_flight=4 on one L4.
 
     Rows contain whole VideoFile objects, DataFile objects, or paths. Each result
-    adds a durable MP4 path. Unique object names isolate concurrent rows/retries.
+    adds a local MP4 path. The calling job owns transfers and checkpoints.
     """
     if not video_key or not output_key:
         raise ValueError("video_key and output_key must be nonempty")
-    folder = DataFolder.resolve(output_folder)
+    folder = _local_path(DataFolder.resolve(output_folder).abs_path())
     settings = config or NVENCConfig()
 
     @describe_builtin(
         "video.transcode_videos",
         video_key=video_key,
         output_key=output_key,
-        output_folder=folder.abs_path(),
+        output_folder=str(folder),
         config=asdict(settings),
     )
     async def _transcode(row: Row) -> Row:
         result = await transcode_video(
             row[video_key],
-            folder.file(f"{uuid.uuid4().hex}.mp4"),
+            folder / f"{uuid.uuid4().hex}.mp4",
             config=settings,
         )
         return row.update({output_key: result.uri})
@@ -64,21 +69,21 @@ def encode_image_sequences(
         raise ValueError("images_key and output_key must be nonempty")
     if not math.isfinite(fps) or fps <= 0:
         raise ValueError("fps must be finite and > 0")
-    folder = DataFolder.resolve(output_folder)
+    folder = _local_path(DataFolder.resolve(output_folder).abs_path())
     settings = config or NVENCConfig()
 
     @describe_builtin(
         "video.encode_image_sequences",
         images_key=images_key,
         output_key=output_key,
-        output_folder=folder.abs_path(),
+        output_folder=str(folder),
         fps=fps,
         config=asdict(settings),
     )
     async def _encode(row: Row) -> Row:
         result = await encode_image_sequence(
             row[images_key],
-            folder.file(f"{uuid.uuid4().hex}.mp4"),
+            folder / f"{uuid.uuid4().hex}.mp4",
             fps=fps,
             config=settings,
         )

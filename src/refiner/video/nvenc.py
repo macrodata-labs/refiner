@@ -10,6 +10,8 @@ from pathlib import Path
 import tempfile
 from typing import Any, Literal, TypeVar
 
+from fsspec.utils import get_protocol
+
 from refiner.io import DataFile
 from refiner.io.datafile import DataFileLike
 from refiner.video.types import VideoFile
@@ -93,7 +95,7 @@ async def _run(command: list[str], timeout: float) -> bytes:
 
 
 async def _io(fn: Callable[..., _T], *args: Any) -> _T:
-    # A cancelled copy must finish before its temporary directory can be removed.
+    # Finish local filesystem operations before removing their temporary directory.
     task = asyncio.create_task(asyncio.to_thread(fn, *args))
     try:
         return await asyncio.shield(task)
@@ -243,17 +245,20 @@ def _command(
     return command
 
 
-async def _stage(source: DataFile, directory: Path, name: str) -> Path:
-    if source.is_local:
-        return Path(source.path).resolve()
-    local = directory / name
-    await _io(source.copy, local)
-    return local
+def _local_path(value: DataFileLike) -> Path:
+    file = DataFile.resolve(value)
+    uri = str(file)
+    # Reject URLs before resolving a filesystem or importing optional backends.
+    if "::" in uri or get_protocol(uri) != "file" or not file.is_local:
+        raise ValueError(
+            "NVENC accepts local files only; handle downloads and uploads in the calling job"
+        )
+    return Path(file.path).resolve()
 
 
 async def _encode(
     source: Path,
-    destination: DataFile,
+    destination: Path,
     directory: Path,
     config: NVENCConfig,
     *,
@@ -279,30 +284,22 @@ async def _encode(
         raise RuntimeError("NVENC produced no verifiable video frames")
     if expected not in (None, "N/A") and int(expected) != int(actual):
         raise RuntimeError(f"NVENC frame count changed: {expected} -> {actual}")
-    if destination.is_local:
-        # Same-filesystem link publishes atomically and refuses existing files.
-        await _io(os.link, output, destination.path)
-    else:
-        await _io(DataFile.resolve(output).copy, destination)
-    return VideoFile(destination)
+    # Same-filesystem link publishes atomically and refuses existing files.
+    await _io(os.link, output, destination)
+    return VideoFile(DataFile.resolve(destination))
 
 
-def _stage_images(sources: list[DataFile], directory: Path, suffix: str) -> None:
+def _stage_images(sources: list[Path], directory: Path, suffix: str) -> None:
     # One I/O task per sequence avoids a thread-pool roundtrip per image.
     for index, item in enumerate(sources):
         link = directory / f"{index:08d}{suffix}"
-        if item.is_local:
-            os.symlink(Path(item.path).resolve(), link)
-        else:
-            item.copy(link)
+        os.symlink(item, link)
 
 
-async def _output_directory(destination: DataFile) -> str | None:
+async def _output_directory(destination: Path) -> str:
     if await _io(destination.exists):
         raise FileExistsError(str(destination))
-    if not destination.is_local:
-        return None
-    parent = Path(destination.path).resolve().parent
+    parent = destination.parent
     await _io(parent.mkdir, 0o777, True, True)
     return str(parent)
 
@@ -315,18 +312,18 @@ async def transcode_video(
 ) -> VideoFile:
     """Transcode a whole video to a new MP4 using NVENC, asynchronously.
 
-    Remote inputs are staged on disk. Existing outputs and clipped views are
-    rejected. No Python frame materialization or silent software encode fallback.
+    Inputs and outputs must be local. The calling job owns transfers and
+    checkpoints. Existing outputs and clipped views are rejected.
     """
     if isinstance(source, VideoFile):
         if source.from_timestamp_s is not None or source.to_timestamp_s is not None:
             raise ValueError("transcode_video accepts whole videos, not clipped views")
         source = source.data_file
-    target = DataFile.resolve(destination)
+    local = _local_path(source)
+    target = _local_path(destination)
     parent = await _output_directory(target)
     with tempfile.TemporaryDirectory(prefix="refiner-nvenc-", dir=parent) as temp:
         directory = Path(temp)
-        local = await _stage(DataFile.resolve(source), directory, "input")
         return await _encode(local, target, directory, config or NVENCConfig())
 
 
@@ -337,18 +334,16 @@ async def encode_image_sequence(
     fps: float,
     config: NVENCConfig | None = None,
 ) -> VideoFile:
-    """Encode an explicitly ordered, uniformly sized JPEG or PNG sequence on GPU."""
+    """Encode ordered local JPEG/PNG files to a local MP4; the job owns transfers."""
     if not images or isinstance(images, (str, bytes)):
         raise ValueError("images must be a nonempty ordered sequence of files")
     if not math.isfinite(fps) or fps <= 0:
         raise ValueError("fps must be finite and > 0")
-    sources = [DataFile.resolve(item) for item in images]
-    suffixes = [
-        Path(item.path).suffix.lower().replace(".jpeg", ".jpg") for item in sources
-    ]
+    sources = [_local_path(item) for item in images]
+    suffixes = [item.suffix.lower().replace(".jpeg", ".jpg") for item in sources]
     if len(set(suffixes)) != 1 or suffixes[0] not in {".jpg", ".png"}:
         raise ValueError("images must be all JPEG or all PNG")
-    target = DataFile.resolve(destination)
+    target = _local_path(destination)
     parent = await _output_directory(target)
     with tempfile.TemporaryDirectory(prefix="refiner-nvenc-", dir=parent) as temp:
         directory = Path(temp)
