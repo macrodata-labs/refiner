@@ -93,6 +93,7 @@ class _FakeClient:
                         "requestedNumWorkers": 4,
                         "cpuCores": 8,
                         "memoryMb": 16384,
+                        "scratchDiskMb": 512000,
                         "gpuCount": 1,
                         "gpuType": "a10g",
                         "gpuTypes": ["a10", "l4", "t4"],
@@ -304,6 +305,8 @@ def test_jobs_get_plain_output(monkeypatch, capsys) -> None:
     assert "c=3 a=2 p=5 t=10" in out.out
     assert "CPU" in out.out
     assert "Memory" in out.out
+    assert "Scratch" in out.out
+    assert "512000" in out.out
     assert "GPU" in out.out
     assert "  8  " in out.out
     assert "16384" in out.out

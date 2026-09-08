@@ -231,6 +231,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
         num_workers=3,
         cpus_per_worker=2,
         mem_mb_per_worker=4096,
+        scratch_disk_mb_per_worker=512_000,
         gpu=GPU(count=2, type="h100", cuda_version="12.8"),
     )
 
@@ -245,6 +246,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.plan["stages"][0]["requested_num_workers"] == 3
     assert request.plan["stages"][0]["cpus_per_worker"] == 2
     assert request.plan["stages"][0]["memory_mb_per_worker"] == 4096
+    assert request.plan["stages"][0]["scratch_disk_mb_per_worker"] == 512_000
     assert request.plan["stages"][0]["gpu"] == {
         "count": 2,
         "type": "h100",
@@ -262,6 +264,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     assert request.stage_payloads[0].runtime.region == ("us", "eu", "ca")
     assert request.stage_payloads[0].runtime.cpus_per_worker == 2
     assert request.stage_payloads[0].runtime.mem_mb_per_worker == 4096
+    assert request.stage_payloads[0].runtime.scratch_disk_mb_per_worker == 512_000
     assert request.stage_payloads[0].runtime.gpu == GPU(
         count=2,
         type="h100",
@@ -348,6 +351,33 @@ def test_pipeline_sequence_launch_cloud_rejects_gpu_for_aws(monkeypatch) -> None
         sequence.launch_cloud(name="invalid aws gpu job", provider="aws")
 
     assert captured["events"] == []
+
+
+def test_pipeline_launch_cloud_rejects_scratch_disk_for_aws_before_upload(
+    monkeypatch,
+) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote",
+        lambda ref: True,
+    )
+
+    with pytest.raises(SystemExit, match="does not support configurable scratch disk"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="invalid aws scratch job",
+            provider="aws",
+            scratch_disk_mb_per_worker=100_000,
+        )
+
+    assert captured["events"] == []
+
+
+def test_pipeline_launch_cloud_rejects_invalid_scratch_disk() -> None:
+    with pytest.raises(ValueError, match="scratch_disk_mb_per_worker must be > 0"):
+        read_jsonl("input.jsonl").launch_cloud(
+            name="invalid scratch job",
+            scratch_disk_mb_per_worker=0,
+        )
 
 
 def test_pipeline_launch_cloud_rejects_runtime_services_for_aws_before_upload(
@@ -542,7 +572,10 @@ def test_debug_allocation_fingerprint_ignores_unselected_workspace_secret(
     assert first.allocation_fingerprint == second.allocation_fingerprint
 
 
-def test_debug_allocation_fingerprint_changes_with_provider() -> None:
+def test_debug_allocation_fingerprint_changes_with_provider(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote", lambda _ref: True
+    )
     modal = CloudLauncher(pipeline=read_jsonl("input.jsonl"), name="debug")
     aws = CloudLauncher(
         pipeline=read_jsonl("input.jsonl"), name="debug", provider="aws"
@@ -559,6 +592,24 @@ def test_debug_allocation_fingerprint_changes_with_provider() -> None:
         modal_preparation.allocation_fingerprint
         != aws_preparation.allocation_fingerprint
     )
+
+
+def test_debug_allocation_fingerprint_changes_with_scratch_disk(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "refiner.launchers.cloud.refiner_ref_exists_on_remote", lambda _ref: True
+    )
+    small = CloudLauncher(
+        pipeline=read_jsonl("input.jsonl"),
+        name="debug",
+        scratch_disk_mb_per_worker=100_000,
+    ).prepare_debug_sync()
+    large = CloudLauncher(
+        pipeline=read_jsonl("input.jsonl"),
+        name="debug",
+        scratch_disk_mb_per_worker=200_000,
+    ).prepare_debug_sync()
+
+    assert small.allocation_fingerprint != large.allocation_fingerprint
 
 
 def test_debug_launch_fingerprint_changes_with_workspace_secret_version(
@@ -1755,12 +1806,14 @@ def test_pipeline_launch_cloud_preserves_reducer_stage_resource_opt_out(
         name="demo cloud",
         cpus_per_worker=4,
         mem_mb_per_worker=8192,
+        scratch_disk_mb_per_worker=100_000,
         gpu=GPU(count=1, type="h100", cuda_version="12.6"),
     )
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.plan["stages"][0]["cpus_per_worker"] == 4
     assert request.plan["stages"][0]["memory_mb_per_worker"] == 8192
+    assert request.plan["stages"][0]["scratch_disk_mb_per_worker"] == 100_000
     assert request.plan["stages"][0]["gpu"] == {
         "count": 1,
         "type": "h100",
@@ -1768,6 +1821,7 @@ def test_pipeline_launch_cloud_preserves_reducer_stage_resource_opt_out(
     }
     assert "cpus_per_worker" not in request.plan["stages"][1]
     assert "memory_mb_per_worker" not in request.plan["stages"][1]
+    assert "scratch_disk_mb_per_worker" not in request.plan["stages"][1]
     assert "gpu" not in request.plan["stages"][1]
     first_runtime = request.stage_payloads[0].runtime
     second_runtime = request.stage_payloads[1].runtime
@@ -1775,9 +1829,11 @@ def test_pipeline_launch_cloud_preserves_reducer_stage_resource_opt_out(
     assert second_runtime is not None
     assert first_runtime.cpus_per_worker == 4
     assert first_runtime.mem_mb_per_worker == 8192
+    assert first_runtime.scratch_disk_mb_per_worker == 100_000
     assert first_runtime.gpu == GPU(count=1, type="h100", cuda_version="12.6")
     assert second_runtime.cpus_per_worker is None
     assert second_runtime.mem_mb_per_worker is None
+    assert second_runtime.scratch_disk_mb_per_worker is None
     assert second_runtime.gpu is None
 
 

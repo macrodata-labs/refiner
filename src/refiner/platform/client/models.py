@@ -144,6 +144,7 @@ class CloudRuntimeConfig:
     gpu: GPU | None = None
     cloud: CloudProvider = "aws"
     region: tuple[CloudRegion, ...] = ("us", "eu", "ca")
+    scratch_disk_mb_per_worker: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -155,6 +156,8 @@ class CloudRuntimeConfig:
             payload["cpus_per_worker"] = self.cpus_per_worker
         if self.mem_mb_per_worker is not None:
             payload["mem_mb_per_worker"] = self.mem_mb_per_worker
+        if self.scratch_disk_mb_per_worker is not None:
+            payload["scratch_disk_mb_per_worker"] = self.scratch_disk_mb_per_worker
         if self.gpu is not None:
             payload["gpu"] = self.gpu.to_dict()
         return payload

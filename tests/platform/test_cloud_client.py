@@ -38,6 +38,7 @@ def _request() -> CloudRunCreateRequest:
                     num_workers=2,
                     cpus_per_worker=4,
                     mem_mb_per_worker=8192,
+                    scratch_disk_mb_per_worker=512_000,
                     gpu=GPU(count=2, type="h100", cuda_version="12.4"),
                 ),
                 runtime_services=(
@@ -125,6 +126,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
                 "region": ["us", "eu", "ca"],
                 "cpus_per_worker": 4,
                 "mem_mb_per_worker": 8192,
+                "scratch_disk_mb_per_worker": 512_000,
                 "gpu": {
                     "count": 2,
                     "type": "h100",

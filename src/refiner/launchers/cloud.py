@@ -160,6 +160,7 @@ class CloudLauncher(BaseLauncher):
             ``"auto"`` to launch one worker per stage shard.
         cpus_per_worker: Optional requested CPU cores per worker.
         mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
+        scratch_disk_mb_per_worker: Optional scratch disk in MB per worker.
         gpu: Optional GPU runtime request for cloud scheduling.
         sync_local_dependencies: Whether to include packages detected from the
             local environment in the cloud runtime.
@@ -181,6 +182,7 @@ class CloudLauncher(BaseLauncher):
         num_workers: int | Literal["auto"] = 1,
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
+        scratch_disk_mb_per_worker: int | None = None,
         gpu: GPU | None = None,
         cloud: CloudProvider = "aws",
         region: CloudRegion | Sequence[CloudRegion] = ("us", "eu", "ca"),
@@ -204,6 +206,8 @@ class CloudLauncher(BaseLauncher):
             raise ValueError("unsafe_continue requires continue_from_job")
         if mem_mb_per_worker is not None and mem_mb_per_worker <= 0:
             raise ValueError("mem_mb_per_worker must be > 0")
+        if scratch_disk_mb_per_worker is not None and scratch_disk_mb_per_worker <= 0:
+            raise ValueError("scratch_disk_mb_per_worker must be > 0")
         normalized_provider = provider.strip().lower()
         if normalized_provider not in _CLOUD_PROVIDER_KEYS:
             raise ValueError("provider must be 'modal' or 'aws'")
@@ -212,6 +216,7 @@ class CloudLauncher(BaseLauncher):
         self.provider = normalized_provider
         self.cpus_per_worker = cpus_per_worker
         self.mem_mb_per_worker = mem_mb_per_worker
+        self.scratch_disk_mb_per_worker = scratch_disk_mb_per_worker
         self.cloud = _normalize_cloud(cloud)
         self.region = _normalize_regions(region)
         self.sync_local_dependencies = sync_local_dependencies
@@ -473,6 +478,7 @@ class CloudLauncher(BaseLauncher):
                 cpus_per_worker=stage.compute.cpus_per_worker,
                 mem_mb_per_worker=stage.compute.memory_mb_per_worker,
                 gpu=stage.compute.gpu,
+                scratch_disk_mb_per_worker=stage.compute.scratch_disk_mb_per_worker,
             ).to_dict()
             runtime.pop("num_workers", None)
             stage_specs.append(
@@ -592,6 +598,14 @@ class CloudLauncher(BaseLauncher):
                     raise ValueError(
                         "provider='aws' does not support managed runtime services"
                     )
+                if any(
+                    stage.compute.scratch_disk_mb_per_worker is not None
+                    for stage in stages
+                ):
+                    raise ValueError(
+                        "provider='aws' does not support configurable scratch disk; "
+                        "use provider='modal' or omit scratch_disk_mb_per_worker"
+                    )
             pipeline_payloads = self._upload_stage_payloads(
                 client=client, stages=stages
             )
@@ -610,6 +624,9 @@ class CloudLauncher(BaseLauncher):
                             cpus_per_worker=stage.compute.cpus_per_worker,
                             mem_mb_per_worker=stage.compute.memory_mb_per_worker,
                             gpu=stage.compute.gpu,
+                            scratch_disk_mb_per_worker=(
+                                stage.compute.scratch_disk_mb_per_worker
+                            ),
                         ),
                         runtime_services=collect_pipeline_services(stage.pipeline),
                     )

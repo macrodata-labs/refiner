@@ -94,6 +94,11 @@ class BaseLauncher(ABC):
                 if compute.memory_mb_per_worker is not None
                 else getattr(self, "mem_mb_per_worker", None)
             ),
+            scratch_disk_mb_per_worker=(
+                compute.scratch_disk_mb_per_worker
+                if compute.scratch_disk_mb_per_worker is not None
+                else getattr(self, "scratch_disk_mb_per_worker", None)
+            ),
             gpu=compute.gpu if compute.gpu is not None else getattr(self, "gpu", None),
         )
 
