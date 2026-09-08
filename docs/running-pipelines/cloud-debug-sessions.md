@@ -158,6 +158,30 @@ session to continue. Synchronized files, profiles, and changes made through
 exec are ephemeral. AWS debug sessions remain CPU-only and do not support
 runtime services.
 
+## Resume a debug command after a connection failure
+
+`macrodata debug run` and `macrodata debug exec` print an attempt ID before
+starting. They poll for the result while the command runs on the retained worker.
+If your connection fails, repeat the same command and options with
+`--attempt-id <printed-UUID>` to retrieve or continue waiting for that attempt.
+Reusing the ID does not run the command again. Use a new ID for an intentional
+rerun. A command timeout returns exit code 124.
+
+Attempts remain available while the retained worker exists. A stopped or lost
+worker cannot recover its local results. Each session retains up to 128 attempts;
+command output is limited to 256 KiB each for stdout and stderr.
+
+## Keep generated configuration stable during source sync
+
+If your launcher publishes a manifest and passes its key/hash through `env`,
+recapturing the same launch must produce identical manifest bytes. Use the pinned
+inventory timestamp instead of the current time, serialize deterministically,
+and keep the output prefix fixed between create and sync. Otherwise the changed
+hash is an environment change and requires a new worker. Source-only changes
+can reuse the worker; dependency, resource, secret, and environment changes still
+require recreating the session.
+
+
 ## Internal Notes
 
 Shard claims and completions are written to an atomic, private SQLite ledger in
