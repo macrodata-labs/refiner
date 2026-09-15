@@ -112,7 +112,9 @@ def _parse_continue_from_job(value: str | None) -> str | None:
     return f"{normalized_job_id}:{stage_index}"
 
 
-def _normalize_cloud(value: str) -> CloudProvider:
+def _normalize_cloud(value: str | None) -> CloudProvider | None:
+    if value is None:
+        return None
     if value not in _SUPPORTED_CLOUDS:
         supported = ", ".join(sorted(_SUPPORTED_CLOUDS))
         raise ValueError(f"cloud must be one of: {supported}")
@@ -182,7 +184,7 @@ class CloudLauncher(BaseLauncher):
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpu: GPU | None = None,
-        cloud: CloudProvider = "aws",
+        cloud: CloudProvider | None = None,
         region: CloudRegion | Sequence[CloudRegion] = ("us", "eu", "ca"),
         sync_local_dependencies: bool = False,
         dependencies: Sequence[str] | None = None,
