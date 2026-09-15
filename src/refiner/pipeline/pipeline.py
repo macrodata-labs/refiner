@@ -1047,7 +1047,7 @@ class RefinerPipeline:
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpu: GPU | None = None,
-        cloud: CloudProvider = "aws",
+        cloud: CloudProvider | None = None,
         region: CloudRegion | Sequence[CloudRegion] = ("us", "eu", "ca"),
         sync_local_dependencies: bool = False,
         dependencies: Sequence[str] | None = None,
@@ -1069,7 +1069,8 @@ class RefinerPipeline:
             mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
             gpu: Optional structured GPU request.
             cloud: Public cloud provider. Supported values are ``"aws"``,
-                ``"oci"``, and ``"gcp"``.
+                ``"oci"``, and ``"gcp"``. Defaults to ``None`` to let the
+                execution backend choose the underlying cloud.
             region: One region selector or a sequence of selectors. Workers are
                 accepted when their placement matches any selector. This does
                 not request a priced Modal region constraint.

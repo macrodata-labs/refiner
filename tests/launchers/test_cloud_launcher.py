@@ -258,7 +258,7 @@ def test_pipeline_launch_cloud_submits_compiled_plan(monkeypatch) -> None:
     )
     assert request.stage_payloads[0].runtime is not None
     assert request.stage_payloads[0].runtime.num_workers == 3
-    assert request.stage_payloads[0].runtime.cloud == "aws"
+    assert request.stage_payloads[0].runtime.cloud is None
     assert request.stage_payloads[0].runtime.region == ("us", "eu", "ca")
     assert request.stage_payloads[0].runtime.cpus_per_worker == 2
     assert request.stage_payloads[0].runtime.mem_mb_per_worker == 4096
@@ -620,8 +620,10 @@ def test_pipeline_launch_cloud_preserves_auto_workers_without_listing_shards(
     assert "num_shards" not in stage.to_dict()
 
 
+@pytest.mark.parametrize("cloud", [None, "gcp"])
 def test_pipeline_sequence_launch_cloud_submits_named_stage_resources(
     monkeypatch,
+    cloud,
 ) -> None:
     captured = _stub_cloud_submit(monkeypatch, stub_planner=False)
     monkeypatch.setattr(
@@ -645,7 +647,7 @@ def test_pipeline_sequence_launch_cloud_submits_named_stage_resources(
         )
         .launch_cloud(
             name="multi-stage cloud",
-            cloud="gcp",
+            cloud=cloud,
             region="eu-west",
         )
     )
@@ -666,9 +668,10 @@ def test_pipeline_sequence_launch_cloud_submits_named_stage_resources(
     ]
     assert runtimes[0] is not None
     assert runtimes[0].cpus_per_worker == 2
-    assert runtimes[0].cloud == "gcp"
+    assert runtimes[0].cloud == cloud
     assert runtimes[0].region == ("eu-west",)
     assert runtimes[1] is not None
+    assert runtimes[1].cloud == cloud
     assert runtimes[1].mem_mb_per_worker == 4096
 
 
@@ -2093,17 +2096,20 @@ def test_pipeline_launch_cloud_continue_rejects_non_uuid_selector(monkeypatch) -
         )
 
 
-def test_pipeline_launch_cloud_forwards_cloud_and_multiple_regions(monkeypatch) -> None:
+@pytest.mark.parametrize("cloud", [None, "aws", "gcp", "oci"])
+def test_pipeline_launch_cloud_forwards_cloud_and_multiple_regions(
+    monkeypatch, cloud
+) -> None:
     captured = _stub_cloud_submit(monkeypatch)
 
     read_jsonl("input.jsonl").launch_cloud(
-        name="placed cloud", cloud="gcp", region=["uk", "us-west"]
+        name="placed cloud", cloud=cloud, region=["uk", "us-west"]
     )
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
     runtime = request.stage_payloads[0].runtime
     assert runtime is not None
-    assert runtime.cloud == "gcp"
+    assert runtime.cloud == cloud
     assert runtime.region == ("uk", "us-west")
 
 

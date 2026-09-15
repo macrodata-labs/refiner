@@ -65,9 +65,11 @@ and directory attachments. Retained cloud debugging uses the same
 
 ## Cloud and region placement
 
-For Modal execution, workers use AWS by default. Select one supported public
-cloud with `cloud`; this placement setting is separate from the `provider`
-execution-backend setting above:
+For Modal execution, the default `cloud=None` lets Modal choose the underlying
+cloud. Set `cloud` to restrict placement to AWS, GCP, or OCI. This is separate
+from the `provider` execution-backend setting above, and region selectors still
+apply independently. The AWS execution backend always uses AWS and accepts
+`None` or `"aws"`:
 
 ```python
 pipeline.launch_cloud(

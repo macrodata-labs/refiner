@@ -65,7 +65,7 @@ def test_cloud_runtime_config_preserves_positional_resource_order() -> None:
     assert runtime.cpus_per_worker == 4
     assert runtime.mem_mb_per_worker == 8192
     assert runtime.gpu is gpu
-    assert runtime.cloud == "aws"
+    assert runtime.cloud is None
     assert runtime.region == ("us", "eu", "ca")
 
 
@@ -121,7 +121,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
             },
             "runtime": {
                 "num_workers": 2,
-                "cloud": "aws",
+                "cloud": None,
                 "region": ["us", "eu", "ca"],
                 "cpus_per_worker": 4,
                 "mem_mb_per_worker": 8192,
@@ -317,7 +317,7 @@ def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> N
             },
             "runtime": {
                 "num_workers": 1,
-                "cloud": "aws",
+                "cloud": None,
                 "region": ["us", "eu", "ca"],
             },
         }

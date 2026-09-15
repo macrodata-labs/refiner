@@ -142,7 +142,7 @@ class CloudRuntimeConfig:
     cpus_per_worker: int | None = None
     mem_mb_per_worker: int | None = None
     gpu: GPU | None = None
-    cloud: CloudProvider = "aws"
+    cloud: CloudProvider | None = None
     region: tuple[CloudRegion, ...] = ("us", "eu", "ca")
 
     def to_dict(self) -> dict[str, Any]:
