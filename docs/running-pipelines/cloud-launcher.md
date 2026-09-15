@@ -78,8 +78,7 @@ pipeline.launch_cloud(
 )
 ```
 
-By default, workers may run in the US, EEA, or Canada. Pass one selector or a
-list; a worker is accepted when it matches any selector:
+The default selectors are `us`, `eu`, and `ca`. Pass one selector or a list; a worker is accepted when it matches any selector:
 
 ```python
 pipeline.launch_cloud(
@@ -91,8 +90,10 @@ pipeline.launch_cloud(
 
 Broad selectors are `us`, `eu`, `ca`, and `uk`. Narrow selectors are
 `us-east`, `us-central`, `us-south`, `us-west`, `eu-west`, `eu-north`, and
-`eu-south`. `eu` excludes the UK. Madrid is classified as `eu-south`; the
-defensive `FRA*` and `AMS` aliases are classified as `eu-west`.
+`eu-south`. GCP `europe-west2` and OCI `uk-*` require `uk`; AWS `eu-west-2`
+matches `eu` and `eu-west`. The `eu` selector is therefore not an EEA-only
+residency guarantee. Madrid is classified as `eu-south`; the defensive `FRA*`
+and `AMS` aliases are classified as `eu-west`.
 
 ## Run pipelines as ordered stages
 
