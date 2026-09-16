@@ -74,6 +74,7 @@ pipeline.launch_cloud(
     num_workers=16,
     cpus_per_worker=8,
     mem_mb_per_worker=32768,
+    scratch_disk_mb_per_worker=512_000,
     secrets=mdr.Secrets.env(name="production", keys=["HF_TOKEN"]),
 )
 ```
@@ -86,6 +87,7 @@ Common launch settings:
 | `num_workers` | Number of workers that claim shards. |
 | `cpus_per_worker` | CPU allocation per worker. |
 | `mem_mb_per_worker` | Memory allocation per worker. |
+| `scratch_disk_mb_per_worker` | Ephemeral scratch disk per Modal worker, in MB. |
 | `gpu` | GPU type/count per worker. |
 | `refiner_extras` | Extra Refiner [optional dependency groups](../reference/optional-dependencies.md) to install on workers. Built-in blocks declare their own required extras automatically. |
 | `dependencies` | Additional pip requirement strings to install on workers. |

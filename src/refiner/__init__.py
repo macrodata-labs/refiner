@@ -58,6 +58,8 @@ _LAZY_ATTRS = {
     "log_histogram": "refiner.worker.metrics.api",
     "log_throughput": "refiner.worker.metrics.api",
     "register_gauge": "refiner.worker.metrics.api",
+    "Progress": "refiner.progress_api",
+    "progress": "refiner.progress_api",
     "logger": "refiner.worker.context",
 }
 
@@ -103,6 +105,8 @@ __all__ = [
     "log_gauges",
     "log_histogram",
     "register_gauge",
+    "Progress",
+    "progress",
     "logger",
     # expressions
     "col",
@@ -184,6 +188,7 @@ if TYPE_CHECKING:
     from refiner.pipeline.data import datatype
     from refiner.pipeline.expressions import coalesce, col, if_else, lit
     from refiner.pipeline.sinks.assets import BlobAssetConfig, FileAssetConfig
+    from refiner.progress_api import Progress, progress
     from refiner.worker.context import logger
     from refiner.worker.metrics.api import (
         log_gauge,

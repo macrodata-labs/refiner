@@ -14,7 +14,7 @@ description: "CPU, memory, GPU, and runtime service configuration for launched R
 Resource settings belong on launch calls, not inside transform functions. This
 keeps the pipeline logic portable between local debugging and cloud execution.
 
-## CPU and memory
+## CPU, memory, and scratch disk
 
 ```python
 pipeline.launch_cloud(
@@ -22,11 +22,19 @@ pipeline.launch_cloud(
     num_workers=16,
     cpus_per_worker=8,
     mem_mb_per_worker=32768,
+    scratch_disk_mb_per_worker=512_000,
 )
 ```
 
 Use more memory for video-heavy readers and writers, large frame tables, and
 large vectorized batches.
+
+`scratch_disk_mb_per_worker` requests ephemeral scratch space for every Modal
+worker. Use it for archive extraction, media conversion, external sorting, and
+other workloads whose temporary files exceed the default worker disk. Scratch
+data is discarded with the worker; persist outputs to the configured dataset or
+object-store destination. The AWS Batch provider does not currently support a
+configurable scratch-disk request and rejects this option before submission.
 
 ## GPUs
 

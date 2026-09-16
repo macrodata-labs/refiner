@@ -20,6 +20,7 @@ pipeline.launch_cloud(
     num_workers="auto",
     cpus_per_worker=4,
     mem_mb_per_worker=8192,
+    scratch_disk_mb_per_worker=100_000,
     secrets={"HF_TOKEN": None},
 )
 ```
@@ -60,7 +61,8 @@ pipeline.launch_cloud(
 AWS Batch supports pip dependencies, secrets, environment variables, multiple
 workers, continuation, and multi-stage pipelines. It does not currently support
 GPUs, managed runtime services, apt packages, custom images, or arbitrary file
-and directory attachments. Retained cloud debugging uses the same
+and directory attachments. Configurable scratch disk is also Modal-only;
+`provider="aws"` rejects `scratch_disk_mb_per_worker`. Retained cloud debugging uses the same
 `provider="aws"` selection; see [Cloud debug sessions](cloud-debug-sessions.md).
 
 ## Cloud and region placement

@@ -100,10 +100,10 @@ with its default arguments:
 macrodata debug sync pipeline.py --job JOB_ID -- --rows 20
 ```
 
-Dependencies, Python and Refiner versions, CPU, memory, GPU, cloud placement,
-runtime services, secrets, and plain environment variables are fixed when the
-worker is allocated. If any of these settings change, sync asks you to stop and
-create a new session:
+Dependencies, Python and Refiner versions, CPU, memory, scratch disk, GPU,
+cloud placement, runtime services, secrets, and plain environment variables are
+fixed when the worker is allocated. If any of these settings change, sync asks
+you to stop and create a new session:
 
 ```bash
 macrodata debug stop pipeline.py
