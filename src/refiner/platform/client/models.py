@@ -311,6 +311,7 @@ class CloudRunCreateRequest:
     continue_from_job: str | None = None
     unsafe_continue: bool = False
     debug: bool = False
+    debug_timeout_secs: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -332,6 +333,8 @@ class CloudRunCreateRequest:
             payload["unsafe_continue"] = True
         if self.debug:
             payload["debug"] = True
+            if self.debug_timeout_secs is not None:
+                payload["debug_timeout_secs"] = self.debug_timeout_secs
         return payload
 
 

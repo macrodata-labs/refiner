@@ -571,9 +571,11 @@ class CloudLauncher(BaseLauncher):
             return capture.capture(self)
         return self._launch(debug=False)
 
-    def launch_debug(self) -> CloudLaunchResult:
+    def launch_debug(self, *, timeout_secs: int = 30 * 60) -> CloudLaunchResult:
+        if not 1 <= timeout_secs <= 30 * 60:
+            raise ValueError("debug timeout must be between 1 and 1800 seconds")
         self._validate_debug_stages(self._resolved_stages())
-        return self._launch(debug=True)
+        return self._launch(debug=True, debug_timeout_secs=timeout_secs)
 
     @staticmethod
     def _validate_debug_stages(stages: list[PlannedStage]) -> None:
@@ -583,7 +585,9 @@ class CloudLauncher(BaseLauncher):
                 "launch the workflow normally or debug one stage at a time"
             )
 
-    def _launch(self, *, debug: bool) -> CloudLaunchResult:
+    def _launch(
+        self, *, debug: bool, debug_timeout_secs: int | None = None
+    ) -> CloudLaunchResult:
         if debug and self.continue_from_job is not None:
             raise ValueError("cloud debug cannot be combined with continue_from_job")
         try:
@@ -649,6 +653,7 @@ class CloudLauncher(BaseLauncher):
                 continue_from_job=self.continue_from_job,
                 unsafe_continue=self.unsafe_continue,
                 debug=debug,
+                debug_timeout_secs=debug_timeout_secs,
             )
             resp = client.cloud_submit_job(request=request)
         except MacrodataCredentialsError as err:
