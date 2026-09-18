@@ -206,6 +206,7 @@ class PipelineSequence:
         refiner_extras: Sequence[str] | None = None,
         secrets: SecretInput | None = None,
         env: Mapping[str, object | None] | None = None,
+        tags: Mapping[str, str] | None = None,
         continue_from_job: str | None = None,
         unsafe_continue: bool = False,
     ) -> CloudLaunchResult:
@@ -227,6 +228,7 @@ class PipelineSequence:
             refiner_extras=refiner_extras,
             secrets=secrets,
             env=dict(env) if env is not None else None,
+            tags=tags,
             continue_from_job=continue_from_job,
             unsafe_continue=unsafe_continue,
         ).launch()

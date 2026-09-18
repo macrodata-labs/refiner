@@ -2127,3 +2127,66 @@ def test_pipeline_launch_cloud_rejects_invalid_regions(monkeypatch, region) -> N
 
     with pytest.raises(ValueError, match="region"):
         read_jsonl("input.jsonl").launch_cloud(name="demo cloud", region=region)
+
+
+@pytest.mark.parametrize(
+    "tags", [None, {}, {"project": "dataset-v2", "client": "acme"}]
+)
+@pytest.mark.parametrize("multi_stage", [False, True])
+def test_cloud_tags_reach_submission_manifest(monkeypatch, tags, multi_stage) -> None:
+    captured = _stub_cloud_submit(monkeypatch, stub_planner=False)
+    pipeline = read_jsonl("input.jsonl")
+    runnable = pipeline.as_stage(name="first") if multi_stage else pipeline
+    runnable.launch_cloud(name="tagged", tags=tags)
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    wire_manifest = request.to_dict()["manifest"]
+    if tags is None:
+        assert "tags" not in wire_manifest
+    else:
+        assert wire_manifest["tags"] == tags
+
+
+@pytest.mark.parametrize(
+    "tags",
+    [
+        {"md_job_id": "spoof"},
+        {"project": ""},
+        {"": "project"},
+        {"project": "a" * 64},
+        {"a" * 64: "project"},
+        {"project": "has spaces"},
+        {"project": "café"},
+        {"project": 123},
+        {123: "project"},
+        ["project:dataset"],
+    ],
+)
+def test_cloud_tags_reject_invalid_metadata(tags) -> None:
+    with pytest.raises(ValueError, match="tag"):
+        CloudLauncher(pipeline=read_jsonl("input.jsonl"), name="invalid", tags=tags)
+
+
+def test_cloud_tags_are_copied_and_accept_modal_boundaries(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    tags = {"p" * 63: "v" * 63, "project": "A.b_c-9"}
+    launcher = CloudLauncher(
+        pipeline=read_jsonl("input.jsonl"), name="tagged", tags=tags
+    )
+    tags["client"] = "changed"
+    launcher.launch()
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.manifest is not None
+    assert request.manifest["tags"] == {"p" * 63: "v" * 63, "project": "A.b_c-9"}
+
+
+def test_debug_fingerprint_changes_with_billing_tags(monkeypatch) -> None:
+    _stub_cloud_submit(monkeypatch)
+    preparations = [
+        CloudLauncher(
+            pipeline=read_jsonl("input.jsonl"), name="debug", tags={"project": project}
+        ).prepare_debug_sync(client=cast(MacrodataClient, _SecretMetadataClient({})))
+        for project in ("first", "second")
+    ]
+    assert (
+        preparations[0].allocation_fingerprint != preparations[1].allocation_fingerprint
+    )

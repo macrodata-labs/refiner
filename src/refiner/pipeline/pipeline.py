@@ -1054,6 +1054,7 @@ class RefinerPipeline:
         refiner_extras: Sequence[str] | None = None,
         secrets: SecretInput | None = None,
         env: Mapping[str, object | None] | None = None,
+        tags: Mapping[str, str] | None = None,
         continue_from_job: str | None = None,
         unsafe_continue: bool = False,
     ) -> "CloudLaunchResult":
@@ -1089,6 +1090,8 @@ class RefinerPipeline:
             env: Extra environment variables to mount inside the cloud image without
                 treating their values as redaction targets. `None` values are loaded
                 from the submitting environment.
+            tags: Billing metadata such as {"project": "dataset", "client": "acme"}.
+                Forwarded to Modal registration and worker apps.
             continue_from_job: Explicit continue selector. Accepts one prior cloud
                 job id, one prior job id plus `:stage_index`, or `"infer"`.
             unsafe_continue: Allow continue when the reused stage boundary is not
@@ -1111,6 +1114,7 @@ class RefinerPipeline:
             refiner_extras=refiner_extras,
             secrets=secrets,
             env=dict(env) if env is not None else None,
+            tags=tags,
             continue_from_job=continue_from_job,
             unsafe_continue=unsafe_continue,
         )

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import hashlib
 import json
 import os
@@ -77,6 +77,26 @@ _UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
 )
+
+
+def _validate_tags(tags: Mapping[str, str] | None) -> dict[str, str] | None:
+    if tags is None:
+        return None
+    if not isinstance(tags, Mapping):
+        raise ValueError("tags must be a mapping of strings to strings")
+    for key, value in tags.items():
+        if any(
+            not isinstance(item, str)
+            or re.fullmatch(r"[a-zA-Z0-9._-]{1,63}", item) is None
+            for item in (key, value)
+        ):
+            raise ValueError(
+                "tag keys and values must contain 1–63 letters, digits, dots, "
+                "underscores, or hyphens"
+            )
+        if key.startswith("md_"):
+            raise ValueError("tag keys starting with md_ are reserved")
+    return dict(tags)
 
 
 def _parse_continue_from_job(value: str | None) -> str | None:
@@ -172,6 +192,7 @@ class CloudLauncher(BaseLauncher):
             require; pass this for extras used outside those blocks.
         secrets: Optional secret sources mounted into the cloud runtime.
         env: Optional plain environment variables mounted into the cloud runtime.
+        tags: Optional billing metadata, such as project and client names.
     """
 
     def __init__(
@@ -191,6 +212,7 @@ class CloudLauncher(BaseLauncher):
         refiner_extras: Sequence[str] | None = None,
         secrets: SecretInput | None = None,
         env: dict[str, object | None] | None = None,
+        tags: Mapping[str, str] | None = None,
         continue_from_job: str | None = None,
         unsafe_continue: bool = False,
     ):
@@ -221,6 +243,7 @@ class CloudLauncher(BaseLauncher):
         self.refiner_extras = refiner_extras
         self.secrets = normalize_secret_sources(secrets)
         self.env = env
+        self.tags = _validate_tags(tags)
         self.continue_from_job = normalized_continue_from_job
         self.unsafe_continue = unsafe_continue
 
@@ -370,6 +393,8 @@ class CloudLauncher(BaseLauncher):
             secret_values=secret_values,
             stages=stages,
         )
+        if self.tags is not None:
+            manifest = {**manifest, "tags": dict(self.tags)}
         plan = self._compiled_plan(stages, secret_values=secret_values)
         return stages, manifest, plan, resolved_secret_sources, resolved_env
 
@@ -492,6 +517,7 @@ class CloudLauncher(BaseLauncher):
             "provider": self.provider,
             "environment": manifest.get("environment"),
             "dependencies": manifest.get("dependencies"),
+            "tags": manifest.get("tags"),
             "stages": stage_specs,
             "secret_mounts": self._secret_mount_spec(
                 resolved_secret_sources,
