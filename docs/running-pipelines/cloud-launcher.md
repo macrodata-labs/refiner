@@ -63,6 +63,33 @@ GPUs, managed runtime services, apt packages, custom images, or arbitrary file
 and directory attachments. Retained cloud debugging uses the same
 `provider="aws"` selection; see [Cloud debug sessions](cloud-debug-sessions.md).
 
+## Billing tags
+
+Pass tags to `launch_cloud(...)` to attribute spending to a project and client:
+
+```python
+pipeline.launch_cloud(
+    name="dataset-preparation",
+    tags={"project": "dataset-v2", "client": "acme"},
+)
+```
+
+The same argument works on an ordered pipeline sequence and on `CloudLauncher`.
+When using `macrodata run pipeline.py`, put the tags in the script's
+`launch_cloud(...)` call. Tags are stored with the cloud run and passed to its
+Modal registration and worker apps for billing reports. AWS runs retain the
+metadata on the cloud run; these tags are not AWS resource tags.
+
+Keys and values must each contain 1–63 ASCII letters, digits, dots, underscores,
+or hyphens. Keys beginning with `md_` are reserved for Macrodata. Use separate
+keys and values (`{"project": "dataset-v2"}`), rather than a colon inside a key.
+Tags are visible metadata; do not include secrets.
+
+When continuing a job, omitting `tags` keeps its existing tags. Supply a new
+mapping to replace them, or `tags={}` to clear them. Changing tags on a retained
+debug session requires a new allocation so billing stays associated with the
+correct project.
+
 ## Cloud and region placement
 
 For Modal execution, the default `cloud=None` lets Modal choose the underlying
