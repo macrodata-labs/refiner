@@ -186,6 +186,7 @@ def _render_job(payload: dict[str, Any]) -> int:
                 _dim_text("Workers"),
                 _dim_text("CPU"),
                 _dim_text("Memory"),
+                _dim_text("Scratch"),
                 _dim_text("GPU"),
             ]
         ]
@@ -210,6 +211,7 @@ def _render_job(payload: dict[str, Any]) -> int:
                     ),
                     _stage_runtime_value(runtime_config, "cpuCores"),
                     _stage_runtime_value(runtime_config, "memoryMb"),
+                    _stage_runtime_value(runtime_config, "scratchDiskMb"),
                     _stage_gpu_text(runtime_config),
                 ]
             )

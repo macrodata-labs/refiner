@@ -37,6 +37,35 @@ import refiner as mdr
 mdr.log_gauge("queue_depth", 12, unit="items")
 ```
 
+## Progress
+
+Use `mdr.progress` like the common `tqdm` pattern when work has a meaningful
+completed count. Iterable wrapping infers the total when the iterable has a
+length:
+
+```python
+for frame in mdr.progress(frames, desc="Colorizing", unit="frame"):
+    colorize(frame)
+```
+
+For callbacks and batched work, update the tracker manually:
+
+```python
+with mdr.progress(total=31_678, desc="Colorizing", unit="frame") as progress:
+    for batch in frame_batches:
+        colorize(batch)
+        progress.update(len(batch))
+        progress.set_postfix(gpu_utilization=72)
+```
+
+The tracker supports `total`, `desc`, `unit`, `initial`, `mininterval`,
+`update()`, `set_description()`, `set_postfix()`, `refresh()`, and `close()`.
+Interactive local runs render a terminal line. Launched workers emit throttled,
+absolute `completed`, `total`, `elapsed_seconds`, and `rate` gauges under a
+`progress.<description>` metric label. Absolute snapshots avoid replaying
+cumulative increments when an attempt is retried. Progress is observational and
+does not create checkpoints.
+
 ## Logs
 
 Use the worker logger for structured job logs:
