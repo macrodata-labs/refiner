@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import cast
 
@@ -145,6 +146,12 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
     ]
     assert json_payload["secrets"] == [{"OPENAI_API_KEY": "test-secret"}]
     assert json_payload["env"] == {"MODEL_NAME": "gpt-5"}
+
+
+def test_debug_request_serializes_session_timeout() -> None:
+    request = replace(_request(), debug=True, debug_timeout_secs=600)
+
+    assert request.to_dict()["debug_timeout_secs"] == 600
 
 
 def test_cloud_run_request_includes_debug_only_when_enabled() -> None:

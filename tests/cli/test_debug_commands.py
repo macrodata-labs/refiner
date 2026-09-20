@@ -280,6 +280,27 @@ def test_debug_create_rejects_invalid_timeout_before_allocating(monkeypatch) -> 
                 pipeline="pipeline.py",
                 script_args=[],
                 startup_timeout=0,
+                session_timeout=1800,
+            )
+        )
+
+
+def test_debug_create_rejects_session_timeout_above_thirty_minutes(monkeypatch) -> None:
+    monkeypatch.setattr(
+        debug,
+        "MacrodataClient",
+        lambda: pytest.fail("client must not be created for an invalid timeout"),
+    )
+
+    with pytest.raises(
+        SystemExit, match="--session-timeout must be between 1 and 1800 seconds"
+    ):
+        debug._cmd_create(
+            Namespace(
+                pipeline="pipeline.py",
+                script_args=[],
+                startup_timeout=1200,
+                session_timeout=1801,
             )
         )
 
@@ -308,6 +329,7 @@ def test_debug_create_validates_sync_bundle_before_allocating(
                 pipeline=str(tmp_path / "pipeline.py"),
                 script_args=[],
                 startup_timeout=1200,
+                session_timeout=1800,
             )
         )
 

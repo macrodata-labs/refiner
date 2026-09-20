@@ -393,6 +393,7 @@ def test_captured_smoke_launch_submits_debug_without_smoke_hint_or_attach(
 
     request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.debug is True
+    assert request.debug_timeout_secs == 1800
     assert request.stage_payloads[0].runtime.num_workers == 16
     assert result.job_id == "job-123"
     out = capsys.readouterr().out
@@ -417,6 +418,23 @@ def test_debug_launch_preserves_aws_batch_provider(monkeypatch) -> None:
     request = cast(CloudRunCreateRequest, captured["submit_request"])
     assert request.provider == "aws_batch"
     assert request.debug is True
+
+
+def test_debug_launch_accepts_a_shorter_session_timeout(monkeypatch) -> None:
+    captured = _stub_cloud_submit(monkeypatch)
+    launcher = CloudLauncher(pipeline=read_jsonl("input.jsonl"), name="debug")
+
+    launcher.launch_debug(timeout_secs=600)
+
+    request = cast(CloudRunCreateRequest, captured["submit_request"])
+    assert request.debug_timeout_secs == 600
+
+
+def test_debug_launch_rejects_session_timeout_above_thirty_minutes() -> None:
+    launcher = CloudLauncher(pipeline=read_jsonl("input.jsonl"), name="debug")
+
+    with pytest.raises(ValueError, match="between 1 and 1800 seconds"):
+        launcher.launch_debug(timeout_secs=1801)
 
 
 def test_debug_launch_rejects_continue() -> None:

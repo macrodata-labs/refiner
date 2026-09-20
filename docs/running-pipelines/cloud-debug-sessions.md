@@ -21,6 +21,16 @@ Create a retained session by passing that script to the CLI:
 macrodata debug pipeline.py
 ```
 
+The retained worker expires after 30 minutes. To use a shorter session, set its
+lifetime in seconds when creating it:
+
+```bash
+macrodata debug pipeline.py --session-timeout 600
+```
+
+The maximum is 1800 seconds. The timer starts after the worker initializes, and
+an expired session must be recreated.
+
 If the script accepts arguments, put them after `--`:
 
 ```bash

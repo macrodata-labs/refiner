@@ -35,6 +35,7 @@ _COMMANDS = frozenset(
     {"create", "status", "run", "profile", "exec", "stop", "sync", "doctor"}
 )
 _STATUS_HEARTBEAT_SECS = 30.0
+_MAX_SESSION_TIMEOUT_SECS = 30 * 60
 
 
 def _print_json(payload: dict[str, Any]) -> None:
@@ -123,6 +124,7 @@ def _debug_parser() -> argparse.ArgumentParser:
         help="Create a retained debug session",
         usage=(
             "macrodata debug create [-h] [--startup-timeout SECONDS] "
+            "[--session-timeout SECONDS] "
             "pipeline [-- PIPELINE_ARG ...]"
         ),
         epilog=(
@@ -138,6 +140,13 @@ def _debug_parser() -> argparse.ArgumentParser:
         default=1200,
         metavar="SECONDS",
         help="Maximum time to wait for the worker (default: 1200)",
+    )
+    create.add_argument(
+        "--session-timeout",
+        type=int,
+        default=_MAX_SESSION_TIMEOUT_SECS,
+        metavar="SECONDS",
+        help="Retained worker lifetime, at most 1800 seconds (default: 1800)",
     )
 
     status = subparsers.add_parser("status", help="Show debug worker status")
@@ -390,6 +399,8 @@ def _clear_existing_session(*, script: Path, client: MacrodataClient) -> None:
 def _cmd_create(args: argparse.Namespace) -> int:
     if args.startup_timeout <= 0:
         raise SystemExit("--startup-timeout must be greater than zero")
+    if not 1 <= args.session_timeout <= _MAX_SESSION_TIMEOUT_SECS:
+        raise SystemExit("--session-timeout must be between 1 and 1800 seconds")
     client = MacrodataClient()
     script = Path(args.pipeline).expanduser().resolve()
     with session_creation_lock(script=script, client=client):
@@ -406,7 +417,7 @@ def _cmd_create(args: argparse.Namespace) -> int:
             client=client,
         )
         with pickle_project_modules_by_value(project_root):
-            result = launcher.launch_debug()
+            result = launcher.launch_debug(timeout_secs=args.session_timeout)
         record = new_session_record(
             script=script,
             project_root=project_root,
