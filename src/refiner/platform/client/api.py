@@ -565,6 +565,18 @@ class MacrodataClient:
     def cli_get_job(self, *, job_id: str) -> dict[str, Any]:
         return self._request_raw(method="GET", path=f"/api/cli/jobs/{job_id}")
 
+    def cli_scale_job_workers(
+        self, *, job_id: str, workers: int, stage_index: int | None = None
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"workers": workers}
+        if stage_index is not None:
+            payload["stage"] = stage_index
+        return self._request_raw(
+            method="POST",
+            path=f"/api/cli/jobs/{quote(job_id, safe='')}/scale",
+            json_payload=payload,
+        )
+
     def cli_get_job_manifest(self, *, job_id: str) -> dict[str, Any]:
         return self._request_raw(method="GET", path=f"/api/cli/jobs/{job_id}/manifest")
 

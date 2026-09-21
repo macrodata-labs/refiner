@@ -78,6 +78,25 @@ Stage  Step  Name          Type  Columns
 
 For local jobs, the summary also prints the run directory.
 
+## Scale a running cloud stage
+
+Set an absolute desired worker count for the currently running stage:
+
+```bash
+macrodata jobs scale job_123 --workers 12
+```
+
+Specify the stage when needed:
+
+```bash
+macrodata jobs scale job_123 --stage 0 --workers 4
+macrodata jobs scale job_123 --workers 12 --json
+```
+
+Scale-up queues new workers and may take time when provider capacity is constrained. Scale-down is not currently supported; the API rejects a target below the stage's current desired count.
+
+The command is idempotent because `--workers` is the desired total, not a relative increment. It accepts running cloud stages only, requires at least one worker, and cannot request more workers than the stage has registered shards or the workspace worker limit.
+
 ## Attach to a running Job
 
 ```bash

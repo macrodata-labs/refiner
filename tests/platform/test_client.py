@@ -173,6 +173,24 @@ def test_lifecycle_request_does_not_retry_conflicts(monkeypatch) -> None:
     assert sleeps == []
 
 
+def test_cli_scale_job_workers_posts_absolute_target(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_request_json(**kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {"job_id": "job-1", "desired_workers": 12}
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", fake_request_json)
+
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    response = client.cli_scale_job_workers(job_id="job/1", workers=12, stage_index=2)
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/api/cli/jobs/job%2F1/scale"
+    assert captured["json_payload"] == {"workers": 12, "stage": 2}
+    assert response["desired_workers"] == 12
+
+
 def test_cli_list_jobs_omits_me_when_false(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
