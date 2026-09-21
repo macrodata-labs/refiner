@@ -202,7 +202,7 @@ def register_jobs_command(
     )
 
     jobs_scale = jobs_subparsers.add_parser(
-        "scale", help="Change the desired workers for a running cloud stage"
+        "scale", help="Increase the desired workers for a running cloud stage"
     )
     jobs_scale.add_argument("job_id", help="Job identifier")
     jobs_scale.add_argument(

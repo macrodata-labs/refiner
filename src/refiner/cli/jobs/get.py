@@ -207,8 +207,7 @@ def _render_job(payload: dict[str, Any]) -> int:
                     (
                         f"active={_safe_text(stage.get('runningWorkers'))} "
                         f"desired={_worker_requested_text(stage.get('totalWorkers'))} "
-                        f"starting={_safe_text(stage.get('startingWorkers', 0))} "
-                        f"draining={_safe_text(stage.get('drainingWorkers', 0))}"
+                        f"starting={_safe_text(stage.get('startingWorkers', 0))}"
                     ),
                     _stage_runtime_value(runtime_config, "cpuCores"),
                     _stage_runtime_value(runtime_config, "memoryMb"),

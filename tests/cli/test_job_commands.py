@@ -231,7 +231,6 @@ class _FakeClient:
             "desired_workers": workers,
             "active_workers": 4,
             "starting_workers": max(0, workers - 4),
-            "draining_workers": max(0, 4 - workers),
             "status": "reconciling",
         }
 
@@ -315,7 +314,7 @@ def test_jobs_get_plain_output(monkeypatch, capsys) -> None:
     assert "Workers:" not in out.out
     assert "Stages" in out.out
     assert "Steps" in out.out
-    assert "active=2 desired=4 starting=0 draining=0" in out.out
+    assert "active=2 desired=4 starting=0" in out.out
     assert "c=3 a=2 p=5 t=10" in out.out
     assert "CPU" in out.out
     assert "Memory" in out.out
@@ -346,7 +345,7 @@ def test_jobs_get_plain_output_shows_unknown_requested_capacity(
     out = capsys.readouterr()
 
     assert rc == 0
-    assert "active=2 desired=N/A starting=0 draining=0" in out.out
+    assert "active=2 desired=N/A starting=0" in out.out
 
 
 def test_jobs_get_json_output_prints_job_object(monkeypatch, capsys) -> None:
@@ -2999,19 +2998,6 @@ def test_jobs_scale_plain_output_reports_starting_workers(monkeypatch, capsys) -
     assert rc == 0
     assert "Workers:   4 → 8 desired" in out.out
     assert "Starting:  4" in out.out
-    assert "Draining:  0" in out.out
-
-
-def test_jobs_scale_plain_output_explains_graceful_drain(monkeypatch, capsys) -> None:
-    _patch_job_client(monkeypatch, lambda: _FakeClient())
-
-    rc = jobs.cmd_jobs_scale(Namespace(job_id="job-1", workers=2, stage=0, json=False))
-    out = capsys.readouterr()
-
-    assert rc == 0
-    assert "Workers:   4 → 2 desired" in out.out
-    assert "Draining:  2" in out.out
-    assert "Workers will exit after finishing their current shard." in out.out
 
 
 def test_jobs_scale_rejects_nonpositive_workers(monkeypatch, capsys) -> None:

@@ -39,15 +39,11 @@ def _render_scale(payload: dict[str, object]) -> int:
     desired = payload.get("desired_workers", payload.get("desiredWorkers"))
     active = payload.get("active_workers", payload.get("activeWorkers"))
     starting = payload.get("starting_workers", payload.get("startingWorkers"))
-    draining = payload.get("draining_workers", payload.get("drainingWorkers"))
     print(f"Job:       {_safe_text(job_id)}")
     print(f"Stage:     {_safe_text(stage_index)}")
     print(f"Workers:   {_safe_text(previous)} → {_safe_text(desired)} desired")
     print(f"Active:    {_safe_text(active)}")
     print(f"Starting:  {_safe_text(starting)}")
-    print(f"Draining:  {_safe_text(draining)}")
-    if isinstance(draining, int) and draining > 0:
-        print("\nWorkers will exit after finishing their current shard.")
     return 0
 
 

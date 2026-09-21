@@ -93,7 +93,7 @@ macrodata jobs scale job_123 --stage 0 --workers 4
 macrodata jobs scale job_123 --workers 12 --json
 ```
 
-Scale-up queues new workers and may take time when provider capacity is constrained. Scale-down does not interrupt active shards. Workers selected for removal finish their current shard, stop claiming new work, and exit.
+Scale-up queues new workers and may take time when provider capacity is constrained. Scale-down is not currently supported; the API rejects a target below the stage's current desired count.
 
 The command is idempotent because `--workers` is the desired total, not a relative increment. It accepts running cloud stages only, requires at least one worker, and cannot request more workers than the stage has registered shards or the workspace worker limit.
 
