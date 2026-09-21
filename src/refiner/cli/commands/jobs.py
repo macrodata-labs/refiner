@@ -200,3 +200,20 @@ def register_jobs_command(
     jobs_cancel.set_defaults(
         handler_module="refiner.cli.jobs.control", handler="cmd_jobs_cancel"
     )
+
+    jobs_scale = jobs_subparsers.add_parser(
+        "scale", help="Change the desired workers for a running cloud stage"
+    )
+    jobs_scale.add_argument("job_id", help="Job identifier")
+    jobs_scale.add_argument(
+        "--workers", type=int, required=True, help="Desired worker count"
+    )
+    jobs_scale.add_argument(
+        "--stage", type=int, help="Stage index; defaults to the running stage"
+    )
+    jobs_scale.add_argument(
+        "--json", action="store_true", help="Print raw JSON response"
+    )
+    jobs_scale.set_defaults(
+        handler_module="refiner.cli.jobs.control", handler="cmd_jobs_scale"
+    )

@@ -9,7 +9,7 @@ from typing import Any, cast
 
 from refiner.cli.common import print_table
 from refiner.cli.jobs.attach import cmd_jobs_attach
-from refiner.cli.jobs.control import cmd_jobs_cancel
+from refiner.cli.jobs.control import cmd_jobs_cancel, cmd_jobs_scale
 from refiner.cli.jobs.get import cmd_jobs_get
 from refiner.cli.jobs.list import cmd_jobs_list
 from refiner.cli.jobs import logs as jobs_logs
@@ -29,6 +29,7 @@ from refiner.platform.client.api import MacrodataApiError
 jobs = SimpleNamespace(
     cmd_jobs_attach=cmd_jobs_attach,
     cmd_jobs_cancel=cmd_jobs_cancel,
+    cmd_jobs_scale=cmd_jobs_scale,
     cmd_jobs_get=cmd_jobs_get,
     cmd_jobs_list=cmd_jobs_list,
     cmd_jobs_logs=cmd_jobs_logs,
@@ -220,6 +221,20 @@ class _FakeClient:
             "failed_operations": 0,
         }
 
+    def cli_scale_job_workers(
+        self, *, job_id: str, workers: int, stage_index: int | None
+    ) -> dict[str, object]:
+        return {
+            "job_id": job_id,
+            "stage_index": 0 if stage_index is None else stage_index,
+            "previous_desired_workers": 4,
+            "desired_workers": workers,
+            "active_workers": 4,
+            "starting_workers": max(0, workers - 4),
+            "draining_workers": max(0, 4 - workers),
+            "status": "reconciling",
+        }
+
 
 def _patch_job_client(monkeypatch, factory) -> None:
     monkeypatch.setattr(jobs_list_module, "create_client", factory)
@@ -300,7 +315,7 @@ def test_jobs_get_plain_output(monkeypatch, capsys) -> None:
     assert "Workers:" not in out.out
     assert "Stages" in out.out
     assert "Steps" in out.out
-    assert "active=2 requested=4" in out.out
+    assert "active=2 desired=4 starting=0 draining=0" in out.out
     assert "c=3 a=2 p=5 t=10" in out.out
     assert "CPU" in out.out
     assert "Memory" in out.out
@@ -331,7 +346,7 @@ def test_jobs_get_plain_output_shows_unknown_requested_capacity(
     out = capsys.readouterr()
 
     assert rc == 0
-    assert "active=2 requested=N/A" in out.out
+    assert "active=2 desired=N/A starting=0 draining=0" in out.out
 
 
 def test_jobs_get_json_output_prints_job_object(monkeypatch, capsys) -> None:
@@ -2971,6 +2986,44 @@ def test_jobs_resource_metrics_deduplicates_worker_ids(monkeypatch) -> None:
 
     assert rc == 0
     assert observed["worker_ids"] == ["worker-1", "worker-2"]
+
+
+def test_jobs_scale_plain_output_reports_starting_workers(monkeypatch, capsys) -> None:
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_scale(
+        Namespace(job_id="job-1", workers=8, stage=None, json=False)
+    )
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "Workers:   4 → 8 desired" in out.out
+    assert "Starting:  4" in out.out
+    assert "Draining:  0" in out.out
+
+
+def test_jobs_scale_plain_output_explains_graceful_drain(monkeypatch, capsys) -> None:
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_scale(Namespace(job_id="job-1", workers=2, stage=0, json=False))
+    out = capsys.readouterr()
+
+    assert rc == 0
+    assert "Workers:   4 → 2 desired" in out.out
+    assert "Draining:  2" in out.out
+    assert "Workers will exit after finishing their current shard." in out.out
+
+
+def test_jobs_scale_rejects_nonpositive_workers(monkeypatch, capsys) -> None:
+    _patch_job_client(monkeypatch, lambda: _FakeClient())
+
+    rc = jobs.cmd_jobs_scale(
+        Namespace(job_id="job-1", workers=0, stage=None, json=False)
+    )
+    out = capsys.readouterr()
+
+    assert rc == 2
+    assert "--workers must be a positive integer" in out.out
 
 
 def test_jobs_error_reports_to_stderr(monkeypatch, capsys) -> None:

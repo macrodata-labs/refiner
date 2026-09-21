@@ -28,3 +28,42 @@ def cmd_jobs_cancel(args: Namespace) -> int:
         fetch=lambda: create_client().cli_cancel_job(job_id=args.job_id),
         renderer=_render_cancel,
     )
+
+
+def _render_scale(payload: dict[str, object]) -> int:
+    job_id = payload.get("job_id", payload.get("jobId"))
+    stage_index = payload.get("stage_index", payload.get("stageIndex"))
+    previous = payload.get(
+        "previous_desired_workers", payload.get("previousDesiredWorkers")
+    )
+    desired = payload.get("desired_workers", payload.get("desiredWorkers"))
+    active = payload.get("active_workers", payload.get("activeWorkers"))
+    starting = payload.get("starting_workers", payload.get("startingWorkers"))
+    draining = payload.get("draining_workers", payload.get("drainingWorkers"))
+    print(f"Job:       {_safe_text(job_id)}")
+    print(f"Stage:     {_safe_text(stage_index)}")
+    print(f"Workers:   {_safe_text(previous)} → {_safe_text(desired)} desired")
+    print(f"Active:    {_safe_text(active)}")
+    print(f"Starting:  {_safe_text(starting)}")
+    print(f"Draining:  {_safe_text(draining)}")
+    if isinstance(draining, int) and draining > 0:
+        print("\nWorkers will exit after finishing their current shard.")
+    return 0
+
+
+def cmd_jobs_scale(args: Namespace) -> int:
+    if args.workers < 1:
+        print("Error: --workers must be a positive integer")
+        return 2
+    if args.stage is not None and args.stage < 0:
+        print("Error: --stage must be non-negative")
+        return 2
+    return _run_job_command(
+        as_json=args.json,
+        fetch=lambda: create_client().cli_scale_job_workers(
+            job_id=args.job_id,
+            workers=args.workers,
+            stage_index=args.stage,
+        ),
+        renderer=_render_scale,
+    )
