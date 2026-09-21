@@ -42,7 +42,13 @@ class _FakeClient:
 
 
 def _args(command: str, **kwargs) -> Namespace:
-    return Namespace(debug_command=command, pipeline=None, job_id="job-1", **kwargs)
+    return Namespace(
+        debug_command=command,
+        pipeline=None,
+        job_id="job-1",
+        attempt_id=kwargs.pop("attempt_id", None),
+        **kwargs,
+    )
 
 
 def test_debug_commands_forward_to_cloud_api(monkeypatch, capsys) -> None:
@@ -81,6 +87,7 @@ def test_debug_commands_forward_to_cloud_api(monkeypatch, capsys) -> None:
             "exec",
             {
                 "job_id": "job-1",
+                "attempt_id": client.calls[1][1]["attempt_id"],
                 "command": ["python", "-V"],
                 "workdir": None,
                 "timeout_secs": 20,
@@ -90,6 +97,7 @@ def test_debug_commands_forward_to_cloud_api(monkeypatch, capsys) -> None:
             "run",
             {
                 "job_id": "job-1",
+                "attempt_id": client.calls[2][1]["attempt_id"],
                 "max_shards": 1,
                 "timeout_secs": 30,
                 "profile": False,
@@ -272,6 +280,27 @@ def test_debug_create_rejects_invalid_timeout_before_allocating(monkeypatch) -> 
                 pipeline="pipeline.py",
                 script_args=[],
                 startup_timeout=0,
+                session_timeout=1800,
+            )
+        )
+
+
+def test_debug_create_rejects_session_timeout_above_thirty_minutes(monkeypatch) -> None:
+    monkeypatch.setattr(
+        debug,
+        "MacrodataClient",
+        lambda: pytest.fail("client must not be created for an invalid timeout"),
+    )
+
+    with pytest.raises(
+        SystemExit, match="--session-timeout must be between 1 and 1800 seconds"
+    ):
+        debug._cmd_create(
+            Namespace(
+                pipeline="pipeline.py",
+                script_args=[],
+                startup_timeout=1200,
+                session_timeout=1801,
             )
         )
 
@@ -300,6 +329,7 @@ def test_debug_create_validates_sync_bundle_before_allocating(
                 pipeline=str(tmp_path / "pipeline.py"),
                 script_args=[],
                 startup_timeout=1200,
+                session_timeout=1800,
             )
         )
 
@@ -507,3 +537,15 @@ def test_debug_reports_expected_errors_without_traceback(monkeypatch, capsys) ->
         == 1
     )
     assert capsys.readouterr().err == "not ready\n"
+
+
+def test_exec_resume_uses_and_prints_supplied_attempt_id(monkeypatch, capsys):
+    client = _FakeClient()
+    monkeypatch.setattr(debug, "MacrodataClient", lambda: client)
+    attempt_id = "00000000-0000-4000-8000-000000000001"
+    args = debug._parse_debug_args(
+        ["exec", "--job", "job-1", "--attempt-id", attempt_id, "--", "python", "-V"]
+    )
+    assert debug._dispatch(args) == 0
+    assert client.calls[0][1]["attempt_id"] == attempt_id
+    assert attempt_id in capsys.readouterr().err

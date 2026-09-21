@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import cast
 
@@ -65,7 +66,7 @@ def test_cloud_runtime_config_preserves_positional_resource_order() -> None:
     assert runtime.cpus_per_worker == 4
     assert runtime.mem_mb_per_worker == 8192
     assert runtime.gpu is gpu
-    assert runtime.cloud == "aws"
+    assert runtime.cloud is None
     assert runtime.region == ("us", "eu", "ca")
 
 
@@ -121,7 +122,7 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
             },
             "runtime": {
                 "num_workers": 2,
-                "cloud": "aws",
+                "cloud": None,
                 "region": ["us", "eu", "ca"],
                 "cpus_per_worker": 4,
                 "mem_mb_per_worker": 8192,
@@ -147,6 +148,12 @@ def test_cloud_client_cloud_submit_job_posts_to_cloud_runs(monkeypatch) -> None:
     assert json_payload["env"] == {"MODEL_NAME": "gpt-5"}
 
 
+def test_debug_request_serializes_session_timeout() -> None:
+    request = replace(_request(), debug=True, debug_timeout_secs=600)
+
+    assert request.to_dict()["debug_timeout_secs"] == 600
+
+
 def test_cloud_run_request_includes_debug_only_when_enabled() -> None:
     regular = _request().to_dict()
     debug = CloudRunCreateRequest(
@@ -166,17 +173,26 @@ def test_cloud_debug_client_uses_retained_session_routes(monkeypatch) -> None:
     monkeypatch.setattr(
         client,
         "_request_raw",
-        lambda **kwargs: calls.append(kwargs) or {"status": "ready"},
+        lambda **kwargs: (
+            calls.append(kwargs) or {"status": "completed", "exit_code": 0}
+        ),
     )
 
     client.cloud_debug_status(job_id="job/1")
     client.cloud_debug_exec(
         job_id="job/1",
+        attempt_id="00000000-0000-4000-8000-000000000001",
         command=["python", "-V"],
         workdir="/tmp/refiner-debug",
         timeout_secs=12,
     )
-    client.cloud_debug_run(job_id="job/1", max_shards=1, timeout_secs=30, profile=True)
+    client.cloud_debug_run(
+        job_id="job/1",
+        attempt_id="00000000-0000-4000-8000-000000000002",
+        max_shards=1,
+        timeout_secs=30,
+        profile=True,
+    )
     client.cloud_debug_profile(job_id="job/1")
     client.cloud_debug_stop(job_id="job/1")
     client.cloud_debug_doctor(job_id="job/1")
@@ -190,17 +206,19 @@ def test_cloud_debug_client_uses_retained_session_routes(monkeypatch) -> None:
         "/api/cloud/debug/job%2F1/doctor",
     ]
     assert calls[1]["json_payload"] == {
+        "attempt_id": "00000000-0000-4000-8000-000000000001",
         "command": ["python", "-V"],
         "timeout_secs": 12,
         "workdir": "/tmp/refiner-debug",
     }
     assert calls[2]["json_payload"] == {
+        "attempt_id": "00000000-0000-4000-8000-000000000002",
         "timeout_secs": 30,
         "max_shards": 1,
         "profile": True,
     }
-    assert calls[1]["retry_attempts"] == 1
-    assert calls[2]["retry_attempts"] == 1
+    assert calls[1]["retry_attempts"] == 4
+    assert calls[2]["retry_attempts"] == 4
 
 
 def test_cloud_debug_sync_streams_bundle_bytes() -> None:
@@ -306,7 +324,7 @@ def test_cloud_client_cloud_submit_job_posts_continue_metadata(monkeypatch) -> N
             },
             "runtime": {
                 "num_workers": 1,
-                "cloud": "aws",
+                "cloud": None,
                 "region": ["us", "eu", "ca"],
             },
         }
@@ -498,3 +516,37 @@ def test_cloud_client_completes_cloud_files(monkeypatch) -> None:
     assert response.files[0].file_id == "00000000-0000-7000-8000-000000000123"
     assert response.files[0].uploaded_at == _TEST_TIMESTAMP
     assert response.files[0].expires_at is None
+
+
+def test_debug_attempt_survives_lost_start_response(monkeypatch):
+    from refiner.platform.client.api import MacrodataApiError
+
+    calls = []
+    attempt_id = "00000000-0000-4000-8000-000000000001"
+
+    def request(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise MacrodataApiError(status=504, message="response lost")
+        if kwargs["method"] == "POST":
+            return {"attempt_id": attempt_id, "status": "running"}
+        return {
+            "attempt_id": attempt_id,
+            "status": "completed",
+            "exit_code": 0,
+            "stdout": "done",
+        }
+
+    monkeypatch.setattr("refiner.platform.client.api.request_json", request)
+    monkeypatch.setattr("refiner.platform.client.api.time.sleep", lambda _: None)
+    client = MacrodataClient(api_key="md_test", base_url="https://example.com")
+    result = client.cloud_debug_run(job_id="job/1", attempt_id=attempt_id)
+    assert result["stdout"] == "done"
+    assert [call["method"] for call in calls] == ["POST", "POST", "GET"]
+    assert (
+        calls[0]["json_payload"]["attempt_id"]
+        == calls[1]["json_payload"]["attempt_id"]
+        == attempt_id
+    )
+    assert calls[2]["path"] == f"/api/cloud/debug/job%2F1/attempts/{attempt_id}"
+    assert all(call["timeout_s"] == 40 for call in calls)

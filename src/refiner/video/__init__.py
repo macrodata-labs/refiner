@@ -1,3 +1,5 @@
+from refiner.video.blocks import encode_image_sequences, transcode_videos
+from refiner.video.nvenc import NVENCConfig, encode_image_sequence, transcode_video
 from refiner.video.decode import (
     DecodedFrameWindow,
     DecodedVideoFrame,
@@ -37,6 +39,11 @@ from refiner.video.writer import (
 )
 
 __all__ = [
+    "NVENCConfig",
+    "encode_image_sequence",
+    "encode_image_sequences",
+    "transcode_video",
+    "transcode_videos",
     "DecodedFrameWindow",
     "DecodedVideoFrame",
     "FrameObserver",

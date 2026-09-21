@@ -1047,13 +1047,14 @@ class RefinerPipeline:
         cpus_per_worker: int | None = None,
         mem_mb_per_worker: int | None = None,
         gpu: GPU | None = None,
-        cloud: CloudProvider = "aws",
+        cloud: CloudProvider | None = None,
         region: CloudRegion | Sequence[CloudRegion] = ("us", "eu", "ca"),
         sync_local_dependencies: bool = False,
         dependencies: Sequence[str] | None = None,
         refiner_extras: Sequence[str] | None = None,
         secrets: SecretInput | None = None,
         env: Mapping[str, object | None] | None = None,
+        tags: Mapping[str, str] | None = None,
         continue_from_job: str | None = None,
         unsafe_continue: bool = False,
     ) -> "CloudLaunchResult":
@@ -1069,7 +1070,8 @@ class RefinerPipeline:
             mem_mb_per_worker: Optional requested memory in MB per worker for cloud scheduling.
             gpu: Optional structured GPU request.
             cloud: Public cloud provider. Supported values are ``"aws"``,
-                ``"oci"``, and ``"gcp"``.
+                ``"oci"``, and ``"gcp"``. Defaults to ``None`` to let the
+                execution backend choose the underlying cloud.
             region: One region selector or a sequence of selectors. Workers are
                 accepted when their placement matches any selector. This does
                 not request a priced Modal region constraint.
@@ -1088,6 +1090,8 @@ class RefinerPipeline:
             env: Extra environment variables to mount inside the cloud image without
                 treating their values as redaction targets. `None` values are loaded
                 from the submitting environment.
+            tags: Billing metadata such as {"project": "dataset", "client": "acme"}.
+                Forwarded to Modal registration and worker apps.
             continue_from_job: Explicit continue selector. Accepts one prior cloud
                 job id, one prior job id plus `:stage_index`, or `"infer"`.
             unsafe_continue: Allow continue when the reused stage boundary is not
@@ -1110,6 +1114,7 @@ class RefinerPipeline:
             refiner_extras=refiner_extras,
             secrets=secrets,
             env=dict(env) if env is not None else None,
+            tags=tags,
             continue_from_job=continue_from_job,
             unsafe_continue=unsafe_continue,
         )
