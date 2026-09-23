@@ -11,11 +11,9 @@ It provides one pipeline model for working with robot episodes, frames, videos,
 metadata, and model-based processing. Use it to convert formats, transform data,
 run inference, and write structured outputs on your own infrastructure.
 
-This repository also includes open-source reference versions of some of the
-pipelines we develop at Macrodata. They are useful starting points, but they are
-not the full pipelines we adapt, evaluate, and run for customers. If you want to
-see what those pipelines can do with your data,
-[send us a representative sample](https://macrodata.co/contact).
+This repository includes reference implementations from our published research.
+At Macrodata, we develop proprietary models and pipelines for robotics data
+processing. [Contact us directly](https://macrodata.co/contact) for access.
 
 ## Quickstart
 
