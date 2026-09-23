@@ -5,6 +5,9 @@ description: "Read, transform, and write robotics datasets with Refiner"
 
 # Refiner docs
 
+Refiner provides open-source data-processing utilities and reference implementations from our published research.
+[Contact us directly](https://macrodata.co/contact) for access to our proprietary models and pipelines.
+
 Refiner is Macrodata's open-source Python library for reading, transforming, and
 writing robotics datasets. It provides one pipeline model for working with
 robot episodes, frames, videos, metadata, and model-based processing.
@@ -26,7 +29,6 @@ The docs are organized around the path most teams follow:
 | Call models | [Inference](inference/index.md) | How to use text, multimodal, structured, vLLM, and pooling inference. |
 | Save outputs | [Writing Data](writing-data/index.md) | How writers stage files, media, and reducers. |
 | Follow recipes | [Examples](examples/index.md) | End-to-end dataset conversion and enrichment workflows. |
-| Use commands | [CLI](cli/index.md) | The `macrodata` command surface. |
 
 For quick API lookup, see [Reference](reference/index.md).
 

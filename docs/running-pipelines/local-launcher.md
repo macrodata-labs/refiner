@@ -5,8 +5,7 @@ description: "Run Refiner pipelines with local worker processes"
 
 # Local launcher
 
-Use the local launcher when you want worker and shard behavior without submitting
-to the Macrodata Cloud.
+Use the local launcher to run workers and process shards on your own machine.
 
 ```python
 pipeline.launch_local(
@@ -23,11 +22,11 @@ The local launcher is useful for:
 
 - verifying a writer on a small dataset
 - checking that a transform is safe across multiple shards
-- debugging resource assumptions before a cloud launch
+- checking resource requirements on your hardware
 
 ## Run ordered stages locally
 
-A staged pipeline uses the same ordering locally as it does in Macrodata Cloud:
+Run stages in order:
 
 ```python
 workflow = prepare.as_stage(
@@ -45,8 +44,7 @@ workflow.launch_local(name="staged-local")
 Each stage is a complete pipeline with its own source and sink. The next stage
 starts only after the previous stage completes successfully.
 
-Local runs support per-stage `num_workers` and `gpu` settings. CPU and memory
-requests are cloud scheduling controls, so remove `cpus_per_worker` and
+Local runs support per-stage `num_workers` and `gpu` settings. Local execution does not accept CPU and memory limits; remove `cpus_per_worker` and
 `mem_mb_per_worker` before calling `launch_local(...)`.
 
 ## Run directory
@@ -77,20 +75,7 @@ pipeline.launch_local(
 )
 ```
 
-Local GPU assignment controls `CUDA_VISIBLE_DEVICES` for worker processes. Cloud
-GPU scheduling has additional options; see
-[Resources, GPUs, and Services](resources-gpus-and-services.md).
-
-## When to use Cloud instead
-
-Use [Cloud Launcher](cloud-launcher.md) when you need:
-
-- more workers than fit on your machine
-- fast network access to remote datasets, buckets, and model artifacts
-- managed logs and metrics
-- workspace secrets
-- resumable cloud jobs
-- hosted runtime services such as vLLM
+Local GPU assignment controls `CUDA_VISIBLE_DEVICES` for worker processes.
 
 ## Internal Notes
 

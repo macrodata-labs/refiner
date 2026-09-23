@@ -19,7 +19,7 @@ manual per-episode labeling.
 
 ## Basic usage
 
-Run the following pipeline locally or on the Macrodata Cloud:
+Run the following reference pipeline on your own infrastructure:
 
 ```python
 pipeline = (
@@ -140,7 +140,7 @@ The default settings sample one frame every `0.5` seconds, resize each tile to
 For lower-level inference controls, see [Generate Text](../inference/generate-text.md)
 and [Multimodal and Structured Output](../inference/multimodal-and-structured-output.md).
 
-For a complete cloud example, see
+For a complete local example, see
 [Video Subtask Annotations](../examples/annotations/subtask-annotations.md).
 
 For background and design decisions, see

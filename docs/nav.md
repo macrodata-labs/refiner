@@ -7,10 +7,6 @@
 - [Overview](running-pipelines/index.md)
 - [In-process debugging](running-pipelines/in-process-debugging.md)
 - [Local launcher](running-pipelines/local-launcher.md)
-- [Cloud launcher](running-pipelines/cloud-launcher.md)
-- [Cloud debug sessions](running-pipelines/cloud-debug-sessions.md)
-- [Resources, GPUs, and services](running-pipelines/resources-gpus-and-services.md)
-- [Observability](running-pipelines/observability.md)
 
 ## Reading data
 
@@ -81,27 +77,6 @@
 - [Merge LeRobot datasets](examples/datasets/merge-lerobot-datasets.md)
 - [Video subtask annotations](examples/annotations/subtask-annotations.md)
 - [Running reward models](examples/annotations/reward-models.md)
-- [Cloud GPU Job](examples/cloud/cloud-gpu-job.md)
-
-## Macrodata Cloud (early access)
-
-- [Overview](platform/index.md)
-- [Workspaces and API Keys](platform/workspaces-and-api-keys.md)
-- [Submitting to the platform](platform/submitting-to-the-platform.md)
-- [Billing](platform/billing.md)
-- [Services](platform/services.md)
-- [Viewer](platform/viewer.md)
-- [Manifests](platform/manifests.md)
-- [Secrets and environment](platform/secrets-and-environment.md)
-- [Environment variables](platform/environment-variables.md)
-- [Cloud Jobs and files](platform/cloud-jobs-and-files.md)
-
-## CLI
-
-- [Overview](cli/index.md)
-- [Auth and run](cli/auth-and-run.md)
-- [Jobs, logs, and metrics](cli/jobs-logs-and-metrics.md)
-- [Secrets](cli/secrets.md)
 
 ## Reference
 

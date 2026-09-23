@@ -62,5 +62,5 @@ mdr.robotics.reward_score(task=lambda row: row.task or "; ".join(row.tasks))
 `reward_score` uses pooling inference through a vLLM provider. See
 [Pooling](../inference/pooling.md) and [Providers and vLLM](../inference/inference_providers.md).
 
-For a complete cloud example, see
+For a complete local example, see
 [Reward modeling example](../examples/annotations/reward-models.md).

@@ -43,7 +43,7 @@ large jobs.
 ## Run a bounded quick test
 
 Pass `max_rows` to a built-in reader before testing transforms or allocating a
-full cloud run:
+full pipeline run:
 
 ```python
 import refiner as mdr

@@ -1,22 +1,19 @@
 ---
 title: "Running pipelines"
-description: "How Refiner pipelines execute locally and on the Macrodata Cloud"
+description: "How Refiner pipelines execute on your own infrastructure"
 ---
 
 # Running pipelines
 
-A Refiner pipeline can be evaluated three ways:
+A Refiner pipeline can be evaluated two ways:
 
 | Mode | Use it when | Entry point |
 | --- | --- | --- |
 | In process | You are inspecting rows, testing a transform, or debugging quickly. | `iter_rows()`, `take()`, `materialize()` |
 | Local launch | You want real worker/shard behavior on your machine. | `launch_local(...)` |
-| Cloud launch (early access) | You are an approved partner and want managed workers, logs, metrics, manifests, and scalable resources. | `launch_cloud(...)` |
 
 Start with [In-Process Debugging](in-process-debugging.md), then move to
-[Local Launcher](local-launcher.md) or [Cloud Launcher](cloud-launcher.md).
-Cloud launch is currently available to approved partners; Refiner's in-process
-and local modes remain open to all users.
+[Local Launcher](local-launcher.md).
 
 ## Execution terms
 
@@ -54,6 +51,3 @@ cross-shard batching behavior.
 
 - [In-Process Debugging](in-process-debugging.md)
 - [Local Launcher](local-launcher.md)
-- [Cloud Launcher](cloud-launcher.md)
-- [Resources, GPUs, and Services](resources-gpus-and-services.md)
-- [Observability](observability.md)
