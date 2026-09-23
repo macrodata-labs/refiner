@@ -71,6 +71,8 @@ def add_preview(row):
 
 ## Docs
 
+Read the [Refiner open-source documentation](https://macrodata.co/docs).
+
 Start here:
 
 - [Docs index](docs/index.md)
