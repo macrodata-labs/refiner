@@ -30,8 +30,7 @@ Inputs and outputs must be local files. Input values can be local paths,
 row keeps its original fields and adds the new local MP4 path. Remote URLs are
 rejected before accessing their storage backend, including S3, GCS, and HTTP.
 The copying job owns downloading, uploading, and checkpoints: download to a local
-path, call the encoder, then upload its completed output. On cloud workers,
-`output_folder` is worker-local storage; transfer results before the worker exits.
+path, call the encoder, then upload its completed output. `output_folder` is local storage; retain or transfer results as required.
 Clipped views are rejected; materialize the desired clip before using this block.
 
 Request one L4 per worker on the launch call and begin with three or four in-flight rows.

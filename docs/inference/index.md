@@ -16,5 +16,4 @@ pipelines with bounded concurrency, metrics, retries, and media handling.
 | [Pooling](pooling.md) | Pooling/token-classification style inference used by reward scoring. |
 
 For episode-level VLM workflows, see
-[Subtask Annotation](../episode-operations/subtask-annotation.md) and
-[Reward Scoring](../episode-operations/reward-scoring.md).
+[Subtask Annotation](../episode-operations/subtask-annotation.md).

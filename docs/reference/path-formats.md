@@ -15,5 +15,5 @@ Refiner uses fsspec-backed paths for many readers and writers.
 | S3 | `s3://bucket/path` |
 | Other fsspec filesystems | Depends on the installed filesystem package. |
 
-Private remote paths usually require secrets such as `HF_TOKEN` or cloud
-provider credentials. See [Secrets and environment](../platform/secrets-and-environment.md).
+Private remote paths usually require credentials such as `HF_TOKEN` or storage
+provider credentials. Set these in the environment inherited by your local workers.

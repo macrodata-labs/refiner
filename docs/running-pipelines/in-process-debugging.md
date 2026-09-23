@@ -6,7 +6,7 @@ description: "Inspect Refiner pipelines directly in the current Python process"
 # In-process debugging
 
 In-process execution is the fastest way to validate a reader, inspect row shape,
-or test a transform. It does not create a cloud job and does not use the local
+or test a transform. It does not use the local
 launcher worker supervisor.
 
 ## Inspect one row
