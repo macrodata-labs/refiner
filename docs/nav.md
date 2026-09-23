@@ -46,7 +46,6 @@
 - [Overview](episode-operations/index.md)
 - [Motion trimming](episode-operations/motion-trimming.md)
 - [Subtask annotation](episode-operations/subtask-annotation.md)
-- [Reward scoring](episode-operations/reward-scoring.md)
 
 ## Inference
 
@@ -76,7 +75,6 @@
 - [Libero HDF5](examples/formats/libero-hdf5.md)
 - [Merge LeRobot datasets](examples/datasets/merge-lerobot-datasets.md)
 - [Video subtask annotations](examples/annotations/subtask-annotations.md)
-- [Running reward models](examples/annotations/reward-models.md)
 
 ## Reference
 

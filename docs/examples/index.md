@@ -28,4 +28,3 @@ These examples are complete patterns you can adapt.
 | Example | What It Shows |
 | --- | --- |
 | [Video Subtask Annotations](annotations/subtask-annotations.md) | Use a VLM to add segments and annotate videos. |
-| [Running Reward Models](annotations/reward-models.md) | Use reward models to score episodes. |

@@ -77,6 +77,18 @@ pipeline.launch_local(
 
 Local GPU assignment controls `CUDA_VISIBLE_DEVICES` for worker processes.
 
+## Environment variables
+
+| Variable | Effect |
+| --- | --- |
+| `REFINER_WORKDIR` | Sets the local worker working directory. Use an absolute path. |
+| `XDG_CACHE_HOME` | Sets the cache root used when `REFINER_WORKDIR` is unset. |
+| `CUDA_VISIBLE_DEVICES` | Selects the GPU IDs available to local workers. Refiner sets this for each worker after assigning GPUs. |
+
+Worker files default to `$XDG_CACHE_HOME/macrodata/refiner` or
+`~/.cache/macrodata/refiner`. Set `REFINER_WORKDIR` to place them on a disk
+with enough space for your dataset processing.
+
 ## Internal Notes
 
 Spark and Beam/Dataflow schedule partitions through distributed executors;
