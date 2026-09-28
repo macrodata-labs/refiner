@@ -44,140 +44,141 @@ def apply_vectorized_op(
     row_indices: RowIndices = None,
     return_row_indices: bool = False,
 ) -> tuple[pa.Table, dict[str, int] | None, RowIndices]:
-    if shard_counts is None:
-        shard_counts = count_table_by_shard(table)
+    with set_active_step_index(op.index):
+        if shard_counts is None:
+            shard_counts = count_table_by_shard(table)
 
-    if isinstance(op, SelectStep):
-        return table.select(op.columns), None, row_indices
+        if isinstance(op, SelectStep):
+            return table.select(op.columns), None, row_indices
 
-    if isinstance(op, DropStep):
-        return table.drop_columns(list(op.columns)), None, row_indices
+        if isinstance(op, DropStep):
+            return table.drop_columns(list(op.columns)), None, row_indices
 
-    if isinstance(op, RenameStep):
-        names = [op.mapping.get(name, name) for name in table.schema.names]
-        return table.rename_columns(names), None, row_indices
+        if isinstance(op, RenameStep):
+            names = [op.mapping.get(name, name) for name in table.schema.names]
+            return table.rename_columns(names), None, row_indices
 
-    if isinstance(op, CastStep):
-        return (
-            apply_dtypes_to_table(
-                table,
-                op.dtypes,
-                preserve_metadata=False,
-            ),
-            None,
-            row_indices,
-        )
+        if isinstance(op, CastStep):
+            return (
+                apply_dtypes_to_table(
+                    table,
+                    op.dtypes,
+                    preserve_metadata=False,
+                ),
+                None,
+                row_indices,
+            )
 
-    if isinstance(op, WithColumnsStep):
-        out = table
-        for col_name, expr in op.assignments.items():
-            values = eval_expr_arrow(expr, out)
-            if isinstance(values, pa.Scalar):
-                values = repeat_scalar(values, out.num_rows)
-            idx = out.schema.get_field_index(col_name)
-            if idx < 0:
-                out = out.append_column(col_name, values)
+        if isinstance(op, WithColumnsStep):
+            out = table
+            for col_name, expr in op.assignments.items():
+                values = eval_expr_arrow(expr, out)
+                if isinstance(values, pa.Scalar):
+                    values = repeat_scalar(values, out.num_rows)
+                idx = out.schema.get_field_index(col_name)
+                if idx < 0:
+                    out = out.append_column(col_name, values)
+                else:
+                    out = out.set_column(idx, pa.field(col_name, values.type), values)
+            return out, None, row_indices
+
+        if isinstance(op, FilterExprStep):
+            mask = eval_expr_arrow(op.predicate, table)
+            if isinstance(mask, pa.Scalar):
+                keep_all = bool(mask.as_py())
+                next_table = table if keep_all else table.slice(0, 0)
+                next_row_indices = row_indices if keep_all else ()
             else:
-                out = out.set_column(idx, pa.field(col_name, values.type), values)
-        return out, None, row_indices
-
-    if isinstance(op, FilterExprStep):
-        mask = eval_expr_arrow(op.predicate, table)
-        if isinstance(mask, pa.Scalar):
-            keep_all = bool(mask.as_py())
-            next_table = table if keep_all else table.slice(0, 0)
-            next_row_indices = row_indices if keep_all else ()
-        else:
-            if isinstance(mask, pa.ChunkedArray):
-                mask = mask.combine_chunks()
-            next_table = table.filter(mask)
-            if return_row_indices:
-                kept = tuple(
-                    int(idx)
-                    for idx in np.flatnonzero(
-                        mask.fill_null(False).to_numpy(zero_copy_only=False)
+                if isinstance(mask, pa.ChunkedArray):
+                    mask = mask.combine_chunks()
+                next_table = table.filter(mask)
+                if return_row_indices:
+                    kept = tuple(
+                        int(idx)
+                        for idx in np.flatnonzero(
+                            mask.fill_null(False).to_numpy(zero_copy_only=False)
+                        )
                     )
+                    next_row_indices = (
+                        _identity_row_indices(kept, table.num_rows)
+                        if row_indices is None
+                        else tuple(row_indices[idx] for idx in kept)
+                    )
+                else:
+                    next_row_indices = None
+            if not return_row_indices:
+                next_row_indices = None
+            next_shard_counts = count_table_by_shard(next_table)
+            for shard_id in set(shard_counts) | set(next_shard_counts):
+                previous = int(shard_counts.get(shard_id, 0))
+                current = int(next_shard_counts.get(shard_id, 0))
+                if current > 0:
+                    log_throughput(
+                        "rows_kept",
+                        current,
+                        shard_id=shard_id,
+                        unit="rows",
+                        step_index=op.index,
+                    )
+                dropped = previous - current
+                if dropped > 0:
+                    log_throughput(
+                        "rows_dropped",
+                        dropped,
+                        shard_id=shard_id,
+                        unit="rows",
+                        step_index=op.index,
+                    )
+            return next_table, next_shard_counts, next_row_indices
+
+        if isinstance(op, FnTableStep):
+            required_source_columns = [
+                name for name in INTERNAL_ROW_COLUMNS if name in table.column_names
+            ]
+            if return_row_indices:
+                if _ROW_INDEX_COLUMN in table.column_names:
+                    raise ValueError(f"{_ROW_INDEX_COLUMN} is an internal column")
+                lineage = range(table.num_rows) if row_indices is None else row_indices
+                table = table.append_column(
+                    _ROW_INDEX_COLUMN,
+                    pa.array(lineage, type=pa.int64()),
+                )
+            next_table = op.apply_table(table)
+            if not isinstance(next_table, pa.Table):
+                raise TypeError(
+                    f"map_table() must return pa.Table, got {type(next_table)!r}"
+                )
+            missing_source_columns = [
+                name
+                for name in required_source_columns
+                if name not in next_table.column_names
+            ]
+            if missing_source_columns:
+                raise ValueError(
+                    "map_table() must preserve internal columns: "
+                    + ", ".join(missing_source_columns)
+                )
+            next_row_indices = None
+            if return_row_indices:
+                if _ROW_INDEX_COLUMN not in next_table.column_names:
+                    raise ValueError(
+                        f"map_table() must preserve {_ROW_INDEX_COLUMN} for this input"
+                    )
+                lineage_column = next_table.column(_ROW_INDEX_COLUMN).combine_chunks()
+                lineage = tuple(
+                    int(value)
+                    for value in lineage_column.to_numpy(zero_copy_only=False)
                 )
                 next_row_indices = (
-                    _identity_row_indices(kept, table.num_rows)
+                    _identity_row_indices(lineage, table.num_rows)
                     if row_indices is None
-                    else tuple(row_indices[idx] for idx in kept)
+                    else lineage
                 )
-            else:
-                next_row_indices = None
-        if not return_row_indices:
-            next_row_indices = None
-        next_shard_counts = count_table_by_shard(next_table)
-        for shard_id in set(shard_counts) | set(next_shard_counts):
-            previous = int(shard_counts.get(shard_id, 0))
-            current = int(next_shard_counts.get(shard_id, 0))
-            if current > 0:
-                log_throughput(
-                    "rows_kept",
-                    current,
-                    shard_id=shard_id,
-                    unit="rows",
-                    step_index=op.index,
-                )
-            dropped = previous - current
-            if dropped > 0:
-                log_throughput(
-                    "rows_dropped",
-                    dropped,
-                    shard_id=shard_id,
-                    unit="rows",
-                    step_index=op.index,
-                )
-        return next_table, next_shard_counts, next_row_indices
+                next_table = next_table.drop_columns([_ROW_INDEX_COLUMN])
+            next_shard_counts = count_table_by_shard(next_table)
+            return next_table, next_shard_counts, next_row_indices
 
-    if isinstance(op, FnTableStep):
-        required_source_columns = [
-            name for name in INTERNAL_ROW_COLUMNS if name in table.column_names
-        ]
-        if return_row_indices:
-            if _ROW_INDEX_COLUMN in table.column_names:
-                raise ValueError(f"{_ROW_INDEX_COLUMN} is an internal column")
-            lineage = range(table.num_rows) if row_indices is None else row_indices
-            table = table.append_column(
-                _ROW_INDEX_COLUMN,
-                pa.array(lineage, type=pa.int64()),
-            )
-        with set_active_step_index(op.index):
-            next_table = op.apply_table(table)
-        if not isinstance(next_table, pa.Table):
-            raise TypeError(
-                f"map_table() must return pa.Table, got {type(next_table)!r}"
-            )
-        missing_source_columns = [
-            name
-            for name in required_source_columns
-            if name not in next_table.column_names
-        ]
-        if missing_source_columns:
-            raise ValueError(
-                "map_table() must preserve internal columns: "
-                + ", ".join(missing_source_columns)
-            )
-        next_row_indices = None
-        if return_row_indices:
-            if _ROW_INDEX_COLUMN not in next_table.column_names:
-                raise ValueError(
-                    f"map_table() must preserve {_ROW_INDEX_COLUMN} for this input"
-                )
-            lineage_column = next_table.column(_ROW_INDEX_COLUMN).combine_chunks()
-            lineage = tuple(
-                int(value) for value in lineage_column.to_numpy(zero_copy_only=False)
-            )
-            next_row_indices = (
-                _identity_row_indices(lineage, table.num_rows)
-                if row_indices is None
-                else lineage
-            )
-            next_table = next_table.drop_columns([_ROW_INDEX_COLUMN])
-        next_shard_counts = count_table_by_shard(next_table)
-        return next_table, next_shard_counts, next_row_indices
-
-    raise TypeError(f"Unsupported vectorized op: {type(op)!r}")
+        raise TypeError(f"Unsupported vectorized op: {type(op)!r}")
 
 
 @overload
