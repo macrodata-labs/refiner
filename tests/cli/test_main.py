@@ -131,6 +131,18 @@ def test_parser_has_jobs_cancel_command() -> None:
     assert args.job_id == "job-1"
 
 
+def test_parser_has_jobs_scale_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        ["jobs", "scale", "job-1", "--workers", "12", "--stage", "2"]
+    )
+    assert args.command == "jobs"
+    assert args.jobs_command == "scale"
+    assert args.job_id == "job-1"
+    assert args.workers == 12
+    assert args.stage == 2
+
+
 def test_parser_has_manifest_flags() -> None:
     parser = build_parser()
     args = parser.parse_args(["jobs", "manifest", "job-1", "--deps", "--code"])
