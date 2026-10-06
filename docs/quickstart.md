@@ -5,6 +5,9 @@ description: "Run a complete robotics data pipeline with Refiner"
 
 # Quickstart
 
+Refiner provides open-source data-processing utilities and reference implementations from our published research.
+[Contact us directly](https://macrodata.co/contact) for access to our proprietary models and pipelines.
+
 Refiner is an open-source library for building robotics data pipelines. A
 [pipeline](running-pipelines/index.md) describes how to
 [read data](reading-data/index.md),
@@ -16,10 +19,6 @@ Refiner is an open-source library for building robotics data pipelines. A
 develop. When you want parallel execution on your machine, run the same code
 with [local workers](running-pipelines/local-launcher.md).
 
-<!--
-Approved early-access partners can also submit the same pipeline to the
-[Macrodata Cloud](running-pipelines/cloud-launcher.md).
--->
 
 Readers and writers are [sharded](reading-data/sharding.md), so most pipelines
 do not need to download or materialize the entire dataset before doing useful
@@ -40,19 +39,6 @@ The `hf` and `video` extras are optional, but the example below uses them for
 [video data](episode-data/frames-and-videos.md). To install every optional
 dependency, use `pip install macrodata-refiner[all]`.
 
-<!--
-No Macrodata account is required for local Refiner development. If your team
-has Macrodata Cloud early access, authenticate once with the
-[Macrodata CLI](cli/auth-and-run.md) to track workspace runs and submit cloud
-jobs:
-
-```bash
-macrodata login
-```
-
-The CLI stores an [API key](platform/workspaces-and-api-keys.md) for you. You
-can also set one directly with the `MACRODATA_API_KEY` environment variable.
--->
 
 ## Example
 
@@ -90,10 +76,6 @@ Nothing runs when you create the pipeline. Refiner executes it only when you
 inspect rows with methods like `take()` or launch
 [local workers](running-pipelines/local-launcher.md).
 
-<!--
-Approved early-access partners can also submit the pipeline as a
-[cloud job](running-pipelines/cloud-launcher.md).
--->
 
 ## Inspect a pipeline
 
@@ -173,43 +155,7 @@ pipeline.launch_local(name="quickstart-aloha-summary")
 complete Refiner pipeline. It distributes [shards](reading-data/sharding.md)
 across worker processes on your machine.
 
-<!--
-If you are [logged in](cli/auth-and-run.md), local runs are also tracked in the
-platform interface.
--->
 
-<!--
-## Run on the Macrodata Cloud
-
-Running the same pipeline on the Macrodata Cloud is as simple as swapping out
-`launch_local` with `launch_cloud`.
-
-```python
-import refiner as mdr
-
-def log_stats(row):
-    row.log_histogram("frames", row.num_frames, unit="frames", per="episode")
-
-    mdr.logger.info(
-        "episode={} task={!r} frames={} cameras={}",
-        row.episode_id,
-        row.task,
-        row.num_frames,
-        sorted(row.videos),
-    )
-
-    return row
-
-
-pipeline = (
-    mdr.read_lerobot("hf://datasets/macrodata/aloha_static_battery_ep005_009")
-    .map(log_stats)
-)
-
-# Using launch_cloud now
-pipeline.launch_cloud(name="quickstart-aloha-summary")
-```
--->
 
 ## Advanced example
 
@@ -276,15 +222,6 @@ The input dataset is public, but writing to your Hugging Face bucket requires an
 export HF_TOKEN="your-write-token"
 ```
 
-<!--
-After submission, follow the run from [Jobs](/jobs). Once scheduled, this
-example should only take a couple of minutes. The job page shows live status,
-worker progress, logs, metrics, resource usage, and output links while the
-conversion runs. You can inspect the same run from the terminal with the
-[`macrodata jobs` CLI](cli/jobs-logs-and-metrics.md). Cloud jobs are billed for
-the compute they actually use and draw down workspace credits; see
-[Billing](platform/billing.md) or [pricing](/pricing).
--->
 
 For the full four-suite LIBERO conversion, see
 [Libero HDF5](examples/formats/libero-hdf5.md).

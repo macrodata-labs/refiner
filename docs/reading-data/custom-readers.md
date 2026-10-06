@@ -43,7 +43,7 @@ only the work needed to create units that workers can read independently.
 
 ## Describe the source
 
-If your source appears in cloud job plans, implement a useful `describe()`
+If your source appears in pipeline plans, implement a useful `describe()`
 method:
 
 ```python

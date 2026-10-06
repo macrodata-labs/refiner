@@ -7,10 +7,10 @@ description: "Configure model providers for Refiner inference"
 
 Providers define where inference requests are sent and how Refiner formats each
 request for that backend. Use them with `generate_text(...)` and other inference
-helpers when you want the same pipeline code to run against hosted APIs or managed inference service.
+helpers when you want the same pipeline code to run against third-party APIs or model servers you operate.
 
 Refiner supports OpenAI, OpenAI-compatible endpoints, Google Gemini, Anthropic
-Claude, and managed vLLM services.
+Claude, and OpenAI-compatible model servers.
 
 ## OpenAI responses
 
@@ -62,37 +62,11 @@ provider = mdr.inference.AnthropicEndpointProvider(
 )
 ```
 
-## vLLM
+## Self-hosted vLLM
 
-> [!WARNING]
->
-> **Early access:** `VLLMProvider` provisions a managed Macrodata Cloud service
-> and is currently available only to approved partners. For local execution,
-> connect to a vLLM server you operate with `OpenAIEndpointProvider`.
-
-Use `VLLMProvider` with cloud launch when a pipeline should run against a
-managed vLLM service for an open-weight model. Refiner provisions the vLLM
-service as part of the cloud job and routes worker requests to it. You do not
-need to assign GPUs to the pipeline workers for the model server; the Macrodata Cloud
-manages service resources separately from worker resources.
-
-```python
-provider = mdr.inference.VLLMProvider(
-    model="Qwen/Qwen3.5-4B",
-)
-```
-
-As of June 3, 2026, managed vLLM supports the following models. To request
-another model, contact us through [macrodata.co/contact](https://macrodata.co/contact).
-
-| Model | Context length | Multimodality support |
-|---|---:|---|
-| `Qwen/Qwen3.5-9B` | 32,768 tokens | Image + text |
-| `google/gemma-4-E4B-it` | 32,768 tokens | Image + text |
-| `nvidia/Cosmos-Reason2-8B` | 32,768 tokens | Image + video + text, capped at 16 images or 1 video per prompt |
-| `rednote-hilab/dots.mocr` | 32,768 tokens | Image + text |
-| `Qwen/Qwen3.5-4B` | 32,768 tokens | Image + text |
-| `robometer/Robometer-4B` | 4,096 tokens | Image + text, capped at 16 images per prompt |
+Connect to a vLLM server you operate using `OpenAIEndpointProvider` and its
+OpenAI-compatible endpoint. Configure the model server and its resources on
+your own infrastructure.
 
 ## Provider options
 
@@ -105,4 +79,3 @@ specific model feature.
 ## Related pages
 
 - [Generate Text](generate-text.md)
-- [Resources, GPUs, and Services](../running-pipelines/resources-gpus-and-services.md)

@@ -77,4 +77,3 @@ chunks and then reduces metadata; see [Writing LeRobot](../writing-data/lerobot.
 
 - [Reader Model](reader-model.md)
 - [Local Launcher](../running-pipelines/local-launcher.md)
-- [Cloud Launcher](../running-pipelines/cloud-launcher.md)

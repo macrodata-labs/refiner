@@ -147,4 +147,3 @@ an awaitable.
 ## Related pages
 
 - [Subtask Annotation](../episode-operations/subtask-annotation.md)
-- [Resources, GPUs, and Services](../running-pipelines/resources-gpus-and-services.md)

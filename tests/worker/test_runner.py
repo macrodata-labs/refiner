@@ -418,6 +418,26 @@ def test_worker_failure_uses_exception_type_when_message_is_empty() -> None:
     assert runtime_lifecycle.failed_errors == ["RuntimeError | step_index=1"]
 
 
+def test_worker_failure_reports_vectorized_step_index() -> None:
+    shard = _shard("bad-cast", 0, 1)
+    runtime_lifecycle = _FakeRuntimeLifecycle([shard])
+    rows_by_shard = {shard.id: [DictRow({"x": "abc"})]}
+
+    worker = Worker(
+        pipeline=RefinerPipeline(source=_FakeReader(rows_by_shard)).cast(x="int64"),
+        job_id="job",
+        stage_index=0,
+        worker_id=runtime_lifecycle.worker_id,
+        runtime_lifecycle=runtime_lifecycle,
+    )
+
+    stats = worker.run()
+
+    assert stats.failed == 1
+    assert len(runtime_lifecycle.failed_errors) == 1
+    assert runtime_lifecycle.failed_errors[0].endswith("| step_index=1")
+
+
 def test_worker_can_batch_across_shards() -> None:
     shard1 = _shard("s1", 0, 1)
     shard2 = _shard("s2", 0, 1)
