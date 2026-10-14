@@ -435,7 +435,9 @@ def test_worker_failure_reports_vectorized_step_index() -> None:
 
     assert stats.failed == 1
     assert len(runtime_lifecycle.failed_errors) == 1
-    assert runtime_lifecycle.failed_errors[0].endswith("| step_index=1")
+    error = runtime_lifecycle.failed_errors[0]
+    assert error is not None
+    assert error.endswith("| step_index=1")
 
 
 def test_worker_can_batch_across_shards() -> None:

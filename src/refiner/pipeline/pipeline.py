@@ -68,6 +68,7 @@ from refiner.pipeline.sources import (
 )
 from refiner.pipeline.sources.readers.hdf5 import MissingPolicy
 from refiner.pipeline.sources.readers.lerobot import LeRobotEpisodeReader
+from refiner.pipeline.sources.readers.lerobot_v2_1 import LeRobotV2_1EpisodeReader
 from refiner.pipeline.sources.readers.mcap import SyncMethod
 from refiner.pipeline.sources.items import ItemsSource
 from refiner.pipeline.sources.shard_limit import validate_shard_count
@@ -1803,6 +1804,33 @@ def read_lerobot(
                 num_shards=num_shards,
                 arrow_batch_size=_bounded_reader_window(65536, max_rows),
                 split_row_groups=split_row_groups,
+                skip_malformed_rows=skip_malformed_rows,
+            ),
+            max_rows,
+        )
+    )
+
+
+def read_lerobot_v2_1(
+    inputs: DataFolderLike | Sequence[DataFolderLike],
+    *,
+    fs: AbstractFileSystem | None = None,
+    storage_options: Mapping[str, Any] | None = None,
+    target_shard_bytes: int = DEFAULT_TARGET_SHARD_BYTES,
+    num_shards: int | None = None,
+    skip_malformed_rows: bool = False,
+    max_rows: int | None = None,
+) -> RefinerPipeline:
+    """Create a pipeline with an episode-granular LeRobot v2.1 reader source."""
+    max_rows = _validated_max_rows(max_rows)
+    return RefinerPipeline(
+        source=limit_source(
+            LeRobotV2_1EpisodeReader(
+                inputs,
+                fs=fs,
+                storage_options=storage_options,
+                target_shard_bytes=target_shard_bytes,
+                num_shards=num_shards,
                 skip_malformed_rows=skip_malformed_rows,
             ),
             max_rows,

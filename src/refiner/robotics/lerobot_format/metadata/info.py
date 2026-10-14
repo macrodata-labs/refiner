@@ -10,6 +10,12 @@ DEFAULT_DATA_PATH = "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet"
 DEFAULT_VIDEO_PATH = (
     "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4"
 )
+DEFAULT_V21_DATA_PATH = (
+    "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet"
+)
+DEFAULT_V21_VIDEO_PATH = (
+    "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,8 +65,11 @@ class LeRobotFeatureInfo:
     def from_json_dict(
         cls,
         payload: Mapping[str, Any],
+        *,
+        codebase_version: str | None = None,
     ) -> "LeRobotFeatureInfo":
-        video_info_payload = payload.get("video_info")
+        video_info_key = "info" if codebase_version == "v2.1" else "video_info"
+        video_info_payload = payload.get(video_info_key)
         return cls(
             dtype=str(payload.get("dtype")),
             shape=tuple(int(value) for value in payload.get("shape", [])),
@@ -73,14 +82,19 @@ class LeRobotFeatureInfo:
             ),
         )
 
-    def to_json_dict(self) -> dict[str, Any]:
+    def to_json_dict(
+        self,
+        *,
+        codebase_version: str | None = None,
+    ) -> dict[str, Any]:
+        video_info_key = "info" if codebase_version == "v2.1" else "video_info"
         return {
             "dtype": self.dtype,
             "shape": list(self.shape),
             "names": self.names,
             **({"fps": self.fps} if self.fps is not None else {}),
             **(
-                {"video_info": self.video_info.to_json_dict()}
+                {video_info_key: self.video_info.to_json_dict()}
                 if self.video_info is not None
                 else {}
             ),
@@ -119,12 +133,16 @@ class LeRobotInfo:
         cls,
         payload: Mapping[str, Any],
     ) -> "LeRobotInfo":
+        codebase_version = (
+            str(payload["codebase_version"])
+            if payload.get("codebase_version") is not None
+            else None
+        )
+        is_v21 = codebase_version == "v2.1"
+        default_data_path = DEFAULT_V21_DATA_PATH if is_v21 else DEFAULT_DATA_PATH
+        default_video_path = DEFAULT_V21_VIDEO_PATH if is_v21 else DEFAULT_VIDEO_PATH
         return cls(
-            codebase_version=(
-                str(payload["codebase_version"])
-                if payload.get("codebase_version") is not None
-                else None
-            ),
+            codebase_version=codebase_version,
             fps=int(payload["fps"]) if payload.get("fps") is not None else None,
             robot_type=payload.get("robot_type"),
             total_episodes=(
@@ -157,10 +175,13 @@ class LeRobotInfo:
                 if payload.get("video_files_size_in_mb") is not None
                 else None
             ),
-            data_path=str(payload.get("data_path", DEFAULT_DATA_PATH)),
-            video_path=str(payload.get("video_path", DEFAULT_VIDEO_PATH)),
+            data_path=str(payload.get("data_path", default_data_path)),
+            video_path=str(payload.get("video_path", default_video_path)),
             features={
-                key: LeRobotFeatureInfo.from_json_dict(feature)
+                key: LeRobotFeatureInfo.from_json_dict(
+                    feature,
+                    codebase_version=codebase_version,
+                )
                 for key, feature in payload.get("features", {}).items()
                 if isinstance(key, str) and isinstance(feature, Mapping)
             },
@@ -186,7 +207,8 @@ class LeRobotInfo:
             "data_path": self.data_path,
             "video_path": self.video_path,
             "features": {
-                key: feature.to_json_dict() for key, feature in self.features.items()
+                key: feature.to_json_dict(codebase_version=self.codebase_version)
+                for key, feature in self.features.items()
             },
             "splits": dict(self.splits),
             "episode_ids_in_sync": self.episode_ids_in_sync,
